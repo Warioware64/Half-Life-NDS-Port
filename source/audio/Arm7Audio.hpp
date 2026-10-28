@@ -67,6 +67,10 @@ namespace hlrt
         /// track `rate` Hz and `pairs` long from where it starts; `volume`
         /// 0..256. Heard while the pipeline is on.
         void musicOpen(const void *ring, std::uint32_t blocks, std::uint32_t rate, std::uint32_t pairs, int volume);
+        /// Before musicOpen: the ring's count of blocks written started
+        /// again, for the caller to fill it first (so that the ARM7 does not
+        /// begin on an empty ring).
+        void musicPrepare();
         void musicStop();
         void musicVolume(int volume);
         /// Pairs of the track played, and blocks written, since musicOpen.

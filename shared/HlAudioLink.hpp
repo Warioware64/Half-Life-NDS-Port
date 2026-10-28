@@ -123,6 +123,7 @@ namespace hldata
         volatile std::uint16_t voiceToken[kVoices]; ///< what each channel is playing now (0: nothing)
         volatile std::uint32_t blocks;    ///< 64-sample blocks so far
         volatile std::uint32_t late;      ///< blocks done after their time
+        volatile std::uint32_t blockTicks; ///< bus ticks a block lasts (65536; 45056 at the high quality)
         volatile std::uint32_t cpuAvg;    ///< ARM7 ticks per block, averaged
         volatile std::uint32_t cpuMost;   ///< ... the most since last read
         volatile std::uint32_t musicRead; ///< pairs of the track played

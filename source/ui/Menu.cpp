@@ -44,6 +44,7 @@ namespace hlrt
             kCommand,
             kDsp, ///< the room effects
             kOutput,
+            kQuality,
             kMusic,
             kEffects,
             kVoices,
@@ -538,8 +539,10 @@ namespace hlrt
         const char *const kSettingsChapterNames[kSettingsChapters] = {"SOUND",     "GRAPHICS", "CONTROLS",
                                                                       "TOUCH AIM", "BUTTONS",  "OTHER"};
         const Row kSoundRows[] = {{Kind::Value, kDsp, "Room effects"},  {Kind::Value, kOutput, "Output"},
-                                  {Kind::Slider, kMusic, "Music"},       {Kind::Slider, kEffects, "Effects"},
-                                  {Kind::Slider, kVoices, "Voices"},     {Kind::Slider, kAmbience, "Ambience"}};
+                                  {Kind::Value, kQuality, "Quality"},    {Kind::Slider, kMusic, "Music"},
+                                  {Kind::Slider, kEffects, "Effects"},   {Kind::Slider, kVoices, "Voices"},
+                                  {Kind::Slider, kAmbience, "Ambience"}};
+        const char *const kQualityName[hldata::kQualityChoices] = {"standard", "high"};
         const char *const kRoomName[hldata::kRoomChoices] = {"off", "classic", "enhanced"};
         const char *const kOutputName[hldata::kOutputChoices] = {"speakers", "headphones", "mono"};
         const Row kGraphicsRows[] = {{Kind::Value, kFog, "Fog"},
@@ -586,6 +589,9 @@ namespace hlrt
             {
             case kDsp: std::snprintf(out, size, "%s", kRoomName[settings.roomEffects]); break;
             case kOutput: std::snprintf(out, size, "%s", kOutputName[settings.outputMode]); break;
+            case kQuality:
+                std::snprintf(out, size, "%s", isDSiMode() ? kQualityName[settings.soundQuality] : "standard (DS)");
+                break;
             case kReadout: std::snprintf(out, size, "%s", settings.debugReadout ? "on" : "off"); break;
             case kBob: std::snprintf(out, size, "%s", settings.viewBob ? "on" : "off"); break;
             case kAutoaim: std::snprintf(out, size, "%s", settings.autoaim ? "on" : "off"); break;
@@ -647,6 +653,9 @@ namespace hlrt
                            ? "The rooms heard: off, as the game has them, or richer from the DSi's sound processor."
                            : "The rooms heard -- a tunnel, a chamber, under water -- as the game has them, or off.";
             case kOutput: return "Speakers: a little narrower, for the console's own. Headphones: all of it. Mono: one.";
+            case kQuality:
+                return isDSiMode() ? "High: the sound made at the rate the DSi's speakers play it, 47.6 kHz. A little more work."
+                                   : "On a DSi: the sound made at the rate its speakers play it.";
             case kMusic: return "How loud the music is.";
             case kEffects: return "How loud the guns, the blows and the world are.";
             case kVoices: return "How loud the people and the monsters speak.";
@@ -699,6 +708,12 @@ namespace hlrt
             }
             case kOutput:
                 cycle(settings.outputMode, hldata::kOutputChoices);
+                sound.applySoundMode();
+                return true;
+            case kQuality:
+                if (!isDSiMode())
+                    return false;
+                cycle(settings.soundQuality, hldata::kQualityChoices);
                 sound.applySoundMode();
                 return true;
             case kReadout: settings.debugReadout = !settings.debugReadout; return true;
@@ -934,7 +949,8 @@ namespace hlrt
             else if (page_ == Page::Settings)
             {
                 const Row &item = rows[n];
-                const bool dead = item.id == kFirmPress && !Input::pressureSeen();
+                const bool dead = (item.id == kFirmPress && !Input::pressureSeen()) ||
+                                  (item.id == kQuality && !isDSiMode());
                 drawText(band, small, x + 8, textY, item.label, inkFor(small, dead ? kUiGrey : kUiWhite));
                 if (item.kind == Kind::Slider)
                 {

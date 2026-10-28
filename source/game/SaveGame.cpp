@@ -9,6 +9,7 @@
 #include <cstring>
 
 #include "Global.hpp"
+#include "audio/Sound.hpp"
 #include "game/Game.hpp"
 
 namespace hlrt::SaveGame
@@ -308,8 +309,14 @@ namespace hlrt::SaveGame
         needRun();
         // (With the maps left: copied in -- or, for the one coming into a
         // map, only named: the folder changes only at a way out or a load,
-        // and either makes that one again.)
-        return hldata::saveSlotWrite(card, list, slot, save, heading, &run, slot == hldata::kSlotArrival);
+        // and either makes that one again.) The card's writing holds up the
+        // ARM7 on a DSi: the sound plays straight from its channels for
+        // that long (Sound::holdPipeline).
+        sound.holdPipeline(true);
+        const bool wrote =
+            hldata::saveSlotWrite(card, list, slot, save, heading, &run, slot == hldata::kSlotArrival);
+        sound.holdPipeline(false);
+        return wrote;
     }
 
     bool remove(int slot)
@@ -327,12 +334,19 @@ namespace hlrt::SaveGame
             return false;
         need();
         needRun();
-        return writer.begin(card, list, slot, save, heading, &run, slot == hldata::kSlotArrival);
+        // (While it is written, a piece a frame: as write's.)
+        const bool began = writer.begin(card, list, slot, save, heading, &run, slot == hldata::kSlotArrival);
+        if (began)
+            sound.holdPipeline(true);
+        return began;
     }
 
     hldata::SaveWriter::Result step()
     {
-        return writer.step();
+        const hldata::SaveWriter::Result result = writer.step();
+        if (result != hldata::SaveWriter::Result::Busy)
+            sound.holdPipeline(false);
+        return result;
     }
 
     bool busy()
@@ -342,6 +356,10 @@ namespace hlrt::SaveGame
 
     bool finish()
     {
-        return !writer.busy() || writer.finish();
+        if (!writer.busy())
+            return true;
+        const bool done = writer.finish();
+        sound.holdPipeline(false);
+        return done;
     }
 } // namespace hlrt::SaveGame

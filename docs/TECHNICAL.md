@@ -622,7 +622,14 @@ Milestone 11, "levels of detail".
   player is within, looked at four times a second (under water, 14); the
   music is added after it, as in the game; then the sound is laid out for
   the console's speakers (a little narrower), headphones, or one channel
-  (SOUND: Room effects, Output). About a fifth of the ARM7's time.
+  (SOUND: Room effects, Output). About a fifth of the ARM7's time. On a
+  DSi, Quality: high makes all of it at 47,605 Hz, the rate its speakers
+  are fed at (standard: 32,728, and the speakers fed at 32.73 kHz). While a
+  save is written the pipeline steps aside (the plain mixer): on a DSi the
+  ARM7 does the card's writing and is held up by it; and held up longer
+  than the rings are ahead for any other reason, the pipeline empties them
+  and goes on from where the channels are -- silence, not the rings played
+  round again.
   With the DSi's DSP option on, the DSP has the capture, and the pipeline
   is off.
 - The pause menu: RESUME, QUICK SAVE, SAVE GAME, LOAD GAME, NEW GAME (asks

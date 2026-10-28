@@ -9,11 +9,15 @@
 // again. tools/hwtest/routing measured all of it on a DS and a DSi.
 //
 // All of it runs off the sound clock: the channels and capture at 32728 Hz
-// (512 ticks a sample), the block timer once every 64 samples, set going
-// together -- so block b is the rings' samples b*64 .. b*64+63, captured by
-// the end of the block, and written back kLead samples later in the rings,
-// ahead of where channels 1 and 3 are playing by more than any lateness the
-// main loop has (a block, two at the very worst).
+// (512 ticks a sample) -- or, on a DSi at the high quality, at 47605 Hz (352),
+// the rate its speakers are fed at -- the block timer once every 64 samples,
+// set going together: so block b is the rings' samples b*64 .. b*64+63,
+// captured by the end of the block, and written back kLead samples later in
+// the rings, ahead of where channels 1 and 3 are playing by more than any
+// lateness the main loop has (a block, two at the very worst). Held up for
+// longer than that (the card, on a DSi, is the ARM7's to read), it does not
+// try to catch up: the rings are emptied and it goes on from where the
+// channels are -- a moment of silence, not the rings played round again.
 
 #include <nds.h>
 
@@ -29,9 +33,18 @@ namespace hlaudio
     {
         constexpr int kRing = AudioLink::kOutRing; ///< samples (a power of two)
         constexpr int kBlock = 64;
-        constexpr int kLead = 256; ///< 4 blocks: 7.8 ms
-        constexpr std::uint16_t kRateTimer = static_cast<std::uint16_t>(0x10000 - 512); // 32728 Hz
-        constexpr int kOutRate = 32728;
+        constexpr int kLead = 256; ///< 4 blocks: 7.8 ms (5.4 at the high quality)
+
+        /// The two rates: sound-clock ticks a sample, the rate, and how many
+        /// samples to one of the room's reverb (about 11 kHz either way).
+        struct Rate
+        {
+            int ticks, hz, factor;
+        };
+        constexpr Rate kStandard = {512, 32728, 3};
+        constexpr Rate kHigh = {352, 47605, 4};
+        Rate rate = kStandard;
+        std::uint8_t quality = kAudioQualityStandard;
 
         alignas(32) std::int16_t capLeft[kRing];
         alignas(32) std::int16_t capRight[kRing];
@@ -50,7 +63,7 @@ namespace hlaudio
         {
             SCHANNEL_CR(n) = 0;
             SCHANNEL_SOURCE(n) = reinterpret_cast<std::uint32_t>(ring);
-            SCHANNEL_TIMER(n) = kRateTimer;
+            SCHANNEL_TIMER(n) = static_cast<std::uint16_t>(0x10000 - rate.ticks);
             SCHANNEL_REPEAT_POINT(n) = 0;
             SCHANNEL_LENGTH(n) = kRing / 2;
             SCHANNEL_CR(n) = 127u | static_cast<std::uint32_t>(pan) << 16 | 1u << 27 | 1u << 29 | 1u << 31;
@@ -66,11 +79,20 @@ namespace hlaudio
     {
         if (on)
             return;
-        if (!roomInit)
+        // (The high quality only where the speakers are fed at its rate.)
+        const Rate want = quality == kAudioQualityHigh && isDSiMode() ? kHigh : kStandard;
+        if (!roomInit || want.hz != rate.hz)
         {
-            room.init(kOutRate, 3);
+            const int was = roomInit ? room.room() : 0;
+            rate = want;
+            room.init(rate.hz, rate.factor);
+            room.setRoom(was);
             roomInit = true;
         }
+        music.setOutRate(static_cast<std::uint32_t>(rate.hz));
+        // A block: 64 samples, in bus ticks (twice the sound clock's).
+        const std::uint32_t blockTicks = static_cast<std::uint32_t>(kBlock * rate.ticks * 2);
+        link.blockTicks = blockTicks;
         const int ime = enterCriticalSection();
         REG_SNDCAP0CNT = 0;
         REG_SNDCAP1CNT = 0;
@@ -94,29 +116,51 @@ namespace hlaudio
         channel(3, link.outRight, 127);
         // (The blocks from here: the timer started again with them.)
         TIMER_CR(0) = 0;
-        TIMER_DATA(0) = 0;
+        TIMER_DATA(0) = static_cast<std::uint16_t>(0x10000 - blockTicks);
         TIMER_CR(0) = TIMER_ENABLE | TIMER_DIV_1 | TIMER_IRQ_REQ;
         block = 0;
         on = true;
         leaveCriticalSection(ime);
     }
 
-    void pipelineStop()
+    void pipelineStop(AudioLink &link)
     {
         if (!on)
             return;
+        const int ime = enterCriticalSection();
         REG_SNDCAP0CNT = 0;
         REG_SNDCAP1CNT = 0;
         SCHANNEL_CR(1) = 0;
         SCHANNEL_CR(3) = 0;
         REG_SOUNDCNT = static_cast<std::uint16_t>((REG_SOUNDCNT & 0x7F) | 1 << 15);
+        // (The blocks the plain way: 65536 bus ticks.)
+        TIMER_CR(0) = 0;
+        TIMER_DATA(0) = 0;
+        TIMER_CR(0) = TIMER_ENABLE | TIMER_DIV_1 | TIMER_IRQ_REQ;
+        link.blockTicks = 0x10000;
         on = false;
+        leaveCriticalSection(ime);
+    }
+
+    bool pipelineRateChanges(std::uint8_t newQuality)
+    {
+        const Rate want = newQuality == kAudioQualityHigh && isDSiMode() ? kHigh : kStandard;
+        return want.hz != rate.hz;
     }
 
     void pipelineRun(AudioLink &link, std::uint32_t blocks)
     {
         if (!on)
             return;
+        // Held up for longer than the rings are ahead: what is in them is
+        // out of date -- emptied, and on from where the channels are now.
+        if (blocks > static_cast<std::uint32_t>(kLead / kBlock - 1))
+        {
+            for (int i = 0; i < kRing; ++i)
+                link.outLeft[i] = link.outRight[i] = 0;
+            block += blocks - 1;
+            blocks = 1;
+        }
         const std::uint32_t written = link.musicWrite;
         for (std::uint32_t n = 0; n < blocks; ++n, ++block)
         {
@@ -175,13 +219,14 @@ namespace hlaudio
         }
     }
 
-    void pipelineMode(std::uint8_t newEffects, std::uint8_t newOutput)
+    void pipelineMode(std::uint8_t newEffects, std::uint8_t newOutput, std::uint8_t newQuality)
     {
+        quality = newQuality;
         // (The room going off and on again: what it had, emptied.)
         if (newEffects == kAudioEffectsClassic && effects != kAudioEffectsClassic && roomInit)
         {
             const int was = room.room();
-            room.init(kOutRate, 3);
+            room.init(rate.hz, rate.factor);
             room.setRoom(was);
         }
         effects = newEffects == kAudioEffectsClassic ? kAudioEffectsClassic : kAudioEffectsOff;
@@ -192,7 +237,7 @@ namespace hlaudio
     {
         if (!roomInit)
         {
-            room.init(kOutRate, 3);
+            room.init(rate.hz, rate.factor);
             roomInit = true;
         }
         room.setRoom(which);
@@ -203,8 +248,8 @@ namespace hlaudio
         link.musicRead = 0;
         link.musicDry = 0;
         link.musicOver = 0;
-        music.open(reinterpret_cast<const std::uint16_t *>(command.a), command.b & 0xFFFF, command.b >> 16, kOutRate,
-                   command.c, static_cast<int>(command.d));
+        music.open(reinterpret_cast<const std::uint16_t *>(command.a), command.b & 0xFFFF, command.b >> 16,
+                   static_cast<std::uint32_t>(rate.hz), command.c, static_cast<int>(command.d));
     }
 
     void musicStop(AudioLink &link)

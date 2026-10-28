@@ -255,12 +255,21 @@ namespace hlrt
         c.b = (blocks & 0xFFFF) | (rate & 0xFFFF) << 16;
         c.c = pairs;
         c.d = static_cast<std::uint32_t>(volume);
-        // (What was written before is not this track's: counted from here.
-        // The ARM7 starts its own count with the command.)
-        sync();
-        link_->musicWrite = 0;
         push(c);
         sync(); // (so that what it says of the music is of this track)
+    }
+
+    void Arm7Audio::musicPrepare()
+    {
+        if (link_ == nullptr)
+            return;
+        // (What was written before is not this track's: counted from here.
+        // The ARM7 is told nothing of this track until musicOpen.)
+        AudioCommand c;
+        c.op = AudioOp::MusicStop;
+        push(c);
+        sync();
+        link_->musicWrite = 0;
     }
 
     void Arm7Audio::musicVolume(int volume)
@@ -303,8 +312,11 @@ namespace hlrt
     }
     std::uint32_t Arm7Audio::loadPercent() const
     {
-        // (Of the 65536 bus ticks of a block.)
-        return link_ != nullptr ? (link_->cpuAvg * 100) >> 16 : 0;
+        // (Of the bus ticks a block lasts.)
+        if (link_ == nullptr)
+            return 0;
+        const std::uint32_t block = link_->blockTicks != 0 ? link_->blockTicks : 0x10000;
+        return link_->cpuAvg * 100 / block;
     }
     std::uint32_t Arm7Audio::musicDry() const
     {

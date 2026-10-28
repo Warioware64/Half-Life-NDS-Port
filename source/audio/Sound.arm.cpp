@@ -46,19 +46,16 @@ namespace hlrt
     void Sound::init()
     {
         soundEnable();
-        // A DSi's extras: the output at 47.6 kHz instead of 32.7 (asked of
-        // NEA, after the sound is switched on -- which puts it back to 32.7
-        // -- and before anything plays), and the DSP. Neither exists on a
-        // DS, and then nothing here does anything.
-        // The DSP is used only if the player has asked for it (the pause
-        // menu): until then a DSi sounds as a DS does, at the higher rate.
+        // A DSi's extras: its speakers' rate (32.7 or 47.6 kHz, as the
+        // quality setting has it: sendMode, after the sound is switched on --
+        // which puts it back to 32.7), and the DSP, used only for the room
+        // effects' Enhanced. Neither exists on a DS.
         const bool dsi = NEA_SoundDSiOutputAvailable();
         if (dsi)
         {
             // (All of the speakers to the ordinary channels, until the DSP
-            // has something for them: DspAudio.)
+            // has something for them: DspAudio. The rate: sendMode.)
             NEA_SoundSetDSiMixRatio(8);
-            NEA_SoundEnableDSiOutput(NEA_DSI_SOUND_FREQ_47KHZ);
         }
         // The game's own sound on the ARM7 (arm7/source/Audio.cpp), which
         // plays the clips where they are in memory: nothing is "loaded".
@@ -295,11 +292,35 @@ namespace hlrt
         return extended_;
     }
 
+    void Sound::holdPipeline(bool hold)
+    {
+        const int was = held_;
+        held_ = hold ? held_ + 1 : (held_ > 0 ? held_ - 1 : 0);
+        if ((was == 0) != (held_ == 0))
+        {
+            sendMode();
+            // (Let go of before the card is touched.)
+            if (hold)
+                arm7Audio.sync();
+        }
+    }
+
     void Sound::sendMode()
     {
         const std::uint8_t effects = extended_ || settings.roomEffects == kRoomOff ? kAudioEffectsOff
                                                                                     : kAudioEffectsClassic;
-        arm7Audio.setMode(!extended_, effects, settings.outputMode, settings.soundQuality);
+        // A DSi's speakers fed at the pipeline's rate: 47.6 kHz at the high
+        // quality (and for the DSP, which is made for it), else 32.7.
+        if (NEA_SoundDSiOutputAvailable())
+        {
+            const int hz = extended_ || settings.soundQuality == kQualityHigh ? 47 : 32;
+            if (hz != dsiHz_)
+            {
+                dsiHz_ = hz;
+                NEA_SoundEnableDSiOutput(hz == 47 ? NEA_DSI_SOUND_FREQ_47KHZ : NEA_DSI_SOUND_FREQ_32KHZ);
+            }
+        }
+        arm7Audio.setMode(!extended_ && held_ == 0, effects, settings.outputMode, settings.soundQuality);
         // (The room the player is in, again: a pipeline started afresh has
         // none.)
         arm7Audio.setRoom(room_);
@@ -1283,8 +1304,21 @@ namespace hlrt
         musicLeft_ = header.blocks - block;
         musicSkipped_ = block * StereoMusic::kPairsPerBlock;
         const std::uint32_t pairs = header.pairs > musicSkipped_ ? header.pairs - musicSkipped_ : 0;
+        // The ring filled first, then the ARM7 told: it begins on music.
+        arm7Audio.musicPrepare();
+        for (std::uint32_t n = 0; n < kMusicRingBlocks && musicLeft_ != 0; ++n)
+        {
+            std::uint16_t *slot = musicRing + n * StereoMusic::kBlockWords;
+            if (std::fread(slot, 2, StereoMusic::kBlockWords, music_) != StereoMusic::kBlockWords)
+            {
+                musicLeft_ = 0;
+                break;
+            }
+            DC_FlushRange(slot, StereoMusic::kBlockWords * 2);
+            arm7Audio.musicWrote(1);
+            --musicLeft_;
+        }
         arm7Audio.musicOpen(musicRing, kMusicRingBlocks, header.rate, pairs, musicGain());
-        musicTick();
     }
 
     std::uint32_t Sound::musicPlayed() const

@@ -79,6 +79,11 @@ namespace hlrt
         /// game's own (or none). Enhanced that the DSP cannot give falls
         /// back to the game's own.
         void applySoundMode();
+        /// While the card is written (a save): on a DSi the ARM7 does the
+        /// writing, and is held up by it -- so the sound plays straight from
+        /// its channels, without the pipeline (no room, no music) until it
+        /// is let go. Nested holds count.
+        void holdPipeline(bool hold);
 
         int loaded() const { return loaded_; }
         /// How many voices each layer has just now (for the readout).
@@ -214,6 +219,8 @@ namespace hlrt
         bool extended_ = false;
         int roomDue_ = 0;
         int room_ = 0; ///< the room the ARM7 was last told
+        int held_ = 0; ///< holdPipeline's count
+        int dsiHz_ = 0; ///< the DSi's speakers' rate, in kHz (0: not yet set)
         void sendMode();
         hldata::Mixer mixer_;
         Voice voices_[hldata::Mixer::kVoices];

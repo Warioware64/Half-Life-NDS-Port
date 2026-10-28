@@ -18,7 +18,6 @@
 #include "data/LevelFile.hpp"
 #include "data/TextureCache.hpp"
 #include "data/TextureStream.hpp"
-#include "audio/Sound.hpp"
 #include "render/Camera.hpp"
 #include "render/WorldDrawParts.hpp"
 
@@ -298,10 +297,13 @@ namespace hlrt
 
     void WorldDraw::emit()
     {
-        // On a DSi, by display list. (Not while its DSP is in use: a DMA to
-        // the geometry engine and the DSP's own traffic do not get on --
-        // NEA's notes on its display lists -- and the DSP is an option.)
-        if (list_ != nullptr && !sound.extended() && !listStuck_)
+        // On a DSi, by display list -- with its DSP in use too: what jams a
+        // DMA to the geometry engine is the DSP fetching through its own bus
+        // (NEA's notes on its display lists), and the game's DSP is only
+        // ever given words through the ARM9's port, which does not
+        // (tools/hwtest/dsp_bus: none in thousands of frames, even during
+        // the DMA).)
+        if (list_ != nullptr && !listStuck_)
         {
             emitList();
             return;

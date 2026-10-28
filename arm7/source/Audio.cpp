@@ -281,8 +281,13 @@ namespace hlaudio
                     pipelineRoom(static_cast<int>(command.a));
                     break;
                 case AudioOp::Mode:
+                {
+                    const std::uint8_t quality = static_cast<std::uint8_t>((command.a >> 16) & 0xFF);
+                    // (Another rate: set going again at it.)
+                    if (pipelineOn() && pipelineRateChanges(quality))
+                        pipelineStop(l);
                     pipelineMode(static_cast<std::uint8_t>(command.a & 0xFF),
-                                 static_cast<std::uint8_t>((command.a >> 8) & 0xFF));
+                                 static_cast<std::uint8_t>((command.a >> 8) & 0xFF), quality);
                     if (command.a & kAudioPipeline)
                     {
                         if (!pipelineOn())
@@ -297,9 +302,10 @@ namespace hlaudio
                     }
                     else
                     {
-                        pipelineStop();
+                        pipelineStop(l);
                     }
                     break;
+                }
                 case AudioOp::MusicOpen:
                     musicOpen(l, command);
                     break;

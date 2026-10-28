@@ -35,6 +35,7 @@ namespace hldata
         {
             ring_ = ring;
             ringBlocks_ = ringBlocks;
+            rate_ = rate;
             total_ = totalPairs;
             // (Pairs of the track a sample of the output, in 65536ths: once.)
             step_ = static_cast<std::uint32_t>((static_cast<std::uint64_t>(rate) << 16) / outRate);
@@ -48,6 +49,12 @@ namespace hldata
             dry_ = 0;
         }
         void close() { on_ = false; }
+        /// Played at another rate from here (the track's own kept).
+        void setOutRate(std::uint32_t outRate)
+        {
+            if (rate_ != 0 && outRate != 0)
+                step_ = static_cast<std::uint32_t>((static_cast<std::uint64_t>(rate_) << 16) / outRate);
+        }
         void setVolume(int volume) { volume_ = volume; }
         bool on() const { return on_; }
         /// Pairs of the track played, and samples the ring had none for.
@@ -147,6 +154,7 @@ namespace hldata
         const std::uint16_t *ring_ = nullptr;
         const std::uint16_t *words_ = nullptr;
         std::uint32_t ringBlocks_ = 0, total_ = 0, step_ = 0, phase_ = 0, played_ = 0, inBlock_ = 0, block_ = 0;
+        std::uint32_t rate_ = 0;
         std::uint32_t dry_ = 0;
         std::int32_t value_[2] = {0, 0}, index_[2] = {0, 0};
         std::int32_t prev_[2] = {0, 0}, cur_[2] = {0, 0};

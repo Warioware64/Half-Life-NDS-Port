@@ -131,6 +131,17 @@ int main()
         check(music.reading() == music.played() / StereoMusic::kPairsPerBlock, "the block being read is known");
     }
 
+    // The rate changed under it (the DSi's quality): the track's time kept.
+    {
+        music.open(blocks.data(), 6, kStereoRate, 32728, 6 * StereoMusic::kPairsPerBlock, 256);
+        std::vector<std::int32_t> l(47605, 0), r(47605, 0);
+        music.mix(l.data(), r.data(), 8182, 6); // a quarter of a second at 32 kHz
+        music.setOutRate(47605);
+        music.mix(l.data(), r.data(), 11901, 6); // ... and a quarter at 47 kHz
+        check(std::labs(static_cast<long>(music.played()) - kStereoRate / 2) <= 2,
+              "a quarter of a second at each rate: half a second of the track");
+    }
+
     // Behind: silence, counted; then caught up, the track again.
     {
         music.open(blocks.data(), 6, kStereoRate, kStereoRate, 6 * StereoMusic::kPairsPerBlock, 256);
