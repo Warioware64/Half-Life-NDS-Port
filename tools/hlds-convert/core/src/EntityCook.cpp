@@ -1096,7 +1096,8 @@ namespace hlds
     void cookLogic(const BspFile &bsp, const std::vector<Entity> &entities,
                    const std::vector<int> &brushRecordOfEntity,
                    const std::vector<std::string> &models, LogicCook &out, const SentenceBook *book,
-                   const TitlesBook *titles, const std::string &chapterName)
+                   const TitlesBook *titles, const std::string &chapterName,
+                   const std::vector<std::string> &lazyModels)
     {
         out = LogicCook();
         out.recordOfEntity.assign(entities.size(), -1);
@@ -3146,10 +3147,18 @@ namespace hlds
         }
 
         // The actors: every entity that is a model this map had cooked.
+        // (Then the weapons it has not, to be loaded if one is taken up.)
         for (const std::string &model : models)
         {
             ModelRef ref{};
-            std::strncpy(ref.name, model.c_str(), sizeof(ref.name) - 1);
+            std::strncpy(ref.name, model.c_str(), sizeof(ref.name) - 2);
+            out.modelRefs.push_back(ref);
+        }
+        for (const std::string &model : lazyModels)
+        {
+            ModelRef ref{};
+            std::strncpy(ref.name, model.c_str(), sizeof(ref.name) - 2);
+            ref.name[sizeof(ref.name) - 1] = kModelRefLazy;
             out.modelRefs.push_back(ref);
         }
         // (In three rounds: the items of the weapons that came later after
@@ -3667,10 +3676,17 @@ namespace hlds
         }
         // Which of the common sounds this map has a use for: the player's
         // own always, a monster's only where there is one.
+        std::vector<bool> soundLazy(commonCount, false);
+        bool lazy = false;
         auto use = [&](CommonSound from, CommonSound to)
         {
             for (int c = static_cast<int>(from); c <= static_cast<int>(to); ++c)
-                soundUsed[c] = true;
+            {
+                if (lazy)
+                    soundLazy[c] = !soundUsed[c];
+                else
+                    soundUsed[c] = true;
+            }
         };
         use(CommonSound::Step1, CommonSound::Explode);
         use(CommonSound::Ricochet1, CommonSound::BulletFlesh);
@@ -3689,58 +3705,72 @@ namespace hlds
             if (record.kind == static_cast<std::uint8_t>(LogicKind::Pushable))
                 use(CommonSound::PushBox1, CommonSound::PushBox3);
         }
-        // (The newer guns': where the map has them to be held.)
-        if (std::find(models.begin(), models.end(), "v_9mmar") != models.end())
+        // The guns' own: those of what the map has to be held, and (`lazy`)
+        // of what it has not -- a weapon given by a cheat, whose model and
+        // sounds are loaded when it is taken up (ModelCache): kept named,
+        // but neither loaded with the map nor in its archive.
+        auto gunSounds = [&](const std::vector<std::string> &held)
         {
-            use(CommonSound::Mp5Fire, CommonSound::Launcher);
-            use(CommonSound::Mp5Fire1, CommonSound::Launcher2);
-        }
-        if (std::find(models.begin(), models.end(), "v_357") != models.end())
-        {
-            use(CommonSound::PythonFire, CommonSound::PythonReload);
-            use(CommonSound::PythonFire2, CommonSound::PythonFire2);
-        }
-        if (std::find(models.begin(), models.end(), "v_shotgun") != models.end())
-            use(CommonSound::ShotgunDouble, CommonSound::ShotgunReload3);
-        if (std::find(models.begin(), models.end(), "v_grenade") != models.end())
-            use(CommonSound::GrenadeBounce2, CommonSound::GrenadeBounce3);
-        // (... and those that came later: where the map has them to be held,
-        // or lying about to be picked up.)
-        auto holds = [&](const char *viewModel, ItemKind item, ItemKind other = ItemKind::None)
-        {
-            if (std::find(models.begin(), models.end(), viewModel) != models.end())
-                return true;
-            for (const ActorRecord &actor : out.actors)
+            // (The newer guns': where the map has them to be held.)
+            if (std::find(held.begin(), held.end(), "v_9mmar") != held.end())
             {
-                if (actor.kind == static_cast<std::uint8_t>(ActorKind::Item) &&
-                    (actor.item == static_cast<std::uint32_t>(item) || actor.item == static_cast<std::uint32_t>(other)))
-                    return true;
+                use(CommonSound::Mp5Fire, CommonSound::Launcher);
+                use(CommonSound::Mp5Fire1, CommonSound::Launcher2);
             }
-            return false;
+            if (std::find(held.begin(), held.end(), "v_357") != held.end())
+            {
+                use(CommonSound::PythonFire, CommonSound::PythonReload);
+                use(CommonSound::PythonFire2, CommonSound::PythonFire2);
+            }
+            if (std::find(held.begin(), held.end(), "v_shotgun") != held.end())
+                use(CommonSound::ShotgunDouble, CommonSound::ShotgunReload3);
+            if (std::find(held.begin(), held.end(), "v_grenade") != held.end())
+                use(CommonSound::GrenadeBounce2, CommonSound::GrenadeBounce3);
+            // (... and those that came later: where the map has them to be held,
+            // or lying about to be picked up.)
+            auto holds = [&](const char *viewModel, ItemKind item, ItemKind other = ItemKind::None)
+            {
+                if (std::find(held.begin(), held.end(), viewModel) != held.end())
+                    return true;
+                if (lazy)
+                    return false; // (what lies about is the map's own)
+                for (const ActorRecord &actor : out.actors)
+                {
+                    if (actor.kind == static_cast<std::uint8_t>(ActorKind::Item) &&
+                        (actor.item == static_cast<std::uint32_t>(item) || actor.item == static_cast<std::uint32_t>(other)))
+                        return true;
+                }
+                return false;
+            };
+            if (holds("v_crossbow", ItemKind::Crossbow, ItemKind::Bolts))
+                use(CommonSound::XbowFire, CommonSound::XbowReload);
+            if (holds("v_tripmine", ItemKind::Tripmine))
+            {
+                use(CommonSound::MineDeploy, CommonSound::MineCharge);
+                use(CommonSound::MineActivate, CommonSound::MineActivate);
+            }
+            if (holds("v_satchel", ItemKind::Satchel))
+                use(CommonSound::SatchelBounce, CommonSound::SatchelBounce);
+            if (holds("v_squeak", ItemKind::Snark))
+                use(CommonSound::SnarkDeploy, CommonSound::SnarkBlast);
+            if (holds("v_rpg", ItemKind::Rpg, ItemKind::RpgClip))
+                use(CommonSound::RocketFire, CommonSound::RocketFly);
+            if (holds("v_gauss", ItemKind::Gauss, ItemKind::GaussClip))
+                use(CommonSound::GaussFire, CommonSound::Electro6);
+            if (holds("v_egon", ItemKind::Egon))
+                use(CommonSound::EgonWindup, CommonSound::EgonOff);
+            if (holds("v_hgun", ItemKind::Hornetgun))
+                use(CommonSound::HornetFire1, CommonSound::HornetHit3);
         };
-        if (holds("v_crossbow", ItemKind::Crossbow, ItemKind::Bolts))
-            use(CommonSound::XbowFire, CommonSound::XbowReload);
-        if (holds("v_tripmine", ItemKind::Tripmine))
-        {
-            use(CommonSound::MineDeploy, CommonSound::MineCharge);
-            use(CommonSound::MineActivate, CommonSound::MineActivate);
-        }
-        if (holds("v_satchel", ItemKind::Satchel))
-            use(CommonSound::SatchelBounce, CommonSound::SatchelBounce);
-        if (holds("v_squeak", ItemKind::Snark))
-            use(CommonSound::SnarkDeploy, CommonSound::SnarkBlast);
-        if (holds("v_rpg", ItemKind::Rpg, ItemKind::RpgClip))
-            use(CommonSound::RocketFire, CommonSound::RocketFly);
-        if (holds("v_gauss", ItemKind::Gauss, ItemKind::GaussClip))
-            use(CommonSound::GaussFire, CommonSound::Electro6);
-        if (holds("v_egon", ItemKind::Egon))
-            use(CommonSound::EgonWindup, CommonSound::EgonOff);
-        if (holds("v_hgun", ItemKind::Hornetgun))
-            use(CommonSound::HornetFire1, CommonSound::HornetHit3);
-        // (What comes apart is heard to: where the map has the pieces.)
-        if (std::find(models.begin(), models.end(), "agibs") != models.end() ||
-            std::find(models.begin(), models.end(), "hgibs") != models.end())
-            use(CommonSound::BodySplat, CommonSound::BodySplat);
+        gunSounds(models);
+        lazy = true;
+        gunSounds(lazyModels);
+        lazy = false;
+        // (What comes apart is heard to -- and a fall the player does not
+        // get up from, and a snark's burst: every map.)
+        use(CommonSound::BodySplat, CommonSound::BodySplat);
+        // (A body falling to the floor: every map has someone to.)
+        use(CommonSound::BodyDrop3, CommonSound::BodyDrop4);
         bool soldiers = false;
         for (const ActorRecord &actor : out.actors)
         {
@@ -3904,9 +3934,12 @@ namespace hlds
         }
         for (int c = 0; c < commonCount; ++c)
         {
-            if (!soundUsed[c])
+            if (!soundUsed[c] && !soundLazy[c])
                 out.sounds[c].clear();
         }
+        out.soundLazy.assign(out.sounds.size(), false);
+        for (int c = 0; c < commonCount; ++c)
+            out.soundLazy[c] = !soundUsed[c] && soundLazy[c];
         out.logicSounds = std::move(heard);
 
         out.nameHashes.assign(nameIds.size() + 1, 0);

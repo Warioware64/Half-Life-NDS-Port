@@ -52,7 +52,7 @@
 namespace hldata
 {
     inline constexpr char kLevelMagic[4] = {'H', 'L', 'D', 'S'};
-    inline constexpr std::uint16_t kLevelVersion = 42;
+    inline constexpr std::uint16_t kLevelVersion = 43;
     /// The oldest level format this build reads.
     inline constexpr std::uint16_t kLevelMinVersion = 28;
     /// The oldest build that can read what it writes. (32: what the people
@@ -66,8 +66,10 @@ namespace hldata
     /// 39's kinds, Xen's plants, and three items; 40: func_friction's
     /// volumes, and beams that throw sparks. 41 -- a pendulum's damping and
     /// its going back, which a build of 40 reads as none -- and 42 -- the
-    /// chargers' own sounds, which it does not play -- do not raise it.)
-    inline constexpr std::uint16_t kLevelMinReader = 40;
+    /// chargers' own sounds, which it does not play -- do not raise it. 43:
+    /// a body falling among the common sounds, and the view models a map
+    /// was not cooked with, named in its models to be loaded when needed.)
+    inline constexpr std::uint16_t kLevelMinReader = 43;
     /// The oldest level format whose saves are still read.
     /// 26 -> 27 added multiplayer fields, 27 -> 28 added texture table fields,
     /// 28 -> 29 a func_train's global name (extra[3], 0 before: read as
@@ -906,8 +908,16 @@ namespace hldata
     /// plays, and its skin mdl/<name>.htx.
     struct ModelRef
     {
-        char name[24]; ///< lower-case, NUL padded
+        char name[24]; ///< lower-case, NUL padded; the last byte is kModelRefLazy or 0
     };
+    /// A weapon's view model the map was not cooked with, named so that one
+    /// given by a cheat is found: not in the map's archive but in the common
+    /// one (wpn/<name>.hmd, its skin beside it), loaded when it is taken up.
+    inline constexpr char kModelRefLazy = 1;
+    inline bool modelRefLazy(const ModelRef &ref)
+    {
+        return ref.name[sizeof(ref.name) - 1] == kModelRefLazy;
+    }
 
     /// What an actor is: how it behaves when nothing is directing it.
     enum class ActorKind : std::uint8_t
@@ -1220,6 +1230,14 @@ namespace hldata
         std::uint8_t twin;
     };
     static_assert(sizeof(SoundRef) == 48);
+    /// In `twin`: a sound of a weapon the map was not cooked with
+    /// (kModelRefLazy) -- not loaded with the map nor in its archive, but
+    /// read out of the common one when it is first played.
+    inline constexpr std::uint8_t kSoundLazy = 0x80;
+    inline bool soundLazy(const SoundRef &ref)
+    {
+        return (ref.twin & kSoundLazy) != 0;
+    }
 
     /// The name of a sound's better copy (SoundRef::twin): `name` with its
     /// rate changed. False if `name` is not of the usual shape.
@@ -1228,7 +1246,8 @@ namespace hldata
         const char *dot = nullptr;
         for (const char *c = ref.name; *c != '\0'; ++c)
             dot = *c == '.' ? c : dot;
-        if (ref.twin == 0 || dot == nullptr)
+        const int rate = ref.twin & ~kSoundLazy;
+        if (rate == 0 || dot == nullptr)
             return false;
         const std::size_t stem = static_cast<std::size_t>(dot - ref.name) + 1;
         std::size_t end = stem;
@@ -1239,8 +1258,8 @@ namespace hldata
             return false;
         for (std::size_t i = 0; i < stem; ++i)
             out[i] = ref.name[i];
-        out[stem] = static_cast<char>('0' + (ref.twin / 10) % 10);
-        out[stem + 1] = static_cast<char>('0' + ref.twin % 10);
+        out[stem] = static_cast<char>('0' + (rate / 10) % 10);
+        out[stem + 1] = static_cast<char>('0' + rate % 10);
         out[stem + 2] = ref.name[end];
         out[stem + 3] = '\0';
         return true;

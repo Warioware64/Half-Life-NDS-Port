@@ -334,12 +334,17 @@ namespace
         monsterHurt(g.logic, z, 200, true);
         check(zombie.active && zombie.ai >= kAiDying, "a bullet never tears a zombie apart");
         // A body blown on is torn apart, by enough.
+        const int drop3 = g.timesHeard[static_cast<int>(CommonSound::BodyDrop3)],
+                  drop4 = g.timesHeard[static_cast<int>(CommonSound::BodyDrop4)];
         for (int n = 0; n < 100; ++n)
         {
             tickStill(g);
             trace(g, z, n * 33);
         }
         check(zombie.ai == kAiDead && zombie.health == 25, "dead, what is left of it is half its health");
+        check(g.timesHeard[static_cast<int>(CommonSound::BodyDrop3)] + g.timesHeard[static_cast<int>(CommonSound::BodyDrop4)] >
+                  drop3 + drop4,
+              "... and it was heard hitting the floor");
         monsterHurt(g.logic, z, 20, false, kHitBody, kDmgBlast);
         check(zombie.active, "... a blast of less leaves it");
         monsterHurt(g.logic, z, 30, false, kHitBody, kDmgBlast);

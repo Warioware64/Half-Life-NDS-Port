@@ -42,9 +42,8 @@ extern "C" const hlrt::EngineFuncs hlEngine = {
     .think = &hlrt::think,
     .topText = &hlrt::topText,
 
-    .bottomSetStatus = [](hlrt::BottomScreen &b, int weapon, int clip, int spare, unsigned have, bool canReload) {
-        b.setStatus(weapon, clip, spare, have, canReload);
-    },
+    .bottomSetStatus = [](hlrt::BottomScreen &b, int weapon, int clip, int spare, unsigned have, unsigned empty,
+                          bool canReload) { b.setStatus(weapon, clip, spare, have, empty, canReload); },
     .bottomSetLamp = [](hlrt::BottomScreen &b, bool suit, bool on, int percent) { b.setLamp(suit, on, percent); },
     .cameraRefreshProjection = [](hlrt::Camera &c) { c.refreshProjection(); },
     .cameraUpdate = [](hlrt::Camera &c) { c.update(); },
@@ -58,7 +57,8 @@ extern "C" const hlrt::EngineFuncs hlEngine = {
     .playerFrame = [](hlrt::Player &p, int vblanks) { p.frame(vblanks); },
     .playerTurn = [](hlrt::Player &p) { p.turn(); },
     .fadeSetDim = [](hlrt::ScreenFade &f, bool under) { f.setDim(under); },
-    .soundUi = [](hlrt::Sound &s, int which) { s.ui(which); },
+    .modelWield = [](hlrt::ModelCache &m, int index) { m.wield(index); },
+    .soundUi = [](hlrt::Sound &s, int which, int volume) { s.ui(which, volume); },
     .soundMusicTrack = [](const hlrt::Sound &s) { return s.musicTrack(); },
     .soundMusicMs = [](const hlrt::Sound &s) { return s.musicMs(); },
     .soundSetMusic = [](hlrt::Sound &s, int track, std::uint32_t ms) { s.setMusic(track, ms); },

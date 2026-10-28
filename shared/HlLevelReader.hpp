@@ -319,8 +319,10 @@ namespace hldata
             return LevelError::BadIndex;
         for (std::uint32_t i = 0; i < modelRefCount; ++i)
         {
-            // The name becomes a file name on the card: it must end.
-            if (modelRefs[i].name[sizeof(modelRefs[i].name) - 1] != '\0')
+            // The name becomes a file name on the card: it must end (before
+            // the last byte, which says whether it is a lazy weapon's).
+            const char last = modelRefs[i].name[sizeof(modelRefs[i].name) - 1];
+            if (modelRefs[i].name[sizeof(modelRefs[i].name) - 2] != '\0' || (last != '\0' && last != kModelRefLazy))
                 return LevelError::BadIndex;
         }
         // (The sky's six pictures, from the one the header names.)

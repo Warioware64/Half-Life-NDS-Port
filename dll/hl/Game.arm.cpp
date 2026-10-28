@@ -768,7 +768,7 @@ namespace hlrt
             input.moveForward = input.moveSide = 0;
             input.jump = input.duck = input.usePressed = input.useHeld = input.attack = input.second = false;
             input.reloadPressed = input.lampPressed = false;
-            input.weaponPick = input.weaponStep = 0;
+            input.weaponPick = input.weaponStep = input.weaponChoose = 0;
             input.lookDx = input.lookDy = input.lookFineX = input.lookFineY = 0;
         }
         std::uint32_t netDid = 0; // what the weapon did this frame, for a game between consoles
@@ -806,6 +806,10 @@ namespace hlrt
                 const int target = trainUse(logic, player.state) || tankUse(logic, player.state)
                                        ? -2
                                        : logicFindUsable(logic, eye, camera.forward);
+                // (The game's PlayerUse says so: something used, its
+                // wpn_select; nothing there to use, wpn_denyselect -- each
+                // at four tenths.)
+                constexpr int kUseVolume = 51;
                 if (target == -2)
                 {
                 }
@@ -813,9 +817,12 @@ namespace hlrt
                 {
                     logicUse(logic, player.state, target, -1, kUseSet);
                     netGame.used(target); // (a game between consoles: they are told)
+                    sound.ui(kUiSoundWeapon, kUseVolume);
                 }
+                else if (personUse(logic, player.state, eye, camera.forward)) // (a scientist or a guard: follow, or stay)
+                    sound.ui(kUiSoundWeapon, kUseVolume);
                 else
-                    personUse(logic, player.state, eye, camera.forward); // (a scientist or a guard: follow, or stay)
+                    sound.ui(kUiSoundDeny, kUseVolume);
             }
             else if (input.useHeld && player.state.health > 0)
             {
@@ -952,7 +959,10 @@ namespace hlrt
             }
             // (A slot touched -- the next of its kind of weapon -- or a step
             // to the weapon before or after.)
-            const int pick = input.weaponPick != 0 ? weaponOfCategory(player.state, input.weaponPick)
+            // (A weapon taken from a slot's list on the touch screen is that
+            // weapon: HlWeaponList.hpp.)
+            const int pick = input.weaponChoose != 0 ? input.weaponChoose
+                             : input.weaponPick != 0 ? weaponOfCategory(player.state, input.weaponPick)
                                                    : weaponStepped(player.state, input.weaponStep);
             // At a gun's controls: the fire button is the gun's, and what is
             // in hand is put away (the game's holstered weapon).
@@ -1027,8 +1037,9 @@ namespace hlrt
                 chance = chance * 1664525u + 1013904223u;
                 viewKick(player.view, (did & kWeaponSecondary) ? 10 * kViewDegree : weaponKick(inHand_, chance >> 8));
             }
-            if (did & kWeaponDrawn)
-                sound.ui(kUiSoundWeapon);
+            // (The game's wpn_select is the player's choice of a weapon, heard
+            // as it is asked for -- Input -- and not when one is drawn: what
+            // is drawn because the last grenade has gone is silent.)
             if (player.state.inv.current != inHand_ ||
                 (inHand_ == kWeaponSatchel && radio_ != satchelsOut()))
                 takeInHand();
@@ -1166,7 +1177,10 @@ namespace hlrt
             }
             // (Every weapon's bit: the first six's, then the Arsenal's.)
             const unsigned have = inv.have | (static_cast<unsigned>(player.arsenal.have & kArsenalWeapons) << kWeaponFirstMore);
-            bottomScreen.setStatus(inv.current, first, second, have,
+            unsigned dry = 0;
+            for (int w = 1; w < kWeaponCount; ++w)
+                dry |= (have & (1u << w)) && weaponDry(player.state, w) ? 1u << w : 0u;
+            bottomScreen.setStatus(inv.current, first, second, have, dry,
                                    clip != nullptr && spare != nullptr && *clip < gunKind(inv.current).holds &&
                                        *spare > 0);
             hudDraw.setStatus((inv.have & kHaveSuit) != 0, player.state.health, inv.armor, inv.current, first, second,

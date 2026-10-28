@@ -6,6 +6,7 @@
 #include "Settings.hpp"
 #include "Global.hpp"
 #include "HlTouchLayout.hpp"
+#include "HlWeaponList.hpp"
 #include "HlUi.hpp"
 #include "ui/TouchCanvas.hpp"
 
@@ -274,6 +275,72 @@ namespace hlrt
         }
     }
 
+    void BottomScreen::setWeaponList(const WeaponList &list)
+    {
+        const int hover = list.owned ? list.hover : -1;
+        if (list.category == list_.category && list.slide == list_.slide && hover == listHover_ &&
+            list.count == list_.count)
+            return;
+        list_ = list;
+        listHover_ = hover;
+        if (shown_ != Shown::Pad)
+            return;
+        // What was under it (it is all inside the pad's frame), then it where
+        // it is now.
+        drawPad();
+        if (list_.open())
+            drawWeaponList();
+    }
+
+    /// The list of a slot's weapons: each its picture and its name, the one
+    /// in hand lit, the one under the stylus pressed, one with nothing to
+    /// fire grey; risen out of the pad's bottom edge as far as it has slid.
+    HL_ARM void BottomScreen::drawWeaponList()
+    {
+        static const char *const kFull[kWeaponCount] = {"",         "CROWBAR",  "9MM PISTOL", "SHOTGUN",  "GRENADES",
+                                                        "MP5",      ".357",     "CROSSBOW",   "SATCHELS", "TRIPMINES",
+                                                        "SNARKS",   "RPG",      "TAU CANNON", "GLUON GUN", "HIVEHAND"};
+        const TouchLayout at = touchLayout(mirrored_);
+        const TouchRect r = weaponListRect(list_, at);
+        const int drop = (256 - list_.slide) * (r.h + 4) / 256;
+        // (Drawn into the screen's rows down to the pad's bottom edge, and no
+        // further -- what is still below it is not seen, and nothing outside
+        // the pad is ever touched: the pad drawn again puts all of it right.)
+        Canvas band = touchCanvas.canvas();
+        band.height = weaponListFloor(at) / 8 * 8;
+        const FontView &font = touchCanvas.font(kFontSmall);
+        loadIcons();
+        const int top = r.y + drop;
+        band.plate(r.x, top, r.w, r.h, 4, kUiBack, kUiOrange + 2);
+        for (int n = 0; n < list_.count; ++n)
+        {
+            const int weapon = list_.weapons[n];
+            const int y = top + 2 + n * kWeaponListRow;
+            const bool inHand = weapon == weapon_, under = n == listHover_;
+            const bool dry = (list_.empty & (1u << weapon)) != 0;
+            band.button(r.x + 3, y + 1, r.w - 6, kWeaponListRow - 2, under);
+            if (inHand)
+                band.frame(r.x + 3, y + 1, r.w - 6, kWeaponListRow - 2, kUiOrange + 2);
+            const int icon = weapon - 1;
+            if (icon < icons.count())
+            {
+                const int base = dry ? kUiGrey : kUiOrange;
+                const int inks[4] = {0, base, base + 1, dry ? kUiGrey + 2 : kUiWhite + 2};
+                const int left = r.x + 6, iconTop = y + (kWeaponListRow - icons.height()) / 2;
+                for (int py = 0; py < icons.height(); ++py)
+                {
+                    for (int px = 0; px < icons.width(); ++px)
+                    {
+                        if (const int level = icons.level(icon, px, py))
+                            band.pixel(left + px, iconTop + py, inks[level]);
+                    }
+                }
+            }
+            drawText(band, font, r.x + 50, y + (kWeaponListRow - font.height()) / 2, kFull[weapon],
+                     inkFor(font, dry ? kUiGrey : (inHand || under ? kUiWhite : kUiOrange)));
+        }
+    }
+
     void BottomScreen::showPad()
     {
         create();
@@ -285,12 +352,15 @@ namespace hlrt
         drawPad();
         drawColumn();
         drawSlots();
+        if (list_.open())
+            drawWeaponList();
     }
 
-    void BottomScreen::setStatus(int weapon, int clip, int spare, unsigned have, bool canReload)
+    void BottomScreen::setStatus(int weapon, int clip, int spare, unsigned have, unsigned empty, bool canReload)
     {
         const bool bar = canReload != canReload_;
         const bool slots = weapon != weapon_ || clip != clip_ || spare != spare_ || have != have_;
+        empty_ = empty;
         canReload_ = canReload;
         weapon_ = weapon;
         clip_ = clip;

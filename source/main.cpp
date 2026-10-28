@@ -290,6 +290,7 @@ namespace
         (void)stored;
         currentMap = name;
         hlrt::debugOverlay.setMapName(currentMap.c_str());
+        hlrt::input.dropWeaponList();
         achievements.attach(name);
         if (changing)
         {
@@ -867,7 +868,7 @@ int main(int argc, char *argv[])
             {
                 swiWaitForVBlank();
             }
-            hlrt::input.poll();
+            hlrt::input.poll(false);
             hlrt::sound.frame();
             hlrt::netGame.frame();
             using hlrt::Menu;
@@ -995,7 +996,7 @@ int main(int argc, char *argv[])
             {
                 {
                     const hlrt::DebugLog::Perf::Scope scope(hlrt::DebugLog::Section::Input);
-                    hlrt::input.poll();
+                    hlrt::input.poll(!paused);
                 }
                 const std::uint32_t now = Global::vblanks();
                 const int elapsed = static_cast<int>(now - lastVblank);
@@ -1041,11 +1042,13 @@ int main(int argc, char *argv[])
                         // (A game between consoles goes on, and is heard.)
                         if (!inMatch)
                             hlrt::sound.setPaused(true);
+                        hlrt::input.dropWeaponList(); // (not to be drawn again stale after it)
                         hlrt::menu.open();
                     }
                     else
                     {
                         hlrt::bottomScreen.setPressed(hlrt::input.touchOn);
+                        hlrt::bottomScreen.setWeaponList(hlrt::input.weaponList());
                         hlrt::game.frame(elapsed);
                         achievements.frame();
                         debugFadeTick();

@@ -214,6 +214,9 @@ namespace hlrt
                 {
                     gameApi.hurtPlayer(state, cost);
                     game.heard.add(CommonSound::FallPain, nullptr);
+                    // (A fall that kills: the game's splat too.)
+                    if (state.health <= 0)
+                        game.heard.add(CommonSound::BodySplat, nullptr);
                 }
                 else if (speed > 290)
                 {

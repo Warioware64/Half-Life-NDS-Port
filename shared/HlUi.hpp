@@ -404,14 +404,21 @@ namespace hldata
 
     inline constexpr int kUiSoundPress = 0;  ///< a button of the menu
     inline constexpr int kUiSoundTick = 1;   ///< a slider moved a notch
-    inline constexpr int kUiSoundWeapon = 2; ///< another weapon in hand
+    inline constexpr int kUiSoundWeapon = 2; ///< a weapon chosen; something USEd (the game's wpn_select)
     inline constexpr int kUiSoundLamp = 3;   ///< the lamp's switch
-    inline constexpr int kUiSoundCount = 4;
+    // The game's weapon menu (cl_dll/ammo.cpp): up, along, away; and a USE
+    // with nothing to use (dlls/player.cpp's PlayerUse).
+    inline constexpr int kUiSoundHudOn = 4;
+    inline constexpr int kUiSoundMove = 5;
+    inline constexpr int kUiSoundHudOff = 6;
+    inline constexpr int kUiSoundDeny = 7;
+    inline constexpr int kUiSoundCount = 8;
     /// Their files under snd/ on the card (without ".hsn"), and where each
     /// is in the game's sound folder.
-    inline constexpr const char *const kUiSoundFiles[kUiSoundCount] = {"ui_press", "ui_tick", "ui_weapon",
-                                                                     "ui_lamp"};
+    inline constexpr const char *const kUiSoundFiles[kUiSoundCount] = {
+        "ui_press", "ui_tick", "ui_weapon", "ui_lamp", "ui_hudon", "ui_move", "ui_hudoff", "ui_deny"};
     inline constexpr const char *const kUiSoundSources[kUiSoundCount] = {
         "common/launch_select2.wav", "common/launch_dnmenu1.wav", "common/wpn_select.wav",
-        "items/flashlight1.wav"};
+        "items/flashlight1.wav",     "common/wpn_hudon.wav",      "common/wpn_moveselect.wav",
+        "common/wpn_hudoff.wav",     "common/wpn_denyselect.wav"};
 } // namespace hldata

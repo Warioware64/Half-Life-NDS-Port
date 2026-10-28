@@ -161,7 +161,7 @@ namespace hlrt
     }
 
     HL_ITCM void ModelDraw::drawActor(const ActorState &actor, const ModelView &model, unsigned modelIndex,
-                              const fx *turn, int id, int level)
+                              const fx *turn, int id, int level, int shrink)
     {
         // Weapons whose skins are not in video memory yet are not shown.
         if (!modelCache.drawable(modelIndex))
@@ -193,7 +193,7 @@ namespace hlrt
             const std::int64_t sum = static_cast<std::int64_t>(actor.pos[0] >> 10) * view[0 + j] +
                                      static_cast<std::int64_t>(actor.pos[1] >> 10) * view[3 + j] +
                                      static_cast<std::int64_t>(actor.pos[2] >> 10) * view[6 + j];
-            base[j] = static_cast<int>(sum >> 12) + view[9 + j];
+            base[j] = (static_cast<int>(sum >> 12) + view[9 + j]) >> shrink;
         }
 
         const NEA_Material *skin = modelCache.skin(modelIndex);
@@ -267,7 +267,7 @@ namespace hlrt
                     {
                         const int sum = bone.r[i] * turned[j] + bone.r[3 + i] * turned[3 + j] +
                                         bone.r[6 + i] * turned[6 + j]; // Q14 * (Q12 * 8)
-                        position.m[i * 3 + j] = sum >> (kBoneRotShift + shift);
+                        position.m[i * 3 + j] = sum >> (kBoneRotShift + shift + shrink);
                         direction.m[i * 3 + j] = sum >> (kBoneRotShift + 3);
                     }
                 }
@@ -278,7 +278,7 @@ namespace hlrt
                     const std::int64_t sum = static_cast<std::int64_t>(bone.t[0]) * turned[j] +
                                              static_cast<std::int64_t>(bone.t[1]) * turned[3 + j] +
                                              static_cast<std::int64_t>(bone.t[2]) * turned[6 + j];
-                    position.m[9 + j] = base[j] + static_cast<int>(sum >> 22);
+                    position.m[9 + j] = base[j] + static_cast<int>(sum >> (22 + shrink));
                     direction.m[9 + j] = 0;
                 }
                 // Both matrices at once takes the directions; then the
@@ -1053,8 +1053,31 @@ namespace hlrt
         const fx turn[9] = {camera.forward[0], -camera.right[0], camera.up[0],
                             camera.forward[1], -camera.right[1], camera.up[1],
                             camera.forward[2], -camera.right[2], camera.up[2]};
+        // In the game it has a depth range of its own, and no wall comes in
+        // front of it. Here the depth is the world's: so it is drawn a
+        // quarter of its size about the eye -- exactly the same picture, a
+        // quarter as far away: in front of any wall the player can stand
+        // against (16 units) -- through a projection whose near plane is a
+        // quarter as far too, or its nearest parts would be cut by that
+        // instead. (In this projection the near plane goes with the
+        // translation row's z: a quarter of it is a quarter as near. Depth
+        // is distance -- W-buffering -- and does not change with it.)
+        constexpr int kShrink = 2;
+        int projection[16];
+        glGetFixed(GL_GET_MATRIX_PROJECTION, projection);
+        m4x4 nearer;
+        for (int k = 0; k < 16; ++k)
+            nearer.m[k] = projection[k];
+        nearer.m[14] = projection[14] >> kShrink;
+        glMatrixMode(GL_PROJECTION);
+        glPushMatrix();
+        glLoadMatrix4x4(&nearer);
+        glMatrixMode(GL_MODELVIEW);
         lightOn();
-        drawActor(at, *model, held.model, turn, -1, heldLevel_);
+        drawActor(at, *model, held.model, turn, -1, heldLevel_, kShrink);
         lightOff();
+        glMatrixMode(GL_PROJECTION);
+        glPopMatrix(1);
+        glMatrixMode(GL_MODELVIEW);
     }
 } // namespace hlrt

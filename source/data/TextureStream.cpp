@@ -284,9 +284,12 @@ namespace hlrt
                 ++regionCount;
             }
         }
-        // (Palettes: a little is left to NEA, as there always was.)
+        // (Palettes: a little is left to NEA, as there always was -- and
+        // room for the colours of a weapon the map has not, if it names one.)
         if (streamedTotal != 0)
-            NEA_PaletteRegionReserve(std::min(static_cast<int>(paletteNeed), NEA_PaletteFreeMem() - 512), &paletteRegion);
+            NEA_PaletteRegionReserve(std::min(static_cast<int>(paletteNeed),
+                                              NEA_PaletteFreeMem() - 512 - modelCache.lazyPaletteBytes()),
+                                     &paletteRegion);
         // Two skin slots (the weapon in hand, and the next one written while it
         // is still drawn) where the streamed textures all fit beside them, or
         // the second costs no more than an eighth of the region; else one (a

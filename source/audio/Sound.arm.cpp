@@ -202,7 +202,12 @@ namespace hlrt
         count_ = count;
         played_ = static_cast<std::uint32_t *>(std::calloc(view.logicCount / 32 + 1, sizeof(std::uint32_t)));
         soundsKept(view.logic, view.logicCount, view.logicSounds, view.logicSoundCount,
-                   view.soundCount, kept, view.modelSounds, view.modelSoundCount);
+                   view.soundCount, kept, view.modelSounds, view.modelSoundCount, view.sounds);
+        lazy_ = static_cast<std::uint8_t *>(std::calloc(count + 1, 1));
+        for (int i = 0; lazy_ != nullptr && i < count; ++i)
+            lazy_[i] = soundLazy(view.sounds[i]) && view.sounds[i].name[0] != '\0' ? 1 : 0;
+        for (int k = 0; k < kLazyClips; ++k)
+            lazyClip_[k] = -1;
         // In two goes: everything but the later weapons' sounds, then those.
         // Left with too little to play in (a DS, in a map with every weapon),
         // the map does without the rest rather than without its memory --
@@ -335,6 +340,10 @@ namespace hlrt
         }
         std::free(played_);
         played_ = nullptr;
+        std::free(lazy_);
+        lazy_ = nullptr;
+        for (int k = 0; k < kLazyClips; ++k)
+            lazyClip_[k] = -1;
         std::free(clips_);
         clips_ = nullptr;
         count_ = 0;
@@ -482,8 +491,64 @@ namespace hlrt
         }
     }
 
+    /// A weapon's sound the map has not, about to be played: read now if it
+    /// is not in memory (a frame's wait, once), and said to be played.
+    void Sound::lazyTouch(int sound)
+    {
+        if (lazy_ == nullptr || sound < 0 || sound >= count_ || lazy_[sound] == 0)
+            return;
+        const std::uint32_t now = Global::vblanks();
+        for (int k = 0; k < kLazyClips; ++k)
+        {
+            if (lazyClip_[k] == sound)
+            {
+                lazyPlayed_[k] = now;
+                return;
+            }
+        }
+        // A place: an empty one, or the one played longest ago -- as long as
+        // it is over, at the slowest it may be played (twice as long) and a
+        // half second more.
+        int place = -1;
+        for (int k = 0; k < kLazyClips && place < 0; ++k)
+            place = lazyClip_[k] < 0 ? k : -1;
+        if (place < 0)
+        {
+            std::uint32_t oldest = 0;
+            for (int k = 0; k < kLazyClips; ++k)
+            {
+                const std::uint32_t ago = now - lazyPlayed_[k];
+                const std::uint32_t lasts = clips_[lazyClip_[k]].ms * 2 * 60 / 1000 + 30;
+                if (ago > lasts && ago >= oldest)
+                {
+                    oldest = ago;
+                    place = k;
+                }
+            }
+        }
+        if (place < 0)
+            return;
+        if (lazyClip_[place] >= 0)
+        {
+            const int gone = lazyClip_[place];
+            if (up_)
+                mmUnloadEffect(gone);
+            std::free(clips_[gone].data);
+            clips_[gone] = Clip();
+            lazyClip_[place] = -1;
+        }
+        if (global.heapHeadroom() < 200 * 1024 || !readClip(level.view.sounds[sound].name, clips_[sound]))
+            return;
+        describe(clips_[sound]);
+        if (up_)
+            mmLoadEffect(sound);
+        lazyClip_[place] = sound;
+        lazyPlayed_[place] = now;
+    }
+
     void Sound::playOnce(const SoundEvent &event)
     {
+        lazyTouch(event.sound);
         if (event.sound >= count_ || clips_[event.sound].data == nullptr)
             return;
         const Clip &clip = clips_[event.sound];
@@ -507,6 +572,7 @@ namespace hlrt
     /// stopLoop. A sound that does not go round is simply played.
     void Sound::playLoop(const SoundEvent &event)
     {
+        lazyTouch(event.sound);
         if (event.sound >= count_ || clips_[event.sound].data == nullptr)
             return;
         const Clip &clip = clips_[event.sound];
@@ -947,11 +1013,11 @@ namespace hlrt
             dspAudio.room(roomEcho(type < 0 ? 0 : type));
     }
 
-    void Sound::ui(int which)
+    void Sound::ui(int which, int volume)
     {
         if (which < 0 || which >= kUiSoundCount || ui_[which].data == nullptr)
             return;
-        start(SoundLayer::Ui, kUiSample + which, ui_[which], 110, 64, false);
+        start(SoundLayer::Ui, kUiSample + which, ui_[which], volume, 64, false);
     }
 
     void Sound::setPaused(bool paused)

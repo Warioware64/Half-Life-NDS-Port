@@ -118,18 +118,59 @@ namespace
                             (view.textures[i].flags & kTextureA3I5) != 0, name);
             all = all && (!fs::exists(stage / "tex" / name) || has(std::string("tex/") + name));
         }
+        // (The weapons the map has not, and their sounds, are in the common
+        // archive, and not in the map's.)
+        Bytes commonBytes;
+        std::vector<hlds::NpacMember> common;
+        // (A game with nothing of its own to share has none.)
+        check(!fs::exists(card / "common.npac") ||
+                  (hlds::readFile(card / "common.npac", commonBytes, error) &&
+                   hlds::readNpac(commonBytes, common, error)),
+              "the common archive reads");
+        auto inCommon = [&](const std::string &path)
+        {
+            for (const hlds::NpacMember &m : common)
+                if (m.path == path)
+                    return true;
+            return false;
+        };
+        bool lazyApart = true;
+        int lazyModels = 0, lazySounds = 0;
         for (std::uint32_t i = 0; i < view.modelRefCount; ++i)
-            all = all && has(std::string("mdl/") + view.modelRefs[i].name + ".hmd");
+        {
+            const std::string name = view.modelRefs[i].name;
+            if (modelRefLazy(view.modelRefs[i]))
+            {
+                ++lazyModels;
+                lazyApart = lazyApart && !has("mdl/" + name + ".hmd") && inCommon("wpn/" + name + ".hmd");
+                continue;
+            }
+            all = all && has("mdl/" + name + ".hmd");
+        }
         // (The words of what its people say are in the common archive.)
         std::vector<char> talk;
         hlds::talkWords(view, talk);
         for (std::uint32_t i = 0; i < view.soundCount; ++i)
         {
             const std::string name = view.sounds[i].name;
+            if (soundLazy(view.sounds[i]) && !name.empty())
+            {
+                ++lazySounds;
+                lazyApart = lazyApart && !has("snd/" + name + ".hsn") && inCommon("snd/" + name + ".hsn");
+                continue;
+            }
             all = all && (name.empty() || talk[i] != 0 || !fs::exists(stage / "snd" / (name + ".hsn")) ||
                           has("snd/" + name + ".hsn"));
         }
         check(all, "all that the level names is there, under the console's names");
+        check(lazyApart, "the weapons it has not, and their sounds, are in the common archive instead");
+        if (map == "c1a0")
+        {
+            // (Nothing is held in it yet: every weapon is one it has not --
+            // the MP5's shot and reload clicks among the sounds.)
+            check(lazyModels == 15, "c1a0 names every view model, none of them its own");
+            check(lazySounds > 15, "... and their sounds, the guns' own and their clips'");
+        }
     }
 
     void testBoxRoom()

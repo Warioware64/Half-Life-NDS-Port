@@ -51,7 +51,8 @@ namespace hlrt
         /// the loops and the spoken line going, and feeds the music.
         void frame();
         /// One of the menu's own sounds (hldata::kUiSound*).
-        void ui(int which);
+        /// `volume` of 127 (the menu's own: 110, a little under the game).
+        void ui(int which, int volume = 110);
         /// The volume settings have changed.
         void applyVolumes();
         /// The game stands still (the menu): the world, the voice, the loops
@@ -185,6 +186,15 @@ namespace hlrt
         bool paused_ = false;
         Clip *clips_ = nullptr;
         int count_ = 0;
+        /// The sounds of weapons the map has not (kSoundLazy): a byte a
+        /// sound, 1 for those. Each is read out of the common archive when
+        /// it is first played, into one of a few places, the one played
+        /// longest ago (and over) given up for it.
+        std::uint8_t *lazy_ = nullptr;
+        static constexpr int kLazyClips = 4;
+        int lazyClip_[kLazyClips] = {-1, -1, -1, -1};
+        std::uint32_t lazyPlayed_[kLazyClips] = {};
+        void lazyTouch(int sound);
         int loaded_ = 0;
         int bytes_ = 0;
         Clip ui_[hldata::kUiSoundCount];

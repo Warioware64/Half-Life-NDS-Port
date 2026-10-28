@@ -45,9 +45,9 @@ namespace hlrt
     Think &think = *hlEngine.think;
     TopText &topText = *hlEngine.topText;
 
-    void BottomScreen::setStatus(int weapon, int clip, int spare, unsigned have, bool canReload)
+    void BottomScreen::setStatus(int weapon, int clip, int spare, unsigned have, unsigned empty, bool canReload)
     {
-        hlEngine.bottomSetStatus(*this, weapon, clip, spare, have, canReload);
+        hlEngine.bottomSetStatus(*this, weapon, clip, spare, have, empty, canReload);
     }
     void BottomScreen::setLamp(bool suit, bool on, int percent) { hlEngine.bottomSetLamp(*this, suit, on, percent); }
     void Camera::refreshProjection() { hlEngine.cameraRefreshProjection(*this); }
@@ -65,7 +65,8 @@ namespace hlrt
     void Player::frame(int vblanks) { hlEngine.playerFrame(*this, vblanks); }
     void Player::turn() { hlEngine.playerTurn(*this); }
     void ScreenFade::setDim(bool under) { hlEngine.fadeSetDim(*this, under); }
-    void Sound::ui(int which) { hlEngine.soundUi(*this, which); }
+    void ModelCache::wield(int index) { hlEngine.modelWield(*this, index); }
+    void Sound::ui(int which, int volume) { hlEngine.soundUi(*this, which, volume); }
     int Sound::musicTrack() const { return hlEngine.soundMusicTrack(*this); }
     std::uint32_t Sound::musicMs() const { return hlEngine.soundMusicMs(*this); }
     void Sound::setMusic(int track, std::uint32_t ms) { hlEngine.soundSetMusic(*this, track, ms); }

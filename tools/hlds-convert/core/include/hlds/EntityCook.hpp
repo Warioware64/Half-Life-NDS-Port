@@ -41,6 +41,9 @@ namespace hlds
         /// Sounds. `soundLoops` says which go round.
         std::vector<std::string> sounds;
         std::vector<bool> soundLoops;
+        /// ... and which are a weapon's the map has not (`lazyModels`): read
+        /// when first played, out of the common archive, not the map's.
+        std::vector<bool> soundLazy;
         std::vector<hldata::LogicSound> logicSounds; ///< parallel to `records`
         /// The sprites the map draws, as the game's own paths
         /// ("sprites/flare1.spr", lower-case), the common ones first; and
@@ -151,7 +154,8 @@ namespace hlds
                    const std::vector<int> &brushRecordOfEntity,
                    const std::vector<std::string> &models, LogicCook &out,
                    const SentenceBook *book = nullptr, const TitlesBook *titles = nullptr,
-                   const std::string &chapter = std::string());
+                   const std::string &chapter = std::string(),
+                   const std::vector<std::string> &lazyModels = {});
 
     /// How far a door or button travels: the engine's formula, from the
     /// direction it moves in, the size of its brush and its "lip".

@@ -229,8 +229,13 @@ namespace hlds
             RgbaImage atlas;
             int triangles = 0, fullTriangles = 0; ///< body 0 at its finest, in each
             int far = 0;                          ///< ... and at its coarsest
+            bool lazy = false; ///< a weapon the map has not: in the common archive (kModelRefLazy)
         };
         std::vector<ModelOut> models;
+        // The weapons the player cannot have by now in this map: named in it
+        // all the same, to be loaded if a cheat gives one (each with every
+        // clip the game plays, and a skin of one size: kLazySkinTexels).
+        std::vector<ModelNeed> lazyNeeds;
         int modelTexels = 0;
         std::vector<ModelNeed> needs = collectModelNeeds(entities);
         // And of those who may walk in from next door: each neighbouring map
@@ -310,7 +315,17 @@ namespace hlds
             auto hold = [&](const Held &one)
             {
                 if (!one.wanted)
+                {
+                    if (std::string(one.name).rfind("v_", 0) == 0)
+                    {
+                        ModelNeed lazy;
+                        lazy.name = one.name;
+                        lazy.file = std::string("models/") + one.name + ".mdl";
+                        lazy.clips = one.clips;
+                        lazyNeeds.push_back(lazy);
+                    }
                     return;
+                }
                 // (Already wanted for something else -- a tripmine on a wall
                 // is the held model's mine alone -- its clips are added to.)
                 for (ModelNeed &need : needs)
@@ -344,6 +359,19 @@ namespace hlds
                 {"rpgrocket", from("c2a5a"), {}},
                 {"hornet", from("c2a5d"), {}},
             };
+            // (... of which those wanted for something else -- a tripmine on
+            // a wall -- are the map's own.)
+            lazyNeeds.erase(std::remove_if(lazyNeeds.begin(), lazyNeeds.end(),
+                                           [&](const ModelNeed &lazy)
+                                           {
+                                               for (const ModelNeed &need : needs)
+                                               {
+                                                   if (need.name == lazy.name)
+                                                       return true;
+                                               }
+                                               return false;
+                                           }),
+                            lazyNeeds.end());
             for (const Held &one : kThrown)
             {
                 if (!one.wanted)
@@ -396,7 +424,7 @@ namespace hlds
             }
             MdlFile mdl;
             std::string why;
-            if (!found || need.name.size() >= sizeof(hldata::ModelRef::name) || !mdl.load(file, why))
+            if (!found || need.name.size() + 1 >= sizeof(hldata::ModelRef::name) || !mdl.load(file, why))
             {
                 if (!quiet)
                     result.warnings.push_back("model '" + need.file + "' cannot be read" +
@@ -551,8 +579,10 @@ namespace hlds
         StreamOptions streamOptions;
         streamOptions.enabled = options_.streamTextures;
         const TextureNeeds textureWants = textureNeeds(bsp, brushes, findHiddenTextures(bsp, wads));
+        // (... and a palette for a weapon loaded when it is taken up.)
         const int colourBudget = kPaletteColourBudget - (skyName.empty() ? 0 : 6 * 256) -
-                                 static_cast<int>(models.size()) * kModelSkinColours - kSpriteColourBudget;
+                                 static_cast<int>(models.size() + (lazyNeeds.empty() ? 0 : 1)) * kModelSkinColours -
+                                 kSpriteColourBudget;
         // Plan maps to use 3 texture banks, with few exceptions
         auto planFor = [&](int worldBudget)
         {
@@ -618,6 +648,24 @@ namespace hlds
         cookOptions.skyName = skyName;
         for (const auto &model : models)
             cookOptions.models.push_back(model.name);
+        // The weapons the map has not, cooked as any model is -- but staged
+        // apart (wpn/), for the common archive: the same file whichever map
+        // cooks it. Not in what the map's memory is reckoned at.
+        for (const ModelNeed &need : lazyNeeds)
+        {
+            ModelOut out;
+            if (!cookOne(need, hldata::kLazySkinTexels, out, true))
+                continue;
+            out.lazy = true;
+            cookOptions.lazyModels.push_back(out.name);
+            for (const std::string &sound : out.eventSounds)
+            {
+                if (std::find(cookOptions.lazyModelSounds.begin(), cookOptions.lazyModelSounds.end(), sound) ==
+                    cookOptions.lazyModelSounds.end())
+                    cookOptions.lazyModelSounds.push_back(sound);
+            }
+            models.push_back(std::move(out));
+        }
         cookOptions.viewModel = kViewModelName;
         // (What the models sound like as they move: the level has to know
         // where each of those sounds is.)
@@ -625,7 +673,7 @@ namespace hlds
         {
             for (const std::string &sound : model.eventSounds)
             {
-                if (std::find(cookOptions.modelSounds.begin(), cookOptions.modelSounds.end(), sound) ==
+                if (!model.lazy && std::find(cookOptions.modelSounds.begin(), cookOptions.modelSounds.end(), sound) ==
                     cookOptions.modelSounds.end())
                     cookOptions.modelSounds.push_back(sound);
             }
@@ -769,7 +817,7 @@ namespace hlds
                                static_cast<std::uint32_t>(level.logicSounds.size()),
                                static_cast<std::uint32_t>(level.soundPaths.size()),
                                reinterpret_cast<bool *>(kept.data()), level.modelSounds.data(),
-                               static_cast<std::uint32_t>(level.modelSounds.size()));
+                               static_cast<std::uint32_t>(level.modelSounds.size()), level.sounds.data());
             for (std::size_t n = 0; n < level.soundPaths.size(); ++n)
             {
                 if (level.soundPaths[n].empty())
@@ -854,9 +902,11 @@ namespace hlds
                     soundCardName(level.soundPaths[one.index], one.cooked.rate, loops);
                 hldata::SoundRef ref{};
                 std::strncpy(ref.name, name.c_str(), sizeof(ref.name) - 1);
-                // (Its better copy is written below, the same way.)
+                // (Its better copy is written below, the same way. A weapon's
+                // the map has not has none, and says it is read when played.)
                 const bool twinned = !one.twin.data.empty();
                 ref.twin = twinned ? static_cast<std::uint8_t>(one.twin.rate / 1000) : std::uint8_t(0);
+                ref.twin |= hldata::soundLazy(level.sounds[one.index]) ? hldata::kSoundLazy : 0;
                 level.sounds[one.index] = ref;
                 result.soundsTwinned += twinned ? 1 : 0;
                 for (int which = 0; which < (twinned ? 2 : 1); ++which)
@@ -1117,13 +1167,13 @@ namespace hlds
         // THIS map plays.
         for (const auto &model : models)
         {
-            const fs::path file =
-                stageDir() / "mdl" / result.name / (model.name + ".hmd");
+            const fs::path folder = model.lazy ? stageDir() / "wpn" : stageDir() / "mdl" / result.name;
+            const fs::path file = folder / (model.name + ".hmd");
             if (!writeFileAtomic(file, model.bytes, result.error))
                 return result;
             // (A DSi's, beside it -- and none left over from a cook that
             // had one where this has not.)
-            const fs::path dsi = stageDir() / "mdl" / result.name / (model.name + ".dsi.hmd");
+            const fs::path dsi = folder / (model.name + ".dsi.hmd");
             std::error_code gone;
             if (model.bytesDsi.empty())
                 fs::remove(dsi, gone);

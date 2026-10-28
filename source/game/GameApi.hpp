@@ -51,7 +51,7 @@ namespace hlrt
     class TopText;
 
     /// Changed whenever either table or anything they carry changes shape.
-    inline constexpr std::uint32_t kGameApiVersion = 3;
+    inline constexpr std::uint32_t kGameApiVersion = 5;
 
     /// The sizes of what both sides lay out, compared at the handshake: a
     /// library built from other headers, or with other settings, is refused
@@ -87,7 +87,8 @@ namespace hlrt
 
         // The few of their functions the game calls (dll/hl/EngineLink.cpp
         // has the library's side of each).
-        void (*bottomSetStatus)(BottomScreen &, int weapon, int clip, int spare, unsigned have, bool canReload);
+        void (*bottomSetStatus)(BottomScreen &, int weapon, int clip, int spare, unsigned have, unsigned empty,
+                                bool canReload);
         void (*bottomSetLamp)(BottomScreen &, bool suit, bool on, int percent);
         void (*cameraRefreshProjection)(Camera &);
         void (*cameraUpdate)(Camera &);
@@ -98,7 +99,8 @@ namespace hlrt
         void (*playerFrame)(Player &, int vblanks);
         void (*playerTurn)(Player &);
         void (*fadeSetDim)(ScreenFade &, bool under);
-        void (*soundUi)(Sound &, int which);
+        void (*modelWield)(ModelCache &, int index);
+        void (*soundUi)(Sound &, int which, int volume);
         int (*soundMusicTrack)(const Sound &);
         std::uint32_t (*soundMusicMs)(const Sound &);
         void (*soundSetMusic)(Sound &, int track, std::uint32_t ms);

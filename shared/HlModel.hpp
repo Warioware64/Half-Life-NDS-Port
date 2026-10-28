@@ -208,6 +208,15 @@ namespace hldata
     /// interrupted) and 1002 (1: it may again). A model cooked before has
     /// none: a build before skips it (no sound has its "name").
     inline constexpr std::uint16_t kEventInterrupt = 4;
+    /// The game's 2001 (`target` 0: a light body) and 2002 (1: a heavy one)
+    /// hitting the floor: bodydrop3 or 4, the heavy one lower. A build
+    /// before skips it (no sound has its "name").
+    inline constexpr std::uint16_t kEventBodyDrop = 5;
+
+    /// The most texels a weapon's skin has that is loaded when it is taken
+    /// up (HlLevel.hpp's kModelRefLazy): one size, whichever map it is
+    /// loaded in, so that every map's slots for weapons' skins fit it.
+    inline constexpr int kLazySkinTexels = 128 * 128;
 
     /// A bone controller: something about a bone that the game sets, on top
     /// of what the clip being played has -- which way a turret's gun points,

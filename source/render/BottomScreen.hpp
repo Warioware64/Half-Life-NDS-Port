@@ -13,6 +13,8 @@
 // draw and by Input to test a touch, so the two cannot disagree. (The pause
 // menu has the whole screen to itself: ui/Menu.hpp.)
 
+#include "HlWeaponList.hpp"
+
 namespace hlrt
 {
     class BottomScreen
@@ -30,7 +32,15 @@ namespace hlrt
         /// bit per kWeapon*); and whether there is anything to reload,
         /// which is whether RELOAD is lit. Redrawn only when something
         /// changes. (Health and the suit's charge are the top screen's.)
-        void setStatus(int weapon, int clip, int spare, unsigned have, bool canReload);
+        void setStatus(int weapon, int clip, int spare, unsigned have, unsigned empty, bool canReload);
+        /// What setStatus was told: in hand, carried, carried with nothing to
+        /// fire (a bit per kWeapon*).
+        int weapon() const { return weapon_; }
+        unsigned have() const { return have_; }
+        unsigned empty() const { return empty_; }
+        /// A slot's list of weapons (HlWeaponList.hpp), drawn up over the pad
+        /// as far as it has slid -- each frame, as it moves.
+        void setWeaponList(const hldata::WeaponList &list);
         /// The lamp's button: whether there is a suit to have one, whether
         /// it is alight, and how much is in it (0..100).
         void setLamp(bool suit, bool on, int percent);
@@ -62,6 +72,10 @@ namespace hlrt
         void drawPad();
         void drawColumn();
         void drawSlots();
+        void drawWeaponList();
+        hldata::WeaponList list_; ///< as last drawn
+        int listHover_ = -1;
+        unsigned empty_ = 0;
         void loadIcons();
         bool canReload_ = false;
         bool lampSuit_ = false, lampOn_ = false;

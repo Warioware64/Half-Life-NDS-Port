@@ -585,7 +585,11 @@ Milestone 11, "levels of detail".
   converter marks each texture, and the console finds the floor under the
   feet once a step (`shared/HlMaterial.hpp`). What the models themselves
   sound like as they move -- a footstep in a walk, a keypad in a scene --
-  is in their animations, and is played from where they are.
+  is in their animations, and is played from where they are, at full
+  volume and heard only near, as the game's ATTN_IDLE has it. A body
+  hitting the floor is in them too (the game's events 2001 and 2002):
+  bodydrop3 or 4, the heavy one at pitch 90, only if there is floor under
+  it. A fall that kills, and a snark's burst, add the game's bodysplat.
   **In the pause menu everything stops where it is, music included, and
   goes on from there** (a DS's channel cannot be stopped and continued: it
   is slowed to the slowest the hardware has and silenced, which costs a
@@ -617,10 +621,32 @@ Milestone 11, "levels of detail".
   screen and not said twice); a framed aim pad; JUMP, the lamp and DUCK in a column beside it; and along the
   bottom a slot for each weapon, always in the same place, with the
   game's own picture of it (cooked from your `sprites/320hud1.spr`), the
-  one in hand lit with its rounds under it. A touch on a slot takes that
-  weapon; a touch on the one in hand reloads it, as RELOAD does. One table (`shared/HlTouchLayout.hpp`) says where everything
+  one in hand lit with its rounds under it. A touch on a slot slides up
+  the list of that slot's weapons over the pad, as the game's numbered
+  menu lists them (`shared/HlWeaponList.hpp`): each its picture and name,
+  the one in hand lit, one with nothing to fire grey; a weapon in it
+  touched -- or the slot pressed and the stylus slid up onto one and
+  lifted -- is taken; a touch elsewhere, the slot again or three seconds
+  of nothing puts it away. A slot with one weapon takes it at once. It
+  rises out of the pad's bottom edge and stays inside its frame, so the
+  pad's own drawing covers everything it leaves; it is dropped when the
+  menu opens or a map loads. It sounds as the game's menu does
+  (`cl_dll/ammo.cpp`): wpn_hudon up, wpn_moveselect from one weapon to
+  the next, wpn_select for the one taken (the player's own choice only --
+  not when the game puts a spent weapon away), wpn_hudoff away with
+  nothing taken. USE says whether it found something: wpn_select, or
+  wpn_denyselect, at 0.4 as the game has them.
+  DUCK on the screen is held to crouch and can be slid off onto the pad
+  to look about still crouched (lifted, the player stands); with the
+  crouch a toggle it is tapped once to crouch and once to stand, which
+  leaves the stylus free to aim and to touch USE. One table (`shared/HlTouchLayout.hpp`) says where everything
   is, to the code that draws and the code that tests a touch alike. For
   a stylus in the left hand, "Buttons: left" in the options mirrors it.
+- The weapon in hand is never cut by a wall: the game gives it a depth
+  range of its own, which the DS cannot; so it is drawn a quarter of its
+  size about the eye -- the same picture, a quarter as near, in front of
+  any wall the player can stand against -- through a projection whose near
+  plane is a quarter as near too (`ModelDraw::drawHeld`).
 - Light that changes. The world's light is baked into its vertices, but
   not all of the game's light is steady: lights a switch turns on and off
   (its "styles" 32 and up) and lights that flicker, pulse or strobe (1 to
@@ -1185,6 +1211,26 @@ their source texels (58% of the width and height) to about 72% (85%).
 in a parallel way: models' video memory total is all base skins plus the largest
 weapon's, so the "skins" figure in its report is what is in video memory together.
 
+**Weapons a map has not.** The converter gives a map the view models of
+what the player can hold by then (c1a1 has no MP5). A cheat, `give` or a
+debug start can hand over any of them, so every map also names the view
+models it lacks (`kModelRefLazy`, the last byte of the ref's name). Those
+are cooked once, with the clips the game plays and a skin of at most
+128x128 (`kLazySkinTexels`), and packed into `common.npac` under `wpn/`
+(`wpn/<name>.hmd`, `.dsi.hmd`, the skin), not into any map's archive.
+`ModelCache::wield` (an engine call from the game library, `modelWield`)
+reads one when it is taken up, letting go of the one before (not the
+tripmine's, which may be on a wall); with too little memory it stays
+undrawn. The skin goes through the weapon slots as any weapon's: a map
+naming one sizes its slots for `kLazySkinTexels`, and one more palette is
+kept free for it. Its sounds -- the clips' (reload clicks) and the
+weapon's own common sounds (an MP5's shot where the map has no MP5) --
+are named in the map with `kSoundLazy` (the top bit of `SoundRef::twin`):
+not loaded with the map nor in its archive, but read out of `common.npac`
+the first time each is played, into one of four places (`Sound::lazyTouch`).
+That first time may be a frame late. What a lazy weapon throws (a rocket,
+a bolt, a snark, a satchel) is still the map's to have.
+
 ## What the converter writes
 
 **On the card** a map is one file, `maps/<map>.npac`: an archive (Nitro
@@ -1193,7 +1239,7 @@ the map loads -- its level, textures, sprites, models and sounds -- in the
 order it loads them. Opening a file is the slow part of reading a card, and a
 map used to be between one and five hundred of them. `common.npac` holds
 what belongs to no map (the letters, the head-up display, the menu's
-sounds). Loose beside them: the music, which is played off the card as it
+sounds, the weapons some map has not and their sounds). Loose beside them: the music, which is played off the card as it
 goes, the manifest, and what the game itself writes.
 
 Inside an archive, what shrinks well is LZ77-compressed (the DS's own BIOS

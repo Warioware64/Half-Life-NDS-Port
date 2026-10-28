@@ -4,6 +4,8 @@
 
 #include "Global.hpp"
 #include "Settings.hpp"
+#include "audio/Sound.hpp"
+#include "render/BottomScreen.hpp"
 
 namespace hlrt
 {
@@ -48,7 +50,7 @@ namespace hlrt
         }
     }
 
-    HL_ARM void Input::poll()
+    HL_ARM void Input::poll(bool playing)
     {
         scanKeys();
         // What is HELD, and never keysDown():
@@ -67,6 +69,46 @@ namespace hlrt
             in.touchY = touch.py;
             fine(touch.rawx, touch.rawy, touch.z1, touch.z2, in);
         }
-        static_cast<hldata::ControlsOut &>(*this) = hldata::controlsStep(settings.controls(), in, state_);
+        // A slot's list of weapons first: a touch that is the list's is not
+        // the controls'.
+        const hldata::TouchLayout at = hldata::touchLayout(settings.leftHanded);
+        const bool landed = in.touching && !touchWas_;
+        touchWas_ = in.touching;
+        const hldata::WeaponListTouch list =
+            playing ? hldata::weaponListStep(weaponList_, at, in.touching, landed, in.touchX, in.touchY, in.blank)
+                    : hldata::WeaponListTouch();
+        hldata::ControlsIn theirs = in;
+        if (list.consumed)
+            theirs.touching = false;
+        static_cast<hldata::ControlsOut &>(*this) = hldata::controlsStep(settings.controls(), theirs, state_);
+        weaponChoose = list.chosen;
+        // (A menu over the game: its touches are the menu's, and no weapon
+        // is asked for nor heard.)
+        if (!playing)
+        {
+            weaponPick = weaponStep = 0;
+            return;
+        }
+        // As the game's weapon menu sounds (cl_dll/ammo.cpp): along it, away.
+        if (list.moved)
+            sound.ui(hldata::kUiSoundMove);
+        if (list.dismissed)
+            sound.ui(hldata::kUiSoundHudOff);
+        // A slot touched: its list up (or, with one weapon in it, that one),
+        // and the menu's sound of coming up.
+        if (weaponPick != 0)
+        {
+            weaponChoose = hldata::weaponListOpen(weaponList_, weaponPick, bottomScreen.have(), bottomScreen.empty(), in.blank);
+            weaponList_.owned = weaponList_.open();
+            if (weaponList_.open() || weaponChoose != 0)
+                sound.ui(hldata::kUiSoundHudOn);
+            weaponPick = 0;
+        }
+        // (The one in hand, taken again, is no change.) A weapon asked for:
+        // the game's sound of a choice -- on asking, not when it is drawn.
+        if (weaponChoose == bottomScreen.weapon())
+            weaponChoose = 0;
+        if (weaponChoose != 0 || weaponStep != 0)
+            sound.ui(hldata::kUiSoundWeapon);
     }
 } // namespace hlrt

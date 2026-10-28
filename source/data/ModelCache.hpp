@@ -9,8 +9,14 @@
 // One entry per ModelRef of the level, in the level's order. A model that is
 // not on the card, or does not fit, is simply not there: its view's header is
 // null and the actors made of it are not drawn.
+//
+// A weapon the map was not cooked with (kModelRefLazy: one a cheat gives) is
+// named but not loaded: wield() reads it then, out of the common archive
+// (wpn/), one such at a time.
 
 #include <NEAMain.h>
+
+#include <string>
 
 #include "HlModel.hpp"
 
@@ -37,8 +43,9 @@ namespace hlrt
         NEA_Material *skin(unsigned index) const { return materials_[index]; }
         int missing() const { return missing_; }
 
-        /// `index`: weapon in hand; -1: none.
-        void wield(int index) { wanted_ = index; }
+        /// `index`: weapon in hand; -1: none. A weapon the map has not is
+        /// loaded there and then (too little memory: it is not drawn).
+        void wield(int index);
         /// Do what wield() asked, once a frame: the skin is written into a
         /// slot of video memory by VramWriter, and the weapon is drawn with
         /// it once it is all there.
@@ -53,6 +60,9 @@ namespace hlrt
         /// The texel bytes of the largest weapon skin (a 4x4 texture: its
         /// index is half as many again), for the slots it is written to.
         std::uint32_t largestSkin() const;
+        /// The palette memory one weapon the map has not needs when it is
+        /// taken up (its skin's colours), to be left free; 0 if none.
+        int lazyPaletteBytes() const { return anyLazy_ ? 512 * 2 : 0; }
         /// The places a weapon's skin is written to (TextureStream's region;
         /// `count` of them, 0 to 2, of largestSkin() texel bytes each): one
         /// for the weapon in hand, one for the next. No slots: weapons are
@@ -71,6 +81,10 @@ namespace hlrt
     private:
         void release(bool engineGone);
         void putAway(std::uint32_t now);
+        bool lazy(int index) const;
+        std::string skinPath(int index) const;
+        void loadLazy(int index);
+        void dropLazy(int index);
 
         hldata::ModelView *views_ = nullptr;
         std::uint8_t **blocks_ = nullptr;
@@ -94,6 +108,7 @@ namespace hlrt
         int count_ = 0;
         int missing_ = 0;
         int bare_ = 0;
+        bool anyLazy_ = false; ///< the level names a weapon it has not
     };
 
     HL_ENGINE_OBJECT(ModelCache, modelCache);

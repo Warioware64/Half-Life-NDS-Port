@@ -395,6 +395,9 @@ namespace hldata
         BoidAlert,
         // ... and a shotgun shell's ring (from version 37: kCommonSoundsBefore37).
         ShotShell,
+        // ... and a body falling to the floor (from version 43: kCommonSoundsBefore43).
+        BodyDrop3,
+        BodyDrop4,
         Count
     };
     /// How many of these a map of level version 29 or before has.
@@ -411,6 +414,8 @@ namespace hldata
     inline constexpr std::uint16_t kCommonSoundsBefore35 = static_cast<std::uint16_t>(CommonSound::TentacleAlert);
     /// ... and of versions 35 and 36.
     inline constexpr std::uint16_t kCommonSoundsBefore37 = static_cast<std::uint16_t>(CommonSound::ShotShell);
+    /// ... and of versions 37 to 42.
+    inline constexpr std::uint16_t kCommonSoundsBefore43 = static_cast<std::uint16_t>(CommonSound::BodyDrop3);
     /// How many of them a map of level version `version` has (its sounds
     /// after those are its own).
     inline constexpr std::uint16_t commonsOf(std::uint16_t version)
@@ -422,6 +427,7 @@ namespace hldata
                : version < 34 ? kCommonSoundsBefore34
                : version < 35 ? kCommonSoundsBefore35
                : version < 37 ? kCommonSoundsBefore37
+               : version < 43 ? kCommonSoundsBefore43
                               : static_cast<std::uint16_t>(CommonSound::Count);
     }
     inline constexpr std::uint16_t kNoSound = 0xFFFF;
@@ -511,7 +517,7 @@ namespace hldata
             "x/x_attack1.wav",          "x/x_ballattack1.wav",     "x/x_recharge1.wav",
             "x/x_laugh1.wav",           "x/x_pain1.wav",           "x/x_die1.wav",
             "boid/boid_idle1.wav",      "boid/boid_alert1.wav",
-            "weapons/sshell1.wav"};
+            "weapons/sshell1.wav",      "common/bodydrop3.wav",    "common/bodydrop4.wav"};
         static_assert(sizeof(kPaths) / sizeof(kPaths[0]) == static_cast<std::size_t>(CommonSound::Count));
         return kPaths[static_cast<int>(sound)];
     }
@@ -541,7 +547,7 @@ namespace hldata
     inline void soundsKept(const LogicRecord *logic, std::uint32_t logicCount,
                            const LogicSound *logicSounds, std::uint32_t logicSoundCount,
                            std::uint32_t soundCount, bool *kept, const ModelSound *modelSounds = nullptr,
-                           std::uint32_t modelSoundCount = 0)
+                           std::uint32_t modelSoundCount = 0, const SoundRef *sounds = nullptr)
     {
         for (std::uint32_t i = 0; i < soundCount; ++i)
             kept[i] = false;
@@ -569,6 +575,12 @@ namespace hldata
                 kept[logicSounds[i].locked] = true;
             if (logicSounds[i].unlocked < soundCount)
                 kept[logicSounds[i].unlocked] = true;
+        }
+        // (Not a weapon's the map has not: read when it is first played.)
+        for (std::uint32_t i = 0; sounds != nullptr && i < soundCount; ++i)
+        {
+            if (soundLazy(sounds[i]))
+                kept[i] = false;
         }
     }
 

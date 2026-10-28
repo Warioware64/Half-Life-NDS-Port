@@ -295,6 +295,29 @@ int main()
     checkModel(dir, "zombie.mdl", {"idle1", "walk"});
     checkModel(dir, "forklift.mdl", {"idle2", "drive"});
 
+    // A body falling (the game's 2001 and 2002): somewhere in a scientist's
+    // and a soldier's dying, light or heavy.
+    for (const char *file : {"scientist.mdl", "hgrunt.mdl"})
+    {
+        MdlFile mdl;
+        std::string error;
+        std::vector<std::string> all;
+        CookedModel cooked;
+        ModelCookReport report;
+        bool drops = false;
+        if (mdl.load(std::string(dir) + "/models/" + file, error))
+        {
+            for (const MdlSequence &seq : mdl.sequences)
+                all.push_back(seq.label);
+            if (cookModel(mdl, all, cooked, report, error))
+            {
+                for (const ModelEvent &event : cooked.events)
+                    drops = drops || (event.kind == kEventBodyDrop && event.target <= 1);
+            }
+        }
+        check(drops, "a body falling is kept, as its own kind of event");
+    }
+
     // What the game sets by hand: a turret's aim (round, and up and down),
     // a barnacle's tongue.
     const std::vector<std::string> turretClips = {"idle_off", "fire", "spin", "deploy", "retire", "die"};

@@ -265,6 +265,7 @@ namespace hldata
         bool second = false;
         int weaponPick = 0; ///< a slot was touched: its kind of weapon (1..5: weaponOfCategory), or 0
         int weaponStep = 0; ///< the weapon before (-1) or after (1) the one in hand
+        int weaponChoose = 0; ///< a weapon taken from a slot's list (a kWeapon*: HlWeaponList.hpp), or 0
         bool menuPressed = false;
         bool reloadPressed = false;
         int touchOn = kTouchAim;
@@ -295,6 +296,10 @@ namespace hldata
         int lastTapX = -1000, lastTapY = -1000;
         int lastX = 0, lastY = 0;
         bool crouched = false; ///< crouching until told to stand
+        /// A touch that began on the screen's DUCK (held: the crouch) and
+        /// has slid off it: from there it turns the view, and the player
+        /// stays crouched until it is lifted.
+        bool duckSlide = false;
         // The stylus, finely: the last reading used (and how hard), where the
         // view was last turned from, the firmest this stroke has been, and
         // how hard it began.
@@ -364,8 +369,10 @@ namespace hldata
                 padForward = 0;
             }
         }
-        else if (classic)
+        else if (classic && !set.duckToggle)
         {
+            // (No crouch to stay in here but the screen's DUCK, which is
+            // held -- or, crouching by a toggle, tapped.)
             state.crouched = false;
         }
         // The stylus.
@@ -388,10 +395,14 @@ namespace hldata
                 out.lampPressed = out.lampPressed || state.touch == kTouchLamp;
                 if (state.touch >= kTouchSlot)
                     out.weaponPick = state.touch - kTouchSlot + 1;
-                // (The button on the screen is held to crouch; touched while
-                // crouching by the other way, it is the way to stand.)
+                // The button on the screen: held to crouch (and then slid off
+                // to turn the view, still crouched: duckSlide); or, with the
+                // crouch a toggle, touched once to crouch and once to stand
+                // -- the stylus is then free to look about and to USE. (Held
+                // while crouching by the other way, it is the way to stand.)
                 if (state.touch == kTouchDuck)
-                    state.crouched = false;
+                    state.crouched = set.duckToggle ? !state.crouched : false;
+                state.duckSlide = false;
                 state.jumping = false;
                 state.strayed = false;
                 state.downBlank = in.blank;
@@ -410,6 +421,19 @@ namespace hldata
                     state.lastTapX = in.touchX;
                     state.lastTapY = in.touchY;
                 }
+            }
+            else if (state.touch == kTouchDuck && !set.duckToggle &&
+                     touchHit(touchLayout(set.leftHanded), in.touchX, in.touchY) != kTouchDuck)
+            {
+                // Held DUCK slid off it: the view turns from here on (from
+                // where it is now: no jerk), still crouched -- and it is no
+                // tap, nor the second of two.
+                state.touch = kTouchAim;
+                state.duckSlide = true;
+                state.strayed = true;
+                state.jumping = false;
+                state.downX = in.touchX;
+                state.downY = in.touchY;
             }
             else if (state.touch == kTouchAim)
             {
@@ -441,6 +465,7 @@ namespace hldata
             state.touching = false;
             state.touch = kTouchAim;
             state.jumping = false;
+            state.duckSlide = false;
         }
 
         // The two sticks, an axis at a time.
@@ -565,8 +590,9 @@ namespace hldata
         }
 
         out.jump = state.jumping || state.touch == kTouchJump || faceJump || (firmNow && set.firmPress == kFirmJump);
-        out.duck = state.touch == kTouchDuck || state.crouched || duckHeld;
-        out.touchOn = state.touching ? state.touch : kTouchAim;
+        out.duck = (state.touch == kTouchDuck && !set.duckToggle) || (state.duckSlide && state.touching) ||
+                   state.crouched || duckHeld;
+        out.touchOn = state.touching ? (state.duckSlide ? kTouchDuck : state.touch) : kTouchAim;
         out.useHeld = on(kActionUse) || (state.touching && state.touch == kTouchUse) ||
                       (firmNow && set.firmPress == kFirmUse);
         state.lastHeld = held;

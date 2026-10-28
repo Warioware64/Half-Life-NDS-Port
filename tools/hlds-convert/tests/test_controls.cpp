@@ -10,6 +10,7 @@
 #include "HlControls.hpp"
 #include "HlMonsters.hpp"
 #include "HlSettings.hpp"
+#include "HlWeaponList.hpp"
 #include "TestBspBuilder.hpp"
 
 using namespace hldata;
@@ -31,6 +32,7 @@ namespace
 
         int touch_ = kTouchAim;
         bool touching_ = false, jumping_ = false;
+        bool duckSlide_ = false; ///< (since: DUCK held, slid off, turns the view still crouched)
         std::uint32_t lastTapBlank_ = 0;
         int lastTapX_ = -1000, lastTapY_ = -1000;
         std::uint32_t lastHeld_ = 0;
@@ -56,6 +58,7 @@ namespace
                 if (!touching_)
                 {
                     tapped = true;
+                    duckSlide_ = false;
                     tapX = in.touchX;
                     tapY = in.touchY;
                     touch_ = touchHit(touchLayout(leftHanded), in.touchX, in.touchY);
@@ -76,6 +79,11 @@ namespace
                         lastTapY_ = in.touchY;
                     }
                 }
+                else if (touch_ == kTouchDuck && touchHit(touchLayout(leftHanded), in.touchX, in.touchY) != kTouchDuck)
+                {
+                    touch_ = kTouchAim;
+                    duckSlide_ = true;
+                }
                 else if (touch_ == kTouchAim)
                 {
                     lookDx = in.touchX - lastX_;
@@ -90,10 +98,11 @@ namespace
                 touching_ = false;
                 touch_ = kTouchAim;
                 jumping_ = false;
+                duckSlide_ = false;
             }
             jump = jumping_ || touch_ == kTouchJump;
-            duck = touch_ == kTouchDuck;
-            touchOn = touching_ ? touch_ : kTouchAim;
+            duck = touch_ == kTouchDuck || duckSlide_;
+            touchOn = touching_ ? (duckSlide_ ? kTouchDuck : touch_) : kTouchAim;
             attack = (held & kButtonL) != 0;
             second = (held & kButtonR) != 0;
         }
@@ -228,6 +237,150 @@ namespace
         check(out.duck, "the screen's DUCK, held, crouches");
         out = press(set, state, 0, blank);
         check(!out.duck, "... and let go, stands -- also someone who had crouched with R");
+    }
+
+    /// A slot's list of weapons (HlWeaponList.hpp): up when the slot is
+    /// touched, a weapon taken by a touch or by sliding onto it from the
+    /// slot; away on a touch elsewhere, the slot again, or idleness.
+    void testWeaponList()
+    {
+        for (const bool left : {false, true})
+        {
+            const TouchLayout at = touchLayout(left);
+            const unsigned have = (1u << kWeaponMp5) | (1u << kWeaponShotgun) | (1u << kWeaponCrossbow) |
+                                  (1u << kWeaponCrowbar);
+            std::uint32_t blank = 0;
+            auto settle = [&](WeaponList &list)
+            {
+                for (int i = 0; i < 20; ++i)
+                    weaponListStep(list, at, false, false, 0, 0, ++blank);
+            };
+            WeaponList list;
+            check(weaponListOpen(list, 1, have, 0, blank) == kWeaponCrowbar && !list.open(),
+                  "a slot with one weapon in it takes that one at once");
+            check(weaponListOpen(list, 3, have, 0, blank) == 0 && list.open() && list.count == 3 &&
+                      list.weapons[0] == kWeaponMp5 && list.weapons[1] == kWeaponShotgun &&
+                      list.weapons[2] == kWeaponCrossbow,
+                  "slot 3: its three weapons carried, in the game's order");
+            settle(list);
+            const TouchRect r = weaponListRect(list, at);
+            check(list.slide == 256 && r.x >= at.pad.x + 1 && r.x + r.w <= at.pad.x + at.pad.w - 1 &&
+                      r.y >= at.pad.y + 1 && r.y + r.h <= at.pad.y + at.pad.h - 3,
+                  left ? "... up, inside the pad's frame, left-handed" : "... up, inside the pad's frame and nothing else");
+            // (Every slot's list, of as many as a slot has, inside it.)
+            for (int category = 1; category <= kTouchSlots; ++category)
+            {
+                WeaponList each;
+                each.category = category;
+                each.count = kWeaponListMost;
+                const TouchRect e = weaponListRect(each, at);
+                check(e.x >= at.pad.x + 1 && e.x + e.w <= at.pad.x + at.pad.w - 1 && e.y >= at.pad.y + 1 &&
+                          e.y + e.h <= at.pad.y + at.pad.h - 3,
+                      "every slot's list, at its longest, is inside the pad's frame");
+            }
+            // A weapon touched: taken.
+            const int x = r.x + r.w / 2, rowY = r.y + 2 + kWeaponListRow + kWeaponListRow / 2;
+            WeaponListTouch got = weaponListStep(list, at, true, true, x, rowY, ++blank);
+            check(got.consumed && got.chosen == 0, "a weapon in it touched is the list's, not the controls'");
+            got = weaponListStep(list, at, false, false, x, rowY, ++blank);
+            check(got.chosen == kWeaponShotgun && list.closing, "... lifted: that one is taken, and the list goes");
+            settle(list);
+            check(!list.open(), "... gone");
+
+            // The slot pressed, slid up onto a weapon, lifted.
+            weaponListOpen(list, 3, have, 0, blank);
+            list.owned = true; // (as Input has it: the touch that opened it)
+            settle(list);
+            list.owned = true;
+            // (Across the first row and on: the move is heard only where the
+            // stylus stops, once.)
+            int moves = 0;
+            for (int n = 0; n < 3; ++n)
+                moves += weaponListStep(list, at, true, false, x, r.y + 2 + kWeaponListRow / 2, ++blank).moved;
+            check(moves == 0, "... slid across a weapon of it: nothing heard");
+            for (std::uint32_t n = 0; n <= kWeaponListSettle + 5; ++n)
+            {
+                got = weaponListStep(list, at, true, false, x, r.y + 2 + kWeaponListRow * 2 + 4, ++blank);
+                moves += got.moved;
+                check(!got.dismissed, "... and stays up");
+            }
+            check(moves == 1, "... stopped on one: the menu's move, once");
+            got = weaponListStep(list, at, false, false, x, r.y + 2 + kWeaponListRow * 2 + 4, ++blank);
+            check(got.chosen == kWeaponCrossbow, "the slot pressed and slid up onto a weapon, lifted: taken");
+            settle(list);
+
+            // Pressed and lifted on the slot: the list stays, to be touched.
+            weaponListOpen(list, 3, have, 0, blank);
+            list.owned = true;
+            weaponListStep(list, at, true, false, at.slot[2].x + 5, at.slot[2].y + 5, ++blank);
+            got = weaponListStep(list, at, false, false, at.slot[2].x + 5, at.slot[2].y + 5, ++blank);
+            check(got.chosen == 0 && list.open() && !list.closing, "a slot only tapped: its list stays up");
+            got = weaponListStep(list, at, true, true, at.slot[2].x + 5, at.slot[2].y + 5, ++blank);
+            check(got.consumed && list.closing && got.dismissed, "... its slot again: away, and nothing else");
+            settle(list);
+
+            // Elsewhere: away, and the touch is the controls'.
+            weaponListOpen(list, 3, have, 0, blank);
+            settle(list);
+            got = weaponListStep(list, at, true, true, at.pad.x + 5, at.pad.y + 5, ++blank);
+            check(!got.consumed && list.closing, "a touch elsewhere: the list goes, and the touch is the controls'");
+            settle(list);
+
+            // Nothing for three seconds: away.
+            weaponListOpen(list, 3, have, 0, blank);
+            for (int i = 0; i < 200; ++i)
+                weaponListStep(list, at, false, false, 0, 0, ++blank);
+            check(!list.open(), "three seconds of nothing: away");
+            weaponListOpen(list, 3, have, 0, blank);
+            bool dismissed = false;
+            for (int i = 0; i < 200; ++i)
+                dismissed = weaponListStep(list, at, false, false, 0, 0, ++blank).dismissed || dismissed;
+            check(dismissed, "... said to be put away with nothing taken");
+        }
+    }
+
+    /// Crouched, and still looking about and using things, as with the
+    /// game's own crouch key held: the screen's DUCK held and slid off onto
+    /// the pad; or, as a toggle, tapped.
+    void testCrouchAim()
+    {
+        const TouchLayout at = touchLayout(false);
+        const int px = at.pad.x + 80, py = at.pad.y + 60;
+        std::uint32_t blank = 0;
+        {
+            ControlSettings set; // (classic, held)
+            ControlsState state;
+            ControlsOut out = touch(set, state, at.duck.x + 5, at.duck.y + 5, blank);
+            check(out.duck, "DUCK held crouches");
+            out = touch(set, state, px, py, blank);
+            check(out.duck && out.touchOn == kTouchDuck && out.lookDx == 0 && out.lookDy == 0,
+                  "... slid off onto the pad: still crouched, and the view does not jump");
+            out = touch(set, state, px + 20, py + 6, blank);
+            check(out.duck && (out.lookDx != 0 || out.lookFineX != 0), "... and the stylus turns the view");
+            out = press(set, state, 0, blank);
+            check(!out.duck && !out.usePressed && !out.jump, "... lifted: stands, and it was no tap");
+        }
+        {
+            ControlSettings set;
+            set.duckToggle = 1;
+            ControlsState state;
+            ControlsOut out = touch(set, state, at.duck.x + 5, at.duck.y + 5, blank);
+            out = press(set, state, 0, blank);
+            check(out.duck, "DUCK a toggle: tapped, crouched, with the stylus lifted");
+            touch(set, state, px, py, blank);
+            out = touch(set, state, px + 20, py, blank);
+            check(out.duck && (out.lookDx != 0 || out.lookFineX != 0), "... and the stylus turns the view, crouched");
+            press(set, state, 0, blank);
+            out = touch(set, state, at.use.x + 5, at.use.y + 5, blank);
+            check(out.duck && out.usePressed, "... and USE is touched, crouched");
+            press(set, state, 0, blank);
+            for (int i = 0; i < 5; ++i)
+                out = press(set, state, 0, blank);
+            check(out.duck, "... frames on, the classic layout keeps the crouch");
+            touch(set, state, at.duck.x + 5, at.duck.y + 5, blank);
+            out = press(set, state, 0, blank);
+            check(!out.duck, "... DUCK tapped again: stands");
+        }
     }
 
     void testTaps()
@@ -749,6 +902,8 @@ int main()
 {
     testClassicIsAsBefore();
     testModern();
+    testCrouchAim();
+    testWeaponList();
     testTaps();
     testHand();
     testSticks();

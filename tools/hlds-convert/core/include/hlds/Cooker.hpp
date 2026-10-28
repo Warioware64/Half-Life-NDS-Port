@@ -54,6 +54,12 @@ namespace hlds
         /// The sounds those models make in their clips
         /// (CookedModel::eventSounds).
         std::vector<std::string> modelSounds;
+        /// The weapons' view models the map was not cooked with, and the
+        /// sounds of their clips: named in the level after `models`, to be
+        /// loaded out of the common archive if one is taken up
+        /// (kModelRefLazy, kSoundLazy).
+        std::vector<std::string> lazyModels;
+        std::vector<std::string> lazyModelSounds;
         /// Which of `models` is the one the player holds; empty for none.
         std::string viewModel;
         /// The game's sentences.txt, parsed; null if it was not read.

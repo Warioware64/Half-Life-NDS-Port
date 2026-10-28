@@ -84,8 +84,10 @@ namespace hlrt
         /// `turn` is the actor's own turning: its nine, row by row, Q12
         /// (world = turn * model).
         /// `level`: which of the model's levels of detail.
+        /// `shrink`: drawn 2^shrink times smaller about the eye -- the same
+        /// picture, nearer (what is in hand: drawHeld).
         void drawActor(const hldata::ActorState &actor, const hldata::ModelView &model,
-                       unsigned modelIndex, const hldata::fx *turn, int id, int level);
+                       unsigned modelIndex, const hldata::fx *turn, int id, int level, int shrink = 0);
         const hldata::BoneMatrix *posed(const hldata::ActorState &actor,
                                         const hldata::ModelView &model, unsigned modelIndex,
                                         int id);

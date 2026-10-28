@@ -155,9 +155,12 @@ namespace hlds
             if (header.atlasWidth != 0)
                 skins.push_back(hldata::modelSkinFile(name, header.atlasWidth, header.atlasHeight));
         };
+        // (Not a weapon the map has not: that is in the common archive.)
         for (std::uint32_t i = 0; i < view.modelRefCount; ++i)
         {
             const char *name = view.modelRefs[i].name;
+            if (hldata::modelRefLazy(view.modelRefs[i]))
+                continue;
             if (packing.add(stage / "mdl" / map / (std::string(name) + ".hmd"),
                             std::string("mdl/") + name + ".hmd", true))
                 skinOf(packing.members.back(), name);
@@ -166,6 +169,8 @@ namespace hlds
         for (std::uint32_t i = 0; i < view.modelRefCount; ++i)
         {
             const char *name = view.modelRefs[i].name;
+            if (hldata::modelRefLazy(view.modelRefs[i]))
+                continue;
             if (packing.add(stage / "mdl" / map / (std::string(name) + ".dsi.hmd"),
                             std::string("mdl/") + name + ".dsi.hmd", true, false))
                 skinOf(packing.members.back(), name);
@@ -197,7 +202,7 @@ namespace hlds
             for (std::uint32_t i = 0; i < view.soundCount; ++i)
             {
                 const hldata::SoundRef &ref = view.sounds[i];
-                if (ref.name[0] == '\0' || (kept[i] != 0) != (pass == 0))
+                if (ref.name[0] == '\0' || (kept[i] != 0) != (pass == 0) || hldata::soundLazy(ref))
                     continue;
                 // (What the people say is in the common archive.)
                 if (pass == 1 && talk[i] != 0)
@@ -235,9 +240,10 @@ namespace hlds
         for (const char *name : hldata::kUiSoundFiles)
             packing.add(stage / "snd" / (std::string(name) + ".hsn"), std::string("snd/") + name + ".hsn",
                         false, false);
-        // The words of what the people say, of every map staged.
+        // The words of what the people say, of every map staged; and the
+        // weapons some map has not, with their sounds (kModelRefLazy).
         {
-            std::set<std::string> words;
+            std::set<std::string> words, weapons, weaponSounds;
             std::vector<fs::path> levels;
             ec.clear();
             for (auto it = fs::directory_iterator(stage / "maps", ec); !ec && it != fs::directory_iterator();
@@ -261,10 +267,38 @@ namespace hlds
                 {
                     if (talk[i] != 0 && view.sounds[i].name[0] != '\0')
                         words.insert(view.sounds[i].name);
+                    if (hldata::soundLazy(view.sounds[i]) && view.sounds[i].name[0] != '\0')
+                        weaponSounds.insert(view.sounds[i].name);
+                }
+                for (std::uint32_t i = 0; i < view.modelRefCount; ++i)
+                {
+                    if (hldata::modelRefLazy(view.modelRefs[i]))
+                        weapons.insert(view.modelRefs[i].name);
                 }
             }
             for (const std::string &name : words)
                 packing.add(stage / "snd" / (name + ".hsn"), "snd/" + name + ".hsn", false, false);
+            for (const std::string &name : weaponSounds)
+                packing.add(stage / "snd" / (name + ".hsn"), "snd/" + name + ".hsn", false, false);
+            // Each weapon as a DS reads it, a DSi's beside it, and its skin.
+            std::set<std::string> skins;
+            for (const std::string &name : weapons)
+            {
+                for (const char *kind : {".hmd", ".dsi.hmd"})
+                {
+                    const std::size_t before = packing.members.size();
+                    packing.add(stage / "wpn" / (name + kind), "wpn/" + name + kind, true, kind[1] == 'h');
+                    if (packing.members.size() == before ||
+                        packing.members.back().data.size() < sizeof(hldata::ModelHeader))
+                        continue;
+                    hldata::ModelHeader header;
+                    std::memcpy(&header, packing.members.back().data.data(), sizeof(header));
+                    if (header.atlasWidth != 0)
+                        skins.insert(hldata::modelSkinFile(name.c_str(), header.atlasWidth, header.atlasHeight));
+                }
+            }
+            for (const std::string &skin : skins)
+                packing.add(stage / "mdl" / skin, "wpn/" + skin, true);
         }
         if (packing.members.empty())
         {

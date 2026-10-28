@@ -1566,7 +1566,11 @@ namespace hldata
                         const int damage = kSnarkPop + kSnarkPop * snarkBites(shot);
                         effectAdd(a, kEffectSplat, shot.pos, nullptr, 16, 300);
                         if (w.heard != nullptr)
+                        {
                             w.heard->add(CommonSound::SnarkBlast, shot.pos, 127, kRadiusMedium);
+                            // (... and the game's splat with it, high.)
+                            w.heard->add(CommonSound::BodySplat, shot.pos, 95, kRadiusMedium, 200);
+                        }
                         radiusDamage(w, player, shot.pos, damage, damage * 5 / 2, -1);
                         continue;
                     }
@@ -3450,6 +3454,31 @@ namespace hldata
             return player.arsenal != nullptr ? &player.arsenal->bolts : nullptr;
         return gunSpare(player.inv);
     }
+    /// Whether a weapon carried has nothing at all to fire (for the touch
+    /// screen's list of a slot's weapons: such a one is shown grey). The
+    /// crowbar and the hivehand, which grows its own, never.
+    inline bool weaponDry(const PlayerState &player, int weapon)
+    {
+        const Inventory &inv = player.inv;
+        const Arsenal *ars = player.arsenal;
+        switch (weapon)
+        {
+        case kWeaponGlock: return inv.clipGlock + inv.ammo9mm <= 0;
+        case kWeaponMp5: return inv.clipMp5 + inv.ammo9mm <= 0;
+        case kWeaponShotgun: return inv.clipShotgun + inv.ammoBuck <= 0;
+        case kWeaponPython: return inv.clipPython + inv.ammo357 <= 0;
+        case kWeaponGrenade: return inv.grenades <= 0;
+        case kWeaponCrossbow: return ars != nullptr && ars->boltsClip + ars->bolts <= 0;
+        case kWeaponRpg: return ars != nullptr && !(ars->have & kArsenalRpgLoaded) && ars->rockets <= 0;
+        case kWeaponGauss:
+        case kWeaponEgon: return ars != nullptr && ars->uranium <= 0;
+        case kWeaponSatchel: return ars != nullptr && ars->satchels <= 0;
+        case kWeaponTripmine: return ars != nullptr && ars->tripmines <= 0;
+        case kWeaponSnark: return ars != nullptr && ars->snarks <= 0;
+        default: return false;
+        }
+    }
+
     /// What the weapon in hand that is not a gun has left: the grenades,
     /// satchels, tripmines, snarks (null: nothing counted).
     inline std::int16_t *weaponStock(PlayerState &player)

@@ -794,6 +794,14 @@ namespace hlds
                     out.events.push_back(record);
                     continue;
                 }
+                // 2001, 2002: the body hits the floor, light or heavy.
+                if (event.event == 2001 || event.event == 2002)
+                {
+                    record.kind = kEventBodyDrop;
+                    record.target = event.event == 2002 ? 1 : 0;
+                    out.events.push_back(record);
+                    continue;
+                }
                 if (event.options.empty())
                     continue;
                 if (event.event == 1003)

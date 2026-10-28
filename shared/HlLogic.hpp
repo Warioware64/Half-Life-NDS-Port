@@ -3277,9 +3277,20 @@ namespace hldata
                             }
                             continue;
                         }
+                        // Its body hitting the floor, if there is floor
+                        // under it: one of two thuds, the heavy one lower.
+                        if (event.kind == kEventBodyDrop)
+                        {
+                            if (w.heard != nullptr && !actor.airborne)
+                                w.heard->add(((actor.frame >> 8) ^ i) & 1 ? CommonSound::BodyDrop4
+                                                                          : CommonSound::BodyDrop3,
+                                             actor.pos, 127, kRadiusMedium, event.target != 0 ? 90 : 100);
+                            continue;
+                        }
                         // A sound of its own: a footstep in its walk, a
                         // word in its scene. From where it is -- its mouth,
-                        // for what it says.
+                        // for what it says -- at full volume, heard only
+                        // near (the game's ATTN_IDLE).
                         if (w.heard == nullptr || w.modelSounds == nullptr)
                             continue;
                         int low = 0, high = w.modelSoundCount - 1, found = -1;
@@ -3297,8 +3308,7 @@ namespace hldata
                             continue;
                         const bool voice = event.kind == kEventVoice;
                         const fx from[3] = {actor.pos[0], actor.pos[1], actor.pos[2] + fxFromInt(voice ? 60 : 4)};
-                        w.heard->add(w.modelSounds[found].sound, from, voice ? 127 : 80,
-                                     voice ? kRadiusLarge : kRadiusMedium);
+                        w.heard->add(w.modelSounds[found].sound, from, 127, kRadiusSmall);
                     }
                 }
                 actorPlaceBox(*w.actors, i);

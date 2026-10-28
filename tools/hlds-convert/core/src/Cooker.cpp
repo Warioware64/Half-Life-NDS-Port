@@ -825,7 +825,7 @@ namespace hlds
         {
             LogicCook logic;
             cookLogic(bsp, entities, brushRecordOfEntity, options.models, logic, options.sentences, options.titles,
-                      options.chapter);
+                      options.chapter, options.lazyModels);
             if (logic.records.size() > 0x7FFF || logic.aux.size() > 0xFFFF)
             {
                 error = "the map has more logic entities than the cooked format holds";
@@ -923,9 +923,18 @@ namespace hlds
             }
             // The sounds the map's models make as they move: each where it
             // already is in the list (a common one this map had no other
-            // use for is given back its place), or added to it.
-            for (const std::string &path : options.modelSounds)
+            // use for is given back its place), or added to it. (Then
+            // those of the weapons it has not: where they are not already
+            // the map's own, read only when first played.)
+            logic.soundLazy.resize(logic.sounds.size(), false);
+            const std::size_t lazyFrom = options.modelSounds.size();
+            std::vector<std::string> allModelSounds = options.modelSounds;
+            allModelSounds.insert(allModelSounds.end(), options.lazyModelSounds.begin(),
+                                  options.lazyModelSounds.end());
+            for (std::size_t s = 0; s < allModelSounds.size(); ++s)
             {
+                const std::string &path = allModelSounds[s];
+                const bool lazy = s >= lazyFrom;
                 std::size_t index = logic.sounds.size();
                 for (int c = 0; c < static_cast<int>(CommonSound::Count); ++c)
                 {
@@ -933,6 +942,10 @@ namespace hlds
                         static_cast<std::size_t>(c) < logic.sounds.size())
                     {
                         index = static_cast<std::size_t>(c);
+                        if (logic.sounds[index].empty())
+                            logic.soundLazy[index] = lazy;
+                        else if (!lazy)
+                            logic.soundLazy[index] = false;
                         logic.sounds[index] = path;
                         break;
                     }
@@ -949,6 +962,11 @@ namespace hlds
                         continue; // (the console numbers its sounds below that)
                     logic.sounds.push_back(path);
                     logic.soundLoops.push_back(false);
+                    logic.soundLazy.push_back(lazy);
+                }
+                else if (!lazy && index >= static_cast<std::size_t>(CommonSound::Count))
+                {
+                    logic.soundLazy[index] = false;
                 }
                 ModelSound record{};
                 record.hash = nameHash(path.c_str());
@@ -965,6 +983,7 @@ namespace hlds
                     const std::string name =
                         soundCardName(logic.sounds[n], kSoundRate, logic.soundLoops[n]);
                     std::strncpy(ref.name, name.c_str(), sizeof(ref.name) - 1);
+                    ref.twin = n < logic.soundLazy.size() && logic.soundLazy[n] ? kSoundLazy : 0;
                 }
                 level.sounds.push_back(ref);
             }
