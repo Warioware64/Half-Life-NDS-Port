@@ -32,13 +32,21 @@ namespace hlrt
         /// `menu`: it plays on while the game is paused. 0: no channel free.
         std::uint16_t play(const void *data, std::uint32_t words, std::uint32_t loopWord, std::uint16_t rate,
                            int volume, int pan, int pitch, bool menu);
+        /// The same, to begin on `after`'s channel the moment `after` ends,
+        /// with no gap (a line's next word). 0: none queued (nothing to
+        /// follow, or already one queued).
+        std::uint16_t chain(std::uint16_t after, const void *data, std::uint32_t words, std::uint32_t loopWord,
+                            std::uint16_t rate, int volume, int pan, int pitch);
         void stop(std::uint16_t token);
         void setVolume(std::uint16_t token, int volume);
         void setPanning(std::uint16_t token, int pan);
         void setRate(std::uint16_t token, int pitch);
         void stopAll();
-        /// Whether a sound is still being played (not ended, not stopped).
+        /// Whether a sound is still being played (not ended, not stopped),
+        /// or queued to be.
         bool playing(std::uint16_t token) const;
+        /// Whether it is queued behind another and not begun yet.
+        bool queued(std::uint16_t token) const;
 
         /// Once a frame: the ends the ARM7 has said.
         void frame();
@@ -59,6 +67,16 @@ namespace hlrt
 
     private:
         void push(const hldata::AudioCommand &command);
+        hldata::AudioPlay playOf(const void *data, std::uint32_t words, std::uint32_t loopWord, std::uint16_t rate,
+                                 int volume, int pan, int pitch, bool menu) const;
+        std::uint16_t nextToken();
+
+        struct Queued
+        {
+            std::uint16_t token = 0, after = 0;
+        };
+        static constexpr int kQueued = 4;
+        Queued queued_[kQueued];
 
         hldata::AudioLink *link_ = nullptr; ///< through the uncached mirror
         std::uint32_t endRead_ = 0;

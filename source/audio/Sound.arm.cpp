@@ -388,8 +388,9 @@ namespace hlrt
         voices_[v].pan = static_cast<std::uint8_t>(pan);
         voices_[v].rate = static_cast<std::uint16_t>(rate);
         voices_[v].hz = clip.rate;
-        // (Played faster, it is over sooner.)
-        mixer_.start(v, layer, gain, loop ? -1 : static_cast<std::int32_t>(clip.ms * 100 / pitch) + 34, tag);
+        // (Over when the ARM7 says it has ended -- frame(); the time, twice
+        // what it should take, only in case that is never heard.)
+        mixer_.start(v, layer, gain, loop ? -1 : static_cast<std::int32_t>(clip.ms * 100 / pitch) * 2 + 500, tag);
         return v;
     }
 
@@ -663,6 +664,12 @@ namespace hlrt
             speech->pos[k] = event.pos[k];
         speech->born = ++speechClock_;
         speech->leftMs = 1; // (the word in the air is cut short at the next tick)
+        speech->cutMs = 0;
+        // (Nor is the old line's next word, queued behind it, begun.)
+        if (speech->chained != 0)
+            arm7Audio.stop(speech->chained);
+        speech->chained = 0;
+        speech->chainBuffer = -1;
         // (What was read ahead was the old line's next word.)
         releaseWord(*speech, speech->cur ^ 1);
         speech->ahead = -1;
@@ -689,6 +696,48 @@ namespace hlrt
             releaseWord(speech, other);
     }
 
+    /// While a word is said, the next one queued behind it on its channel,
+    /// to begin the moment it ends: no gap between the words of a line.
+    /// (Only after a word that is said to its end, and only a word that is,
+    /// whose sound is in memory already.)
+    void Sound::chainNext(Speech &speech)
+    {
+        if (speech.chained != 0 || speech.cutMs > 0 || speech.at >= speech.count || speech.voice < 0)
+            return;
+        const std::uint16_t handle = voices_[speech.voice].handle;
+        if (handle == 0 || !arm7Audio.playing(handle) || arm7Audio.queued(handle))
+            return;
+        const SentenceWord &word = level.view.sentenceWords[speech.words[speech.at]];
+        const std::uint16_t index = word.sound;
+        if (index >= level.view.soundCount || level.view.sounds[index].name[0] == '\0' ||
+            (word.end != 0 && word.end < 100))
+            return;
+        const bool borrowed = index < count_ && clips_[index].data != nullptr;
+        if (!borrowed && speech.ahead != index)
+            return;
+        const Clip &clip = borrowed ? clips_[index] : speech.clip[speech.cur ^ 1];
+        const int pitch = (speech.pitch * (word.pitch != 0 ? word.pitch : 100)) / 100;
+        const int loud = (speech.volume * word.volume) / 100;
+        int volume = loud, pan = 64;
+        if (speech.placed)
+            place(speech.pos, loud, speech.radius, volume, pan);
+        const int gain = mixer_.scaled(SoundLayer::Voice, volume);
+        int rate = (1024 * pitch) / 100;
+        rate = rate < 64 ? 64 : (rate > 4095 ? 4095 : rate);
+        const std::uint16_t token =
+            arm7Audio.chain(handle, clip.data, clip.bytes / 4, clip.loopWord, clip.rate, gain * 2, pan * 2, rate);
+        if (token == 0)
+            return;
+        speech.chained = token;
+        speech.chainBuffer = borrowed ? -1 : speech.cur ^ 1;
+        speech.chainMs = static_cast<std::int32_t>(clip.ms * 100 / (pitch > 0 ? pitch : 100));
+        speech.chainLoud = loud;
+        speech.chainRate = static_cast<std::uint16_t>(rate);
+        if (!borrowed)
+            speech.ahead = -1; // (its buffer is the queued word's now)
+        ++speech.at;
+    }
+
     void Sound::speechTick(int ms)
     {
         for (int s = 0; s < kSpeakers; ++s)
@@ -697,15 +746,71 @@ namespace hlrt
             if (!speech.busy() && speech.voice < 0)
                 continue;
             if (speech.leftMs > 0)
-            {
                 speech.leftMs -= ms;
-                if (speech.leftMs > 0)
-                    continue;
+            const bool ours = speech.voice >= 0 && mixer_.voices[speech.voice].active &&
+                              mixer_.voices[speech.voice].layer == SoundLayer::Voice &&
+                              mixer_.voices[speech.voice].tag == s;
+            const std::uint16_t handle = ours ? voices_[speech.voice].handle : 0;
+
+            // The next word has begun behind the last, on its own (the ARM7
+            // started it the moment the last ended): it is the word in the
+            // air now, and the one after it is fetched.
+            if (ours && speech.chained != 0 && !arm7Audio.playing(handle) && arm7Audio.playing(speech.chained) &&
+                !arm7Audio.queued(speech.chained))
+            {
+                releaseWord(speech, speech.cur);
+                if (speech.chainBuffer >= 0)
+                    speech.cur = speech.chainBuffer;
+                Voice &voice = voices_[speech.voice];
+                voice.handle = speech.chained;
+                voice.rate = speech.chainRate;
+                voice.volume = static_cast<std::uint8_t>(speech.chainLoud);
+                speech.leftMs = speech.chainMs * 2 + 500; // (only if its end is never heard)
+                mixer_.voices[speech.voice].leftMs = speech.leftMs;
+                speech.cutMs = 0;
+                speech.chained = 0;
+                speech.chainBuffer = -1;
+                if (speech.at < speech.count)
+                    readAhead(speech, level.view.sentenceWords[speech.words[speech.at]].sound);
+                continue;
+            }
+
+            // Is the word in the air over? Heard to end (the ARM7 says so),
+            // cut where the game cuts it, or -- too far off to be heard at
+            // all -- its time taken.
+            bool over;
+            if (speech.voice < 0)
+                over = speech.leftMs <= 0;
+            else if (!ours)
+                over = true;
+            else
+                over = handle == 0 || (!arm7Audio.playing(handle) && !arm7Audio.queued(speech.chained)) ||
+                       speech.leftMs <= 0;
+            if (speech.cutMs > 0)
+            {
+                speech.cutMs -= ms;
+                over = over || speech.cutMs <= 0;
+            }
+            if (!over)
+            {
+                chainNext(speech);
+                continue;
+            }
+
+            // Over, and what was queued behind it never begun: it is said
+            // the ordinary way below (its buffer is still the one ahead).
+            if (speech.chained != 0)
+            {
+                arm7Audio.stop(speech.chained);
+                --speech.at;
+                if (speech.chainBuffer >= 0)
+                    speech.ahead = level.view.sentenceWords[speech.words[speech.at]].sound;
+                speech.chained = 0;
+                speech.chainBuffer = -1;
             }
             // The word in the air is over: its voice and its memory can
             // go, and the next is said.
-            if (speech.voice >= 0 && mixer_.voices[speech.voice].active &&
-                mixer_.voices[speech.voice].layer == SoundLayer::Voice && mixer_.voices[speech.voice].tag == s)
+            if (ours)
             {
                 // (A word read off the card is played out of memory that is
                 // about to be given back: that one is stopped dead. One of
@@ -716,6 +821,7 @@ namespace hlrt
                     retire(speech.voice);
             }
             speech.voice = -1;
+            speech.cutMs = 0;
             releaseWord(speech, speech.cur);
             bool said = false;
             while (speech.at < speech.count && !said)
@@ -762,13 +868,25 @@ namespace hlrt
                     for (int k = 0; k < 3; ++k)
                         voice.pos[k] = speech.pos[k];
                 }
-                // (Too far off to be heard, it still takes its time.)
                 speech.voice = v;
                 // (Said faster it is over sooner; and a word may be cut off
                 // before its end, which is how the game clips its speech.)
-                speech.leftMs = static_cast<std::int32_t>(lasts * 100 / (pitch > 0 ? pitch : 100)) *
-                                    (word.end != 0 ? word.end : 100) / 100 +
-                                (word.end != 0 && word.end < 100 ? 0 : 20);
+                const std::int32_t whole = static_cast<std::int32_t>(lasts * 100 / (pitch > 0 ? pitch : 100));
+                const bool cut = word.end != 0 && word.end < 100;
+                if (v >= 0)
+                {
+                    // Heard: over when the ARM7 says it is (or where it is
+                    // cut); the time is only in case its end is never heard.
+                    speech.cutMs = cut ? whole * word.end / 100 : 0;
+                    speech.leftMs = whole * 2 + 500;
+                    mixer_.voices[v].leftMs = speech.leftMs;
+                }
+                else
+                {
+                    // (Too far off to be heard, it still takes its time.)
+                    speech.cutMs = 0;
+                    speech.leftMs = cut ? whole * word.end / 100 : whole + 20;
+                }
                 said = true;
             }
             if (!said)
@@ -1185,6 +1303,7 @@ namespace hlrt
         const std::uint32_t now = Global::vblanks();
         const int ms = static_cast<int>(((now - lastVblank_) * 1000 + 30) / 60);
         lastVblank_ = now;
+        arm7Audio.frame();
         musicTick();
         dspAudio.frame();
         // A DSP that has let the game down is done without from here on:
@@ -1211,6 +1330,18 @@ namespace hlrt
             if (voices_[v].handle != 0)
                 arm7Audio.stop(voices_[v].handle);
             voices_[v] = Voice();
+        }
+        // A sound the ARM7 says has ended gives its voice back at once.
+        // (A speaker's own voice is the speaker's to let go: speechTick.)
+        for (int v = 0; v < Mixer::kVoices; ++v)
+        {
+            const MixVoice &mix = mixer_.voices[v];
+            if (!mix.active || mix.leftMs < 0 || voices_[v].handle == 0 || arm7Audio.playing(voices_[v].handle))
+                continue;
+            if (mix.layer == SoundLayer::Voice && mix.tag >= 0 && mix.tag < kSpeakers)
+                continue;
+            voices_[v] = Voice();
+            mixer_.stop(v);
         }
         if (clips_ == nullptr)
             return;

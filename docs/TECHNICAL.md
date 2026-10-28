@@ -556,7 +556,11 @@ Milestone 11, "levels of detail".
   (`shared/HlAudioLink.hpp`); the ARM7 takes them every 2 ms block, plays
   each sound on a free hardware channel straight out of the map's cooked
   sounds in memory (the hardware decodes the ADPCM, loops included), and
-  says when each has ended, by the token it was given. 66 KB of code and
+  says when each has ended, by the token it was given: a voice is free the
+  moment its sound is over, and a spoken line's next word is queued behind
+  the word being said, on its channel, to begin in the same 2 ms block
+  that word ends (no gap between words; a word the line cuts short is
+  still cut by its time). 66 KB of code and
   19 KB of data on the ARM7, against 110 KB for the default with maxmod. Every sound is of
   a layer -- the player's own, the world's, the voice, the loops of a
   place, the menu -- and each layer has its share of the fourteen voices

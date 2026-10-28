@@ -38,6 +38,10 @@ namespace hlaudio
             bool ui = false;
             std::uint8_t volume = 0, pan = 64;
             std::uint16_t rate = 0, pitch = 1024;
+            /// What begins on this channel the moment this ends (a Chain):
+            /// its token (0: nothing) and its Play.
+            std::uint16_t nextToken = 0;
+            AudioPlay next;
         };
 
         AudioLink *volatile link = nullptr;
@@ -87,12 +91,26 @@ namespace hlaudio
             return -1;
         }
 
+        /// The channel whose sound `token` will begin when its own ends.
+        int queuedOn(std::uint16_t token)
+        {
+            for (int c = 0; c < kChannelCount; ++c)
+            {
+                if (channels[c].nextToken == token && token != 0)
+                    return c;
+            }
+            return -1;
+        }
+
         void release(int c, bool stopped)
         {
             const int n = kChannels[c];
             if (stopped)
                 SCHANNEL_CR(n) = 0;
             audioEnd(*link, static_cast<std::uint8_t>(n), channels[c].token, stopped);
+            // (What was to follow it does not.)
+            if (channels[c].nextToken != 0)
+                audioEnd(*link, static_cast<std::uint8_t>(n), channels[c].nextToken, true);
             link->voiceToken[n] = 0;
             channels[c] = Channel();
         }
@@ -107,6 +125,8 @@ namespace hlaudio
         {
             return paused && !ch.ui ? 0 : ch.volume;
         }
+
+        void begin(int c, std::uint16_t token, const AudioPlay &p);
 
         void play(const AudioCommand &command)
         {
@@ -124,13 +144,21 @@ namespace hlaudio
                     c = 0;
                 release(c, true);
             }
+            begin(c, command.token, p);
+        }
+
+        /// A sound begun on a channel (free, or whose last has just ended).
+        void begin(int c, std::uint16_t token, const AudioPlay &p)
+        {
             if (p.words < 4 || p.address == 0)
             {
-                audioEnd(*link, static_cast<std::uint8_t>(kChannels[c]), command.token, false);
+                audioEnd(*link, static_cast<std::uint8_t>(kChannels[c]), token, false);
+                channels[c].token = 0;
+                link->voiceToken[kChannels[c]] = 0;
                 return;
             }
             Channel &ch = channels[c];
-            ch.token = command.token;
+            ch.token = token;
             ch.ui = (p.flags & kAudioPlayUi) != 0;
             ch.volume = p.volume;
             ch.pan = p.pan;
@@ -145,14 +173,45 @@ namespace hlaudio
             SCHANNEL_LENGTH(n) = loops ? p.words - p.loopWord : p.words;
             SCHANNEL_CR(n) = static_cast<std::uint32_t>(volumeOf(ch)) | static_cast<std::uint32_t>(ch.pan) << 16 |
                              (loops ? 1u : 2u) << 27 | 2u << 29 | 1u << 31;
-            link->voiceToken[n] = command.token;
+            link->voiceToken[n] = token;
+        }
+
+        /// A sound to follow `command.e` on its channel; at once if that
+        /// has ended already.
+        void chain(const AudioCommand &command)
+        {
+            const int c = channelOf(static_cast<std::uint16_t>(command.e));
+            if (c < 0)
+            {
+                play(command);
+                return;
+            }
+            Channel &ch = channels[c];
+            if (ch.nextToken != 0)
+                audioEnd(*link, static_cast<std::uint8_t>(kChannels[c]), ch.nextToken, true);
+            ch.nextToken = command.token;
+            ch.next = audioPlayOf(command);
         }
 
         void set(const AudioCommand &command)
         {
             const int c = channelOf(command.token);
             if (c < 0)
+            {
+                // (One yet to begin: what it will begin with.)
+                const int q = queuedOn(command.token);
+                if (q < 0)
+                    return;
+                AudioPlay &p = channels[q].next;
+                const std::uint32_t what = command.a >> 16;
+                if (what & kAudioSetVolume)
+                    p.volume = static_cast<std::uint8_t>(command.a & 127);
+                if (what & kAudioSetPan)
+                    p.pan = static_cast<std::uint8_t>((command.a >> 8) & 127);
+                if (what & kAudioSetPitch)
+                    p.pitch = static_cast<std::uint16_t>(command.b);
                 return;
+            }
             Channel &ch = channels[c];
             const int n = kChannels[c];
             const std::uint32_t what = command.a >> 16;
@@ -246,11 +305,23 @@ namespace hlaudio
                 case AudioOp::Set:
                     set(command);
                     break;
+                case AudioOp::Chain:
+                    chain(command);
+                    break;
                 case AudioOp::Stop:
                 {
                     const int c = channelOf(command.token);
                     if (c >= 0)
+                    {
                         release(c, true);
+                        break;
+                    }
+                    const int q = queuedOn(command.token);
+                    if (q >= 0)
+                    {
+                        audioEnd(l, static_cast<std::uint8_t>(kChannels[q]), command.token, true);
+                        channels[q].nextToken = 0;
+                    }
                     break;
                 }
                 case AudioOp::Pause:
@@ -277,11 +348,23 @@ namespace hlaudio
                     break; // (rooms and modes: not yet)
                 }
             }
-            // The sounds that ended on their own.
+            // The sounds that ended on their own -- and, where one was to
+            // follow, it begun there and then.
             for (int c = 0; c < kChannelCount; ++c)
             {
-                if (channels[c].token != 0 && !(SCHANNEL_CR(kChannels[c]) & (1u << 31)))
+                Channel &ch = channels[c];
+                if (ch.token == 0 || (SCHANNEL_CR(kChannels[c]) & (1u << 31)))
+                    continue;
+                if (ch.nextToken == 0)
+                {
                     release(c, false);
+                    continue;
+                }
+                audioEnd(l, static_cast<std::uint8_t>(kChannels[c]), ch.token, false);
+                const std::uint16_t token = ch.nextToken;
+                const AudioPlay next = ch.next;
+                ch.nextToken = 0;
+                begin(c, token, next);
             }
             musicBlock(blocks);
         }

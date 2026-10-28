@@ -47,6 +47,28 @@ namespace hlrt
             ;
     }
 
+    std::uint16_t Arm7Audio::nextToken()
+    {
+        const std::uint16_t token = next_;
+        next_ = static_cast<std::uint16_t>(next_ + 1 == 0 ? 1 : next_ + 1);
+        return token;
+    }
+
+    AudioPlay Arm7Audio::playOf(const void *data, std::uint32_t words, std::uint32_t loopWord, std::uint16_t rate,
+                                int volume, int pan, int pitch, bool menu) const
+    {
+        AudioPlay p;
+        p.address = reinterpret_cast<std::uint32_t>(data);
+        p.words = static_cast<std::uint16_t>(words > 0xFFFF ? 0xFFFF : words);
+        p.loopWord = loopWord < words && loopWord < kAudioNoLoop ? static_cast<std::uint16_t>(loopWord) : kAudioNoLoop;
+        p.rate = rate;
+        p.volume = static_cast<std::uint8_t>((volume < 0 ? 0 : (volume > 255 ? 255 : volume)) >> 1);
+        p.pan = static_cast<std::uint8_t>((pan < 0 ? 0 : (pan > 255 ? 255 : pan)) >> 1);
+        p.pitch = static_cast<std::uint16_t>(pitch < 1 ? 1 : (pitch > 0xFFFF ? 0xFFFF : pitch));
+        p.flags = menu ? kAudioPlayUi : 0;
+        return p;
+    }
+
     std::uint16_t Arm7Audio::play(const void *data, std::uint32_t words, std::uint32_t loopWord, std::uint16_t rate,
                                   int volume, int pan, int pitch, bool menu)
     {
@@ -57,20 +79,41 @@ namespace hlrt
             slot = live_[k] == 0 ? k : -1;
         if (slot < 0)
             return 0;
-        const std::uint16_t token = next_;
-        next_ = static_cast<std::uint16_t>(next_ + 1 == 0 ? 1 : next_ + 1);
-        AudioPlay p;
-        p.address = reinterpret_cast<std::uint32_t>(data);
-        p.words = static_cast<std::uint16_t>(words > 0xFFFF ? 0xFFFF : words);
-        p.loopWord = loopWord < words && loopWord < kAudioNoLoop ? static_cast<std::uint16_t>(loopWord) : kAudioNoLoop;
-        p.rate = rate;
-        p.volume = static_cast<std::uint8_t>((volume < 0 ? 0 : (volume > 255 ? 255 : volume)) >> 1);
-        p.pan = static_cast<std::uint8_t>((pan < 0 ? 0 : (pan > 255 ? 255 : pan)) >> 1);
-        p.pitch = static_cast<std::uint16_t>(pitch < 1 ? 1 : (pitch > 0xFFFF ? 0xFFFF : pitch));
-        p.flags = menu ? kAudioPlayUi : 0;
+        const std::uint16_t token = nextToken();
         live_[slot] = token;
-        push(audioPlay(0, token, p));
+        push(audioPlay(0, token, playOf(data, words, loopWord, rate, volume, pan, pitch, menu)));
         return token;
+    }
+
+    std::uint16_t Arm7Audio::chain(std::uint16_t after, const void *data, std::uint32_t words,
+                                   std::uint32_t loopWord, std::uint16_t rate, int volume, int pan, int pitch)
+    {
+        if (link_ == nullptr || data == nullptr || !playing(after) || queued(after))
+            return 0;
+        int slot = -1;
+        for (int k = 0; k < kQueued && slot < 0; ++k)
+            slot = queued_[k].token == 0 ? k : -1;
+        for (int k = 0; k < kQueued; ++k)
+        {
+            if (queued_[k].after == after && queued_[k].token != 0)
+                return 0; // (one queued behind it already)
+        }
+        if (slot < 0)
+            return 0;
+        const std::uint16_t token = nextToken();
+        queued_[slot] = Queued{token, after};
+        push(audioChain(token, after, playOf(data, words, loopWord, rate, volume, pan, pitch, false)));
+        return token;
+    }
+
+    bool Arm7Audio::queued(std::uint16_t token) const
+    {
+        for (const Queued &q : queued_)
+        {
+            if (q.token == token && token != 0)
+                return true;
+        }
+        return false;
     }
 
     bool Arm7Audio::playing(std::uint16_t token) const
@@ -80,7 +123,7 @@ namespace hlrt
             if (live == token && token != 0)
                 return true;
         }
-        return false;
+        return queued(token);
     }
 
     void Arm7Audio::stop(std::uint16_t token)
@@ -91,6 +134,12 @@ namespace hlrt
         {
             if (live == token)
                 live = 0;
+        }
+        // (What was to follow it does not: the ARM7 drops it too.)
+        for (Queued &q : queued_)
+        {
+            if (q.token == token || q.after == token)
+                q = Queued();
         }
         AudioCommand c;
         c.op = AudioOp::Stop;
@@ -136,6 +185,8 @@ namespace hlrt
     {
         for (std::uint16_t &live : live_)
             live = 0;
+        for (Queued &q : queued_)
+            q = Queued();
         AudioCommand c;
         c.op = AudioOp::StopAll;
         push(c);
@@ -146,10 +197,26 @@ namespace hlrt
         if (link_ == nullptr)
             return;
         audioEnds(*link_, endRead_, [&](const AudioEnd &end) {
-            for (std::uint16_t &live : live_)
+            int slot = -1;
+            for (int k = 0; k < kChannels; ++k)
             {
-                if (live == end.token)
-                    live = 0;
+                if (live_[k] == end.token)
+                {
+                    live_[k] = 0;
+                    slot = k;
+                }
+            }
+            for (Queued &q : queued_)
+            {
+                if (q.token == end.token)
+                    q = Queued(); // (ended -- or dropped -- before it began)
+                else if (q.after == end.token && q.token != 0)
+                {
+                    // What followed it has begun, on its channel.
+                    if (!end.stopped && slot >= 0)
+                        live_[slot] = q.token;
+                    q = Queued();
+                }
             }
         });
     }

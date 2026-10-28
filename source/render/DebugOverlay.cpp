@@ -13,6 +13,7 @@
 #include "game/Player.hpp"
 #include "render/Camera.hpp"
 #include "render/GpuStats.hpp"
+#include "audio/Arm7Audio.hpp"
 #include "audio/DspAudio.hpp"
 #include "audio/Sound.hpp"
 #include "render/BottomScreen.hpp"
@@ -118,13 +119,17 @@ namespace hlrt
                               static_cast<unsigned long>(dspAudio.dry()), dspAudio.faults(),
                               static_cast<unsigned long>(dspAudio.block()), dspAudio.heard());
             else
-                // (... and how many voices each layer has: the player's,
-                // the world's, the voice, the loops, the menu.)
-                std::snprintf(line, sizeof(line), "heap %5uK snd %d %d %d %d %d",
+                // (... and how many voices each layer has -- the player's,
+                // the world's, the voice, the loops, the menu -- and the
+                // ARM7's sound program: how much of its time it takes, the
+                // blocks it was late with, and those the music ran dry.)
+                std::snprintf(line, sizeof(line), "heap%5uK v%d%d%d%d%d a7 %lu%% %lu/%lu",
                               static_cast<unsigned>(global.heapHeadroom() / 1024),
                               sound.voicesOf(hldata::SoundLayer::Player), sound.voicesOf(hldata::SoundLayer::World),
                               sound.voicesOf(hldata::SoundLayer::Voice), sound.voicesOf(hldata::SoundLayer::Ambience),
-                              sound.voicesOf(hldata::SoundLayer::Ui));
+                              sound.voicesOf(hldata::SoundLayer::Ui), static_cast<unsigned long>(arm7Audio.loadPercent()),
+                              static_cast<unsigned long>(arm7Audio.late()),
+                              static_cast<unsigned long>(arm7Audio.musicDry()));
             break;
         case 5:
             // The hardware's own account (GpuStats): the least lead the

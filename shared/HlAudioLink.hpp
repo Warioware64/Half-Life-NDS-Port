@@ -59,6 +59,10 @@ namespace hldata
         MusicStop,
         /// Every sound stopped (a map let go of).
         StopAll,
+        /// A Play (its fields as a Play's) to begin on the same channel the
+        /// moment the sound `e` (a token) ends -- in the same block, no gap:
+        /// a line's next word. If `e` has already ended, it begins at once.
+        Chain,
         Count
     };
 
@@ -79,8 +83,9 @@ namespace hldata
         /// this, and its END gives it back. (The ARM7 picks its channel.)
         std::uint16_t token = 0;
         std::uint32_t a = 0, b = 0, c = 0, d = 0;
+        std::uint32_t e = 0; ///< Chain: the token it follows
     };
-    static_assert(sizeof(AudioCommand) == 20);
+    static_assert(sizeof(AudioCommand) == 24);
 
     /// A sound that ended: on its own, or stopped.
     struct AudioEnd
@@ -197,6 +202,14 @@ namespace hldata
         c.c = static_cast<std::uint32_t>(p.rate) | static_cast<std::uint32_t>(p.volume & 127) << 16 |
               static_cast<std::uint32_t>(p.pan & 127) << 24;
         c.d = static_cast<std::uint32_t>(p.pitch) | static_cast<std::uint32_t>(p.flags) << 16;
+        return c;
+    }
+
+    inline AudioCommand audioChain(std::uint16_t token, std::uint16_t after, const AudioPlay &p)
+    {
+        AudioCommand c = audioPlay(0, token, p);
+        c.op = AudioOp::Chain;
+        c.e = after;
         return c;
     }
 

@@ -142,8 +142,16 @@ namespace hlrt
             int cur = 0;
             int ahead = -1;          ///< the sound the other one holds, or -1
             int voice = -1;
-            std::int32_t leftMs = 0;
+            std::int32_t leftMs = 0;  ///< the word's time; heard, only in case its end is never heard
+            std::int32_t cutMs = 0;   ///< > 0: the word is cut off this much on (SentenceWord::end)
             std::uint32_t born = 0;
+            // The next word, queued behind this one on its channel
+            // (Arm7Audio::chain) to begin the moment it ends.
+            std::uint16_t chained = 0;
+            int chainBuffer = -1;     ///< its clip buffer (-1: one of the map's own)
+            std::int32_t chainMs = 0;
+            int chainLoud = 0;
+            std::uint16_t chainRate = 1024;
             bool busy() const { return leftMs > 0 || at < count; }
         };
         static constexpr int kSpeakers = 2;
@@ -171,6 +179,7 @@ namespace hlrt
         void stopLoop(int tag);
         void releaseWord(Speech &speech, int which);
         void readAhead(Speech &speech, int index);
+        void chainNext(Speech &speech);
         void stop(int voice);
         void playOnce(const hldata::SoundEvent &event);
         void say(const hldata::SoundEvent &event);
