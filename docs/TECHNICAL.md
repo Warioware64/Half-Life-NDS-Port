@@ -399,7 +399,13 @@ Milestone 11, "levels of detail".
   heard, felt and hurting), shakes of the view (`env_shake`), sparks
   (`env_spark`), things thrown out (`env_shooter`, `gibshooter`),
   `env_render` making a brush see-through or unseen, and fades of the
-  screen (`env_fade`).
+  screen (`env_fade`): in their colour and timed as the game's screen fade
+  is. A fade from a colour lifts from its first moment, and its hold time
+  only matters to a fade into one. Black and white are the hardware's
+  brightness. Any other colour is BG1, one colour out of Bank D, blended over
+  the 3D picture and the sprites (which sit at priority 1 for it, so the HUD
+  is under it too). The hardware's 16 steps of either are smoothed by
+  showing the step below and the one above in turn, frame by frame.
 - The port's own effects are drawn with the game's pictures: a grenade's
   fireball, an alien slave's lightning, a turret's tracer and muzzle flash,
   a bullsquid's spit, a houndeye's shock wave; a flash at the player's own
@@ -958,6 +964,68 @@ What it costs and what it took:
 `tools/arm9-report.sh --check` holds both to this: no Thumb code and no
 linker stub in the library, nothing of the engine taken by name, and none of
 the game's code left in the program.
+
+## Achievements
+
+The 68 achievements of Half-Life: Legacy (a mod on Steam, app 3619040), with
+the mod's names and descriptions, earned in Valve's own maps. They are one
+set for the console (`data/achievements.dat`), not one per save: earned once,
+kept through every new game, and what counts towards one (500 headcrabs, 250
+broken things) adds up across all of them. Not in a game between consoles.
+
+- **What earns them** is `shared/HlAchievements.hpp`: the table, the file,
+  and the rules, by map. A chapter is done when the way out of its last map
+  is taken into the next chapter's first (worldspawn's `chaptertitle` marks
+  those; its `message` is wrong in places). The rest is a name used in a map
+  (a button's target, a relay, a trigger), a monster killed (by the player,
+  for most), an item taken, or a place stood in.
+- **What the game reports** goes through `shared/HlAchEvents.hpp`, a short
+  list the logic adds to and the engine empties after each frame: in
+  `logicFire` (a name the map's rules listen for, and only when something
+  there by that name answered: c5a1's `loser_mm` is still fired at nothing
+  after the offer is taken), at a monster's death (`aiTakeDamage`), a
+  turret's (`monsterHurt`), a pickup, a break, a soda. `killall` is muted.
+- **The engine's half** is `source/Achievements.cpp`: the file read at boot
+  and written when one is earned (counts alone at a change of map or the end
+  of a pause), the list handed to the logic at each load, and each one earned
+  shown on the top screen with a trophy (`TopText::announce`), one at a time.
+  The COMMAND line's cheats earn the hidden Cheater and spoil nothing else.
+  The pause and title menus have an ACHIEVEMENTS page:
+  - a chapter at a time, in the order they are played, then Uplink, then
+    the general ones (`kAchByChapter`)
+  - each achievement a row to touch, with its trophy and how far along it
+    is; the box under the list reads out the one touched
+  - the list slides aside (or < >, L/R) for another chapter, and drags up
+    and down when it is longer than the room
+  - POP-UPS turns the top screen's pop-ups off: achievements are still
+    earned and listed (`settings.dat` version 12)
+
+Where the mod's own maps differ, the original's nearest is used:
+
+- **Hidden places** are boxes, found from what lies in them:
+  - Barney's room (c1a2d), the maintenance area's turret room (c1a2a), the
+    grenades (c1a2b)
+  - the chargers between the conveyors (c1a3a) and by the barnacle (c1a4i)
+  - the cache by the lift (c2a2b2), Apprehension's past the grate (c2a3a)
+  - the room behind the snark doorway (c3a1)
+  - the big lift's foot in Lambda Core (c3a2e)
+  - the foot of Interloper's spiral (c4a1e)
+  - the scientist on his pillar (c4a3)
+- **Signature move** is the room under the stairs in c2a2c, whose wall reads
+  RILLER in brushes. No decal is a signature.
+- **Defiant** is Barney's telling-off for heading to the test chamber without
+  the suit (`hevnotrigger`).
+- **Got the Chills** is the wheel that opens the freezer (`freezdor`, c1a2c).
+- **Better than a Snake** asks that every tripmine c2a5d lays is still on its
+  wall when the lift is called.
+- **Owowowowowow!** counts the floor's turret (`monster_sentry`); the others
+  hang from ceilings.
+- **Marathon** is the Hazard Course, Uplink (hldemo1-3) and the game, each
+  to its end, in any order.
+
+`test_achievements` tries every rule. With `HLDS_VALVE_DIR` set, it also
+checks that every name, monster and place is in the map it is given for, and
+plays a few: the hand dryer, `loser_mm` after the offer, the guard in c1a1.
 
 ## Not yet
 

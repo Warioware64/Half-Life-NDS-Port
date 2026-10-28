@@ -2,6 +2,8 @@
 
 #include "render/FrameFreeze.hpp"
 
+#include "render/ScreenFade.hpp"
+
 
 namespace hlrt
 {
@@ -28,7 +30,9 @@ namespace hlrt
             return true;
         frozen_ = true;
 
-        // The screen as it is, into bank D, which is kept free for this.
+        // The screen as it is, into bank D, which is kept free for this
+        // (a fade's colour has it otherwise: that layer goes).
+        screenFade.layerLost();
         vramSetBankD(VRAM_D_LCD);
         capture();
 

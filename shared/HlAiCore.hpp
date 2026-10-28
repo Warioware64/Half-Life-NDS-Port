@@ -2684,6 +2684,10 @@ namespace hldata
         }
         if (c.me.health <= 0)
         {
+            if (c.w.achievements != nullptr && !aiHasMemory(c, kMemoryKilled))
+                c.w.achievements->push(AchEventType::Killed,
+                                       c.w.nameHashes != nullptr && c.me.name < c.w.nameCount ? c.w.nameHashes[c.me.name] : 0,
+                                       c.me.kind, d.attacker == kAiPlayer ? kAchByPlayer : 0);
             aiKilled(c, (d.type & kDmgAlwaysGib) != 0, (d.type & kDmgNeverGib) != 0);
             return true;
         }

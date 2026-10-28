@@ -530,6 +530,42 @@ namespace
                 check(!readSettings(written.data(), written.size(), readBad), "a setting out of range is not believed");
             }
         }
+        // Version 12: the achievements' pop-ups, on unless turned off; a
+        // file of version 11, which had no say, leaves them on.
+        {
+            check(SettingsData().achievementPopups == 1, "the achievements' pop-ups are on unless it is said");
+            SettingsData off;
+            off.achievementPopups = 0;
+            off.autoaim = 0;
+            std::vector<std::uint8_t> written = writeSettings(off);
+            SettingsData read12;
+            check(readSettings(written.data(), written.size(), read12) && read12.achievementPopups == 0 &&
+                      read12.autoaim == 0,
+                  "pop-ups turned off are kept");
+            off.achievementPopups = 2;
+            written = writeSettings(off);
+            check(!readSettings(written.data(), written.size(), read12), "... and nonsense is not believed");
+
+            SettingsData eleven;
+            eleven.autoaim = 0;
+            yas::mem_ostream os11;
+            yas::binary_oarchive<yas::mem_ostream, flags> oa11(os11);
+            eleven.serializeEleven(oa11);
+            const auto buf11 = os11.get_intrusive_buffer();
+            SettingsHeader h11{};
+            std::memcpy(h11.magic, kSettingsMagic, sizeof(h11.magic));
+            h11.version = kSettingsVersionEleven;
+            h11.payloadBytes = static_cast<std::uint16_t>(buf11.size);
+            h11.crc32 = crc32(reinterpret_cast<const std::uint8_t *>(buf11.data), static_cast<std::uint32_t>(buf11.size));
+            std::vector<std::uint8_t> file11(sizeof(h11) + buf11.size);
+            std::memcpy(file11.data(), &h11, sizeof(h11));
+            std::memcpy(file11.data() + sizeof(h11), buf11.data, buf11.size);
+            SettingsData read11;
+            read11.achievementPopups = 0;
+            check(readSettings(file11.data(), file11.size(), read11) && read11.autoaim == 0 &&
+                      read11.achievementPopups == 1,
+                  "settings of version 11 are read, with the pop-ups on");
+        }
     }
 
     void testCustom()

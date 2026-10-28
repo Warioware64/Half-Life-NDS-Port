@@ -5,6 +5,9 @@
 # seconds until the player dies, once; a seventh how many
 # models may be drawn at once (up to 12); an eighth a weapon, a ninth god
 # mode; a tenth how hard the game is (1 easy, 2 medium, 3 difficult).
+# EMU_FADE="r g b amount duration-ms hold-ms from after-ms" (with EMU_START)
+# puts a fade on the screen as an env_fade would, after-ms into the game
+# (from: 1 a fade from the colour, 0 into it).
 # EMU_AUDIO=<file> captures the sound (see below).
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -23,6 +26,7 @@ if [ -z "${EMU_KEEP_SAVE:-}" ]; then
 fi
 START_FILE="$ROOT/sdroot/_nds/hl_nds/data/debug_start.txt"
 [ -n "${EMU_START:-}" ] && echo "$EMU_START" > "$START_FILE"
+[ -n "${EMU_START:-}" ] && [ -n "${EMU_FADE:-}" ] && echo "fade $EMU_FADE" >> "$START_FILE"
 trap 'rm -f "$START_FILE"' EXIT
 # EMU_AUDIO=<file> writes what the emulator would have played to a file
 # instead of to the sound card (raw samples: SDL's "disk" driver), so that

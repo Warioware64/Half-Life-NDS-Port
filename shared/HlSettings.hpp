@@ -65,6 +65,9 @@ namespace hldata
         /// The guns bend their aim towards a monster near it, on EASY and
         /// MEDIUM (the game's sv_aim: HlAutoaim.hpp). On unless asked off.
         std::uint8_t autoaim = 1;
+        /// An achievement earned is shown on the top screen as it is
+        /// (Achievements.cpp). On unless asked off: off, it is still earned.
+        std::uint8_t achievementPopups = 1;
 
         /// What a file of version 8 held: all but the controls.
         template <class Ar>
@@ -90,19 +93,28 @@ namespace hldata
             for (std::uint16_t &key : keys)
                 ar &key;
         }
+        /// ... and of version 11: no achievements' pop-ups to turn off.
         template <class Ar>
-        void serialize(Ar &ar)
+        void serializeEleven(Ar &ar)
         {
             serializeTen(ar);
             ar &autoaim;
         }
+        template <class Ar>
+        void serialize(Ar &ar)
+        {
+            serializeEleven(ar);
+            ar &achievementPopups;
+        }
     };
 
     inline constexpr char kSettingsMagic[4] = {'H', 'L', 'S', 'T'};
-    inline constexpr std::uint16_t kSettingsVersion = 11;
-    /// The versions before, which are still read: 10 had no autoaim; 9 had
+    inline constexpr std::uint16_t kSettingsVersion = 12;
+    /// The versions before, which are still read: 11 had no achievements'
+    /// pop-ups to turn off; 10 had no autoaim; 9 had
     /// the layouts but no aim speed, custom buttons or stylus pressure; 8 no
     /// controls to choose.
+    inline constexpr std::uint16_t kSettingsVersionEleven = 11;
     inline constexpr std::uint16_t kSettingsVersionTen = 10;
     inline constexpr std::uint16_t kSettingsVersionNine = 9;
     inline constexpr std::uint16_t kSettingsVersionBefore = 8;
@@ -153,7 +165,8 @@ namespace hldata
             return false;
         std::memcpy(&header, bytes, sizeof(header));
         if (std::memcmp(header.magic, kSettingsMagic, sizeof(header.magic)) != 0 ||
-            (header.version != kSettingsVersion && header.version != kSettingsVersionTen &&
+            (header.version != kSettingsVersion && header.version != kSettingsVersionEleven &&
+             header.version != kSettingsVersionTen &&
              header.version != kSettingsVersionNine && header.version != kSettingsVersionBefore) ||
             header.payloadBytes != size - sizeof(header) ||
             crc32(bytes + sizeof(header), header.payloadBytes) != header.crc32)
@@ -168,6 +181,8 @@ namespace hldata
             read.serializeNine(ia);
         else if (header.version == kSettingsVersionTen)
             read.serializeTen(ia);
+        else if (header.version == kSettingsVersionEleven)
+            read.serializeEleven(ia);
         else
             ia &read;
         if (read.controlScheme >= kControlsSchemes || read.padTurns > 1 || read.padLooks > 1)
@@ -181,7 +196,7 @@ namespace hldata
             if (key & ~kAssignable)
                 return false;
         }
-        if (read.dspAudio > 1 || read.autoaim > 1 ||
+        if (read.dspAudio > 1 || read.autoaim > 1 || read.achievementPopups > 1 ||
             read.debugReadout > 1 || read.leftHanded > 1 || read.viewBob > 1 || !read.graphics.valid())
             return false;
         for (std::uint8_t level : read.volume)

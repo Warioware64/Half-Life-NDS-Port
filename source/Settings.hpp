@@ -37,6 +37,8 @@ public:
     std::uint16_t keys[hldata::kActionCount] = {};
     /// The guns' aim bends towards a monster near it (EASY and MEDIUM).
     bool autoaim = true;
+    /// An achievement earned is shown as it is (else only listed).
+    bool achievementPopups = true;
     /// All of it, for whoever reads the buttons.
     hldata::ControlSettings controls() const
     {

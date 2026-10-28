@@ -4,6 +4,7 @@
 
 #include "HlCommands.hpp"
 #include "HlSkill.hpp"
+#include "Achievements.hpp"
 #include "Settings.hpp"
 #include "audio/DspAudio.hpp"
 #include "game/Input.hpp"
@@ -86,6 +87,7 @@ namespace hlrt
             kSkillEasy, ///< a new game's difficulty (kSkillEasy + its level - 1)
             kSkillMedium,
             kSkillHard,
+            kAchievementsOpen,
         };
         struct Row
         {
@@ -96,10 +98,12 @@ namespace hlrt
         const Row kMain[] = {{Kind::Button, kResume, "RESUME"},       {Kind::Button, kSave, "QUICK SAVE"},
                              {Kind::Button, kSaveGame, "SAVE GAME"}, {Kind::Button, kLoadGame, "LOAD GAME"},
                              {Kind::Button, kNewGame, "NEW GAME"},   {Kind::Button, kOptions, "OPTIONS"},
+                             {Kind::Button, kAchievementsOpen, "ACHIEVEMENTS"},
                              {Kind::Button, kCommand, "COMMAND"}};
         const Row kTitleRows[] = {{Kind::Button, kContinue, "CONTINUE"},     {Kind::Button, kLoadGame, "LOAD GAME"},
                                   {Kind::Button, kNewGame, "NEW GAME"},       {Kind::Button, kMultiplayer, "MULTIPLAYER"},
-                                  {Kind::Button, kOptions, "OPTIONS"}};
+                                  {Kind::Button, kOptions, "OPTIONS"},
+                                  {Kind::Button, kAchievementsOpen, "ACHIEVEMENTS"}};
         // A game between consoles (source/net/NetGame.hpp).
         const Row kMultiRows[] = {{Kind::Button, kNetHost, "HOST GAME"}, {Kind::Button, kNetJoin, "JOIN GAME"},
                                   {Kind::Button, kBack, "BACK"}};
@@ -182,7 +186,7 @@ namespace hlrt
         {
             int x, top, width, height, pitch;
         };
-        constexpr Layout kMainLayout = {28, 34, 200, 19, 22};
+        constexpr Layout kMainLayout = {28, 32, 200, 18, 20};
         constexpr Layout kOptionLayout = {8, 2, 240, 17, 19};
         constexpr int kTrackLeft = 100, kTrackWidth = 132;
 
@@ -208,6 +212,12 @@ namespace hlrt
         bool isVolume(Id id) { return id == kMusic || id == kEffects || id == kVoices || id == kAmbience; }
         const Row *rowsOf(int page, int &count)
         {
+            if (page == 15)
+            {
+                // (The achievements' page has no rows: Menu::drawAchievements.)
+                count = 0;
+                return kMain;
+            }
             if (page == 14)
             {
                 count = static_cast<int>(sizeof(kSkillRows) / sizeof(kSkillRows[0]));
@@ -481,6 +491,8 @@ namespace hlrt
             if (page_ != Page::NetJoin)
                 drawPlayers(top + small.height() + 5, false);
         }
+        if (page_ == Page::Achievements)
+            drawAchievements();
         if (page_ == Page::NetPause)
             drawPlayers(kMainLayout.top + rowCount() * kMainLayout.pitch + 6, true);
         if (page_ == Page::Buttons)
@@ -513,6 +525,495 @@ namespace hlrt
                 drawTextCentred(canvas, small, 128, top + line * pitch, controlsLegend(settings.controls(), line),
                                 inkFor(small, kUiGrey));
         }
+    }
+
+    // ------------------------------------------------------- achievements
+
+    namespace
+    {
+        /// How much of `text` the next line of a column `width` wide takes:
+        /// as many whole words as fit.
+        int wrapped(const FontView &font, const char *text, int width)
+        {
+            int fits = textFit(font, text, width);
+            if (text[fits] != '\0')
+            {
+                int space = fits;
+                while (space > 0 && text[space] != ' ')
+                    --space;
+                fits = space > 0 ? space : fits;
+            }
+            return fits;
+        }
+        const char *skipSpaces(const char *text)
+        {
+            while (*text == ' ')
+                ++text;
+            return text;
+        }
+
+        // Where things are: the chapter between its arrows along the top;
+        // the list, a band of whole rows of tiles (so that what is drawn
+        // in it, scrolled or slid, is cut at its edges for nothing); the
+        // box that reads out the row touched; POP-UPS and BACK at the
+        // bottom. Every one of them at least 20 high, for a finger.
+        constexpr int kAchHeadHeight = 22;
+        constexpr int kAchListTop = 24;
+        constexpr int kAchBarTop = 171;
+        constexpr int kAchBarHeight = 20;
+        constexpr int kAchListWidth = 246;
+        constexpr int kAchSlop = 6; ///< how far a touch may wander and still be a touch
+        constexpr int kAchSwipe = 48; ///< how far the list has to be slid to turn to another chapter
+        // What a touch can be on, besides a row (its number).
+        constexpr int kAchNothing = -1, kAchLeft = -2, kAchRight = -3, kAchPopups = -4, kAchBack = -5,
+                      kAchList = -6;
+        struct AchBox
+        {
+            int x, y, w, h;
+            bool has(int px, int py) const { return px >= x && px < x + w && py >= y && py < y + h; }
+        };
+        constexpr AchBox kAchLeftBox = {2, 1, 30, 20}, kAchRightBox = {224, 1, 30, 20};
+        constexpr AchBox kAchPopupsBox = {4, kAchBarTop, 148, kAchBarHeight};
+        constexpr AchBox kAchBackBox = {156, kAchBarTop, 96, kAchBarHeight};
+
+        /// What depends on the letters' height.
+        struct AchGeometry
+        {
+            int line, row, listHeight, detailTop, detailHeight;
+        };
+        AchGeometry achGeometry()
+        {
+            AchGeometry g;
+            g.line = touchCanvas.font(kFontSmall).height();
+            g.row = g.line + 5 > 20 ? g.line + 5 : 20;
+            g.detailHeight = 3 * g.line + 4;
+            g.detailTop = kAchBarTop - 2 - g.detailHeight;
+            g.listHeight = (g.detailTop - 2 - kAchListTop) / 8 * 8;
+            return g;
+        }
+        int achCount(int chapter)
+        {
+            return hldata::kAchChapterStart[chapter + 1] - hldata::kAchChapterStart[chapter];
+        }
+        int achOf(int chapter, int n)
+        {
+            return hldata::kAchByChapter[hldata::kAchChapterStart[chapter] + n];
+        }
+        int achWrap(int chapter)
+        {
+            return (chapter % hldata::kAchChapterCount + hldata::kAchChapterCount) % hldata::kAchChapterCount;
+        }
+        int achMostScroll(int chapter, const AchGeometry &g)
+        {
+            const int over = achCount(chapter) * g.row - g.listHeight;
+            return over > 0 ? over : 0;
+        }
+        /// A hidden one says nothing of itself until it is earned.
+        const char *achTitle(const hldata::AchievementTracker &tracker, int id)
+        {
+            return hldata::kAchievements[id].hidden && !tracker.has(id) ? "Hidden achievement"
+                                                                         : hldata::kAchievements[id].title;
+        }
+        const char *achText(const hldata::AchievementTracker &tracker, int id)
+        {
+            return hldata::kAchievements[id].hidden && !tracker.has(id) ? "Earned somewhere along the way."
+                                                                         : hldata::kAchievements[id].text;
+        }
+
+        /// The trophy of the top screen's pop-up, small: lit, or not yet.
+        void drawTrophy(Canvas &canvas, int x, int y, bool lit)
+        {
+            static constexpr const char *kCup[12] = {
+                "############", "#.########.#", "#.##o#####.#", ".#.#o####.#.", "...#o####...", "....####....",
+                ".....##.....", ".....##.....", "....####....", "...######...", "...######...", "............",
+            };
+            for (int row = 0; row < 12; ++row)
+            {
+                for (int col = 0; col < 12; ++col)
+                {
+                    const char c = kCup[row][col];
+                    if (c != '.')
+                        canvas.pixel(x + col, y + row,
+                                     lit ? (c == 'o' ? kUiWhite + 2 : kUiOrange + 2) : (c == 'o' ? kUiGrey : kUiGrey + 1));
+                }
+            }
+        }
+
+        /// A button of the page, with its word in the middle of it.
+        void drawAchButton(const AchBox &box, const char *label, bool down)
+        {
+            Canvas &canvas = touchCanvas.canvas();
+            const FontView &medium = touchCanvas.font(kFontMedium), &small = touchCanvas.font(kFontSmall);
+            const FontView &font = textWidth(medium, label) <= box.w - 8 ? medium : small;
+            canvas.button(box.x, box.y, box.w, box.h, down);
+            drawTextCentred(canvas, font, box.x + box.w / 2, box.y + (box.h - font.height()) / 2, label,
+                            inkFor(font, down ? kUiWhite : kUiOrange));
+        }
+    } // namespace
+
+    void Menu::openAchievements()
+    {
+        page_ = Page::Achievements;
+        achScroll_ = 0;
+        achSelected_ = -1;
+        achSlide_ = achSlideTo_ = 0;
+        achPressed_ = kAchNothing;
+        achDrag_ = 0;
+        // (The touch that opened it is not one here, nor a button still held.)
+        achHeld_ = keysHeld();
+        achTouching_ = (achHeld_ & KEY_TOUCH) != 0;
+        draw();
+    }
+
+    void Menu::drawAchievements()
+    {
+        drawAchHeader();
+        drawAchList();
+        drawAchDetail();
+        drawAchBar();
+    }
+
+    /// The chapter, how many of its achievements are earned, and the arrows
+    /// either side.
+    void Menu::drawAchHeader()
+    {
+        Canvas &canvas = touchCanvas.canvas();
+        const FontView &small = touchCanvas.font(kFontSmall);
+        const hldata::AchievementTracker &tracker = achievements.tracker;
+        canvas.fill(0, 0, 256, kAchListTop, kUiBack);
+        drawAchButton(kAchLeftBox, "<", achPressed_ == kAchLeft);
+        drawAchButton(kAchRightBox, ">", achPressed_ == kAchRight);
+        int earned = 0;
+        for (int n = 0; n < achCount(achChapter_); ++n)
+            earned += tracker.has(achOf(achChapter_, n)) ? 1 : 0;
+        char count[16];
+        std::snprintf(count, sizeof(count), "  %d/%d", earned, achCount(achChapter_));
+        const char *name = hldata::kAchChapterNames[achChapter_];
+        const int nameWide = textWidth(small, name), wide = nameWide + textWidth(small, count);
+        const int x = 128 - wide / 2, y = (kAchHeadHeight - small.height()) / 2 + 1;
+        drawText(canvas, small, x, y, name, inkFor(small, kUiOrange));
+        drawText(canvas, small, x + nameWide, y, count, inkFor(small, earned == achCount(achChapter_) ? kUiOrange : kUiWhite));
+    }
+
+    /// The list: the chapter's rows where the stylus has put them, and,
+    /// while it is slid aside, the next or the last chapter's coming in.
+    void Menu::drawAchList()
+    {
+        const AchGeometry g = achGeometry();
+        Canvas &screen = touchCanvas.canvas();
+        Canvas band = screen;
+        band.tiles = screen.tiles + (kAchListTop / 8) * (screen.width / 8) * 8;
+        band.height = g.listHeight;
+        band.fill(0, 0, 256, g.listHeight, kUiBack);
+        drawAchRows(achChapter_, achSlide_, achScroll_);
+        if (achSlide_ < 0)
+            drawAchRows(achWrap(achChapter_ + 1), achSlide_ + 256, 0);
+        else if (achSlide_ > 0)
+            drawAchRows(achWrap(achChapter_ - 1), achSlide_ - 256, 0);
+        // How far down, when there is more than shows.
+        const int most = achMostScroll(achChapter_, g);
+        if (most > 0 && achSlide_ == 0)
+        {
+            const int whole = achCount(achChapter_) * g.row;
+            const int tall = g.listHeight * g.listHeight / whole;
+            band.fill(251, achScroll_ * (g.listHeight - tall) / most, 3, tall, kUiGrey + 1);
+        }
+    }
+
+    /// `chapter`'s rows, `x` across and scrolled `scroll` down.
+    void Menu::drawAchRows(int chapter, int x, int scroll)
+    {
+        const AchGeometry g = achGeometry();
+        Canvas &screen = touchCanvas.canvas();
+        Canvas band = screen;
+        band.tiles = screen.tiles + (kAchListTop / 8) * (screen.width / 8) * 8;
+        band.height = g.listHeight;
+        const FontView &small = touchCanvas.font(kFontSmall);
+        const hldata::AchievementTracker &tracker = achievements.tracker;
+        const bool current = chapter == achChapter_ && x == achSlide_;
+        for (int n = 0; n < achCount(chapter); ++n)
+        {
+            const int y = n * g.row - scroll;
+            if (y + g.row <= 0 || y >= g.listHeight)
+                continue;
+            const int id = achOf(chapter, n);
+            const bool got = tracker.has(id);
+            const bool chosen = current && n == achSelected_;
+            band.button(x + 2, y + 1, kAchListWidth, g.row - 2, chosen || (current && n == achPressed_ && achDrag_ == 0));
+            if (chosen)
+                band.frame(x + 2, y + 1, kAchListWidth, g.row - 2, kUiOrange + 2);
+            drawTrophy(band, x + 6, y + (g.row - 12) / 2, got);
+            char status[16] = "";
+            if (got)
+                std::snprintf(status, sizeof(status), "earned");
+            else if (hldata::kAchievements[id].goal != 0)
+                std::snprintf(status, sizeof(status), "%d/%d", tracker.progress(id), hldata::kAchievements[id].goal);
+            const int statusWide = textWidth(small, status);
+            const int textY = y + (g.row - g.line) / 2;
+            const char *title = achTitle(tracker, id);
+            drawText(band, small, x + 22, textY, title, inkFor(small, got ? kUiWhite : kUiGrey),
+                     textFit(small, title, kAchListWidth - 26 - statusWide));
+            drawText(band, small, x + kAchListWidth - 2 - statusWide, textY, status,
+                     inkFor(small, got ? kUiOrange : kUiWhite));
+        }
+    }
+
+    /// The box under the list: what the row touched asks for, in full; or,
+    /// with none touched, how many are earned and how to find the rest.
+    void Menu::drawAchDetail()
+    {
+        const AchGeometry g = achGeometry();
+        Canvas &canvas = touchCanvas.canvas();
+        const FontView &small = touchCanvas.font(kFontSmall);
+        const hldata::AchievementTracker &tracker = achievements.tracker;
+        canvas.fill(0, g.detailTop - 1, 256, g.detailHeight + 2, kUiBack);
+        canvas.frame(2, g.detailTop, 252, g.detailHeight, kUiEdge);
+        const char *rest = nullptr;
+        Ink ink = inkFor(small, kUiGrey);
+        int line = 0;
+        if (achSelected_ >= 0 && achSelected_ < achCount(achChapter_))
+        {
+            const int id = achOf(achChapter_, achSelected_);
+            rest = achText(tracker, id);
+            ink = inkFor(small, tracker.has(id) ? kUiWhite : kUiGrey);
+        }
+        else
+        {
+            char earned[40];
+            std::snprintf(earned, sizeof(earned), "%d of %d earned", tracker.earned(),
+                          static_cast<int>(hldata::kAchievementCount));
+            drawText(canvas, small, 7, g.detailTop + 2, earned, inkFor(small, kUiOrange));
+            line = 1;
+            rest = "Touch one to read it. Slide the list, or touch < >, for another chapter.";
+        }
+        for (; line < 3 && *rest != '\0'; ++line)
+        {
+            const int fits = wrapped(small, rest, 244);
+            drawText(canvas, small, 7, g.detailTop + 2 + line * g.line, rest, ink, fits);
+            rest = skipSpaces(rest + fits);
+        }
+    }
+
+    void Menu::drawAchBar()
+    {
+        touchCanvas.canvas().fill(0, kAchBarTop, 256, 192 - kAchBarTop, kUiBack);
+        drawAchButton(kAchPopupsBox, settings.achievementPopups ? "POP-UPS: ON" : "POP-UPS: OFF",
+                      achPressed_ == kAchPopups);
+        drawAchButton(kAchBackBox, "BACK", achPressed_ == kAchBack);
+    }
+
+    int Menu::achHit(int x, int y) const
+    {
+        if (kAchLeftBox.has(x, y))
+            return kAchLeft;
+        if (kAchRightBox.has(x, y))
+            return kAchRight;
+        if (kAchPopupsBox.has(x, y))
+            return kAchPopups;
+        if (kAchBackBox.has(x, y))
+            return kAchBack;
+        const AchGeometry g = achGeometry();
+        if (y < kAchListTop || y >= kAchListTop + g.listHeight)
+            return kAchNothing;
+        const int n = (y - kAchListTop + achScroll_) / g.row;
+        return n < achCount(achChapter_) && x >= 2 && x < 2 + kAchListWidth ? n : kAchList;
+    }
+
+    /// The next chapter (1) or the last (-1), slid in.
+    void Menu::achTurn(int step)
+    {
+        sound.ui(kUiSoundPress);
+        achSlideTo_ = step > 0 ? -256 : 256;
+    }
+
+    /// Row `row` read out (-1: none), and kept in sight.
+    void Menu::achSelect(int row)
+    {
+        const AchGeometry g = achGeometry();
+        achSelected_ = row;
+        if (row >= 0)
+        {
+            if (row * g.row < achScroll_)
+                achScroll_ = row * g.row;
+            if ((row + 1) * g.row > achScroll_ + g.listHeight)
+                achScroll_ = (row + 1) * g.row - g.listHeight;
+        }
+        const int most = achMostScroll(achChapter_, g);
+        achScroll_ = achScroll_ < 0 ? 0 : (achScroll_ > most ? most : achScroll_);
+        drawAchList();
+        drawAchDetail();
+    }
+
+    Menu::Action Menu::achLeave()
+    {
+        sound.ui(kUiSoundPress);
+        page_ = title_ ? Page::Title : (netGame.playing() ? Page::NetPause : Page::Main);
+        settings.save();
+        active_ = -1;
+        touching_ = (keysHeld() & KEY_TOUCH) != 0;
+        draw();
+        return Action::None;
+    }
+
+    Menu::Action Menu::achievementsFrame()
+    {
+        const AchGeometry g = achGeometry();
+        const std::uint32_t held = keysHeld();
+        const std::uint32_t pressed = held & ~achHeld_;
+        achHeld_ = held;
+
+        // The buttons: L and R (or left and right) another chapter; up and
+        // down the row read out; B back.
+        if (achDrag_ == 0 && achSlide_ == 0 && achSlideTo_ == 0 && !achTouching_)
+        {
+            if (pressed & (KEY_R | KEY_RIGHT))
+                achTurn(1);
+            else if (pressed & (KEY_L | KEY_LEFT))
+                achTurn(-1);
+            else if (pressed & (KEY_UP | KEY_DOWN))
+            {
+                const int last = achCount(achChapter_) - 1;
+                int row = achSelected_ < 0 ? 0 : achSelected_ + ((pressed & KEY_DOWN) ? 1 : -1);
+                row = row < 0 ? 0 : (row > last ? last : row);
+                sound.ui(kUiSoundTick);
+                achSelect(row);
+            }
+            else if (pressed & KEY_B)
+            {
+                return achLeave();
+            }
+        }
+
+        // A slide let go of (or asked for) finishes by itself: quickly,
+        // then slowing; past the edge, the next chapter is the one shown.
+        if (achDrag_ != 2 && achSlide_ != achSlideTo_)
+        {
+            const int left = achSlideTo_ - achSlide_;
+            int step = left / 3;
+            if (step > -8 && step < 8)
+                step = left > 0 ? (left < 8 ? left : 8) : (left > -8 ? left : -8);
+            achSlide_ += step;
+            if (achSlide_ == achSlideTo_ && achSlideTo_ != 0)
+            {
+                achChapter_ = achWrap(achChapter_ + (achSlideTo_ < 0 ? 1 : -1));
+                achSlide_ = achSlideTo_ = 0;
+                achScroll_ = 0;
+                achSelected_ = -1;
+                drawAchHeader();
+                drawAchDetail();
+            }
+            drawAchList();
+        }
+
+        // The stylus.
+        const bool down = (held & KEY_TOUCH) != 0;
+        if (down)
+        {
+            touchPosition touch;
+            touchRead(&touch);
+            achX_ = touch.px;
+            achY_ = touch.py;
+        }
+        if (down && !achTouching_)
+        {
+            // (While a slide is going on, a touch only waits for it.)
+            achPressed_ = achSlide_ == achSlideTo_ ? achHit(achX_, achY_) : kAchNothing;
+            achDownX_ = achX_;
+            achDownY_ = achY_;
+            achScrollAt_ = achScroll_;
+            achDrag_ = 0;
+            if (achPressed_ == kAchLeft || achPressed_ == kAchRight)
+                drawAchHeader();
+            else if (achPressed_ == kAchPopups || achPressed_ == kAchBack)
+                drawAchBar();
+            else if (achPressed_ >= 0)
+                drawAchList();
+        }
+        else if (down && achTouching_)
+        {
+            const int dx = achX_ - achDownX_, dy = achY_ - achDownY_;
+            const int ax = dx < 0 ? -dx : dx, ay = dy < 0 ? -dy : dy;
+            if (achDrag_ == 0 && (achPressed_ >= 0 || achPressed_ == kAchList) && (ax > kAchSlop || ay > kAchSlop))
+            {
+                // Moved: no longer a touch of a row, but the list moving.
+                achDrag_ = ax > ay ? 2 : 1;
+                drawAchList();
+            }
+            if (achDrag_ == 1)
+            {
+                const int most = achMostScroll(achChapter_, g);
+                int scroll = achScrollAt_ - dy;
+                scroll = scroll < 0 ? 0 : (scroll > most ? most : scroll);
+                if (scroll != achScroll_)
+                {
+                    achScroll_ = scroll;
+                    drawAchList();
+                }
+            }
+            else if (achDrag_ == 2)
+            {
+                const int slide = dx < -256 ? -256 : (dx > 256 ? 256 : dx);
+                if (slide != achSlide_)
+                {
+                    achSlide_ = slide;
+                    drawAchList();
+                }
+            }
+        }
+        else if (!down && achTouching_)
+        {
+            const int was = achPressed_;
+            const int drag = achDrag_;
+            achPressed_ = kAchNothing;
+            achDrag_ = 0;
+            const bool same = drag == 0 && was != kAchNothing && was != kAchList && achHit(achX_, achY_) == was;
+            if (drag == 2)
+            {
+                // Slid far enough (a fifth of the way, a flick): the rest of
+                // the way; else back.
+                achSlideTo_ = achSlide_ < -kAchSwipe ? -256 : (achSlide_ > kAchSwipe ? 256 : 0);
+                if (achSlideTo_ != 0)
+                    sound.ui(kUiSoundTick);
+            }
+            else if (same && was == kAchLeft)
+            {
+                achTurn(-1);
+                drawAchHeader();
+            }
+            else if (same && was == kAchRight)
+            {
+                achTurn(1);
+                drawAchHeader();
+            }
+            else if (same && was == kAchPopups)
+            {
+                sound.ui(kUiSoundPress);
+                settings.achievementPopups = !settings.achievementPopups;
+                drawAchBar();
+            }
+            else if (same && was == kAchBack)
+            {
+                achTouching_ = false;
+                return achLeave();
+            }
+            else if (same && was >= 0)
+            {
+                sound.ui(kUiSoundPress);
+                achSelect(was);
+            }
+            else
+            {
+                // (Let go somewhere else: nothing, and nothing pressed.)
+                if (was == kAchLeft || was == kAchRight)
+                    drawAchHeader();
+                else if (was == kAchPopups || was == kAchBack)
+                    drawAchBar();
+                else
+                    drawAchList();
+            }
+        }
+        achTouching_ = down;
+        return Action::None;
     }
 
     void Menu::drawRow(int row, bool down)
@@ -778,6 +1279,9 @@ namespace hlrt
             page_ = Page::Options;
             draw();
             break;
+        case kAchievementsOpen:
+            openAchievements();
+            break;
         case kBack:
             // Out of a lobby: out of the game, and the radio silent.
             if (page_ == Page::NetHost || page_ == Page::NetJoin || page_ == Page::NetLobby)
@@ -1000,6 +1504,8 @@ namespace hlrt
 
     Menu::Action Menu::frame()
     {
+        if (page_ == Page::Achievements)
+            return achievementsFrame();
         // A game between consoles: the lobby changes without being touched.
         if (page_ == Page::NetJoin)
         {

@@ -101,6 +101,10 @@ void Global::InitVideo()
     // NEA puts the 3D screen on top by default; said explicitly because the
     // whole control scheme depends on the touch screen NOT being the 3D one.
     NEA_MainScreenSetOnTop();
+    // The 3D picture and the sprites at priority 1, so that a fade's colour
+    // can be put over both, at 0 (render/ScreenFade.cpp). (The sprites are
+    // still over the picture: of the same priority, they are drawn first.)
+    REG_BG0CNT = static_cast<std::uint16_t>((REG_BG0CNT & ~3) | BG_PRIORITY(1));
     NEA_SetDepthBufferMode(NEA_WBUFFER);
     // A DSi has a second set of DMA channels, which NEA uses for display
     // lists when it is told it may: they can feed the geometry engine in the

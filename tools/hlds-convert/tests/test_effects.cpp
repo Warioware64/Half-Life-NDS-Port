@@ -545,15 +545,22 @@ namespace
             if (ms == 1200)
                 full = g.logic.fadeLevel;
         }
-        check(half >= 7 && half <= 9 && full == 16 && g.logic.fadeLevel == 0 && !g.logic.fading,
-              "a fade goes dark over its time, holds, and lets go");
-        fade.extra[3] = 1; // from black
+        check(half >= 120 && half <= 136 && full == 255 && g.logic.fadeLevel == 0 && !g.logic.fading &&
+                  g.logic.fadeColour.value == 0,
+              "a fade goes dark over its time, holds, and lets go (black, from a map cooked without its colour)");
+        // From the colour: lifting at once, as the game's does -- its hold
+        // keeps nothing dark.
+        fade.extra[3] = 1 | (31u << 10 | 31u) << 8 | 0x80000000u; // from magenta
         logicUse(g.logic, g.player, beam, -1, kUseToggle, 0);
-        effectsTick(g.logic, g.player, 25);
         const int start = g.logic.fadeLevel;
+        for (int ms = 0; ms < 250; ms += 25)
+            effectsTick(g.logic, g.player, 25);
+        const int quarter = g.logic.fadeLevel;
         for (int ms = 0; ms < 2000; ms += 25)
             effectsTick(g.logic, g.player, 25);
-        check(start == 16 && g.logic.fadeLevel == 0, "... or starts dark and clears");
+        check(start == 255 && quarter >= 184 && quarter <= 198 && g.logic.fadeLevel == 0 && !g.logic.fading,
+              "... or starts covered and clears from the first moment");
+        check(g.logic.fadeColour.value == (31u << 10 | 31u), "... in its own colour");
     }
 
     /// Beams whose ends are not fixed: an end that follows something that

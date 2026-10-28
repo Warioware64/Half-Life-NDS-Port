@@ -2889,7 +2889,16 @@ namespace hlds
                     std::clamp(std::lround(numberKey(entity, "holdtime") * 1000), 0L, 60000L));
                 record.extra[2] = static_cast<std::uint32_t>(
                     std::clamp(std::lround(numberKey(entity, "renderamt", 255)), 0L, 255L));
-                record.extra[3] = static_cast<std::uint32_t>(spawnflags & 1);
+                // Fade From; and its colour, as RGB15 (bit 31: it has one --
+                // the DS was once given none, and read black).
+                std::uint32_t colour = 0;
+                double rgb[3];
+                if (entity.vec3("rendercolor", rgb))
+                {
+                    for (int k = 0; k < 3; ++k)
+                        colour |= static_cast<std::uint32_t>(std::clamp(std::lround(rgb[k]), 0L, 255L) >> 3) << (5 * k);
+                }
+                record.extra[3] = static_cast<std::uint32_t>(spawnflags & 1) | colour << 8 | 0x80000000u;
             }
             else if (cls == "multi_manager")
             {

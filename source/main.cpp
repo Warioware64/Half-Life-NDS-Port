@@ -3,6 +3,7 @@
 #include "net/NetGame.hpp"
 #include "global_header.hpp"
 
+#include "Achievements.hpp"
 #include "DebugLog.hpp"
 #include "Global.hpp"
 #include "HlCommands.hpp"
@@ -289,6 +290,12 @@ namespace
         (void)stored;
         currentMap = name;
         hlrt::debugOverlay.setMapName(currentMap.c_str());
+        achievements.attach(name);
+        if (changing)
+        {
+            achievements.travelled(left, name);
+            achievements.flush();
+        }
 
         // (What they carry of the later weapons comes along as the rest does:
         // it is not in the Arrival, which is as it always was.)
@@ -465,6 +472,25 @@ namespace
         // (Not in a game between consoles: nobody there may cheat.)
         if (hlrt::netGame.playing())
             return "not in a game between consoles";
+        // What the game would only let through with sv_cheats on.
+        switch (line.command)
+        {
+        case Command::GiveAll:
+        case Command::Give:
+        case Command::Heal:
+        case Command::Health:
+        case Command::God:
+        case Command::Notarget:
+        case Command::Noclip:
+        case Command::BarnacleKill:
+        case Command::KillAll:
+        case Command::Gravity:
+        case Command::Timescale:
+            achievements.cheated();
+            break;
+        default:
+            break;
+        }
         switch (line.command)
         {
         case Command::Help:
@@ -687,6 +713,36 @@ namespace
     /// easy, 2 medium, 3 hard), MEDIUM if it has none.
     int debugSkill = hldata::kSkillMedium;
 
+    /// A fade to look at (tools/emu's EMU_FADE: a line "fade r g b amount
+    /// duration-ms hold-ms from after-ms" in debug_start.txt), put on the
+    /// screen as an env_fade would be, `afterMs` into the game. -1: none.
+    struct DebugFade
+    {
+        int afterMs = -1;
+        int colour = 0, amount = 255, durationMs = 1000, holdMs = 0, from = 1;
+    } debugFade;
+    std::uint32_t debugFadeStart = 0;
+    void debugFadeTick()
+    {
+        if (debugFade.afterMs < 0)
+            return;
+        if (debugFadeStart == 0)
+            debugFadeStart = Global::vblanks();
+        if (static_cast<int>(Global::vblanks() - debugFadeStart) * 1000 / 60 < debugFade.afterMs)
+            return;
+        // (The fields the env_fade sets: shared/HlEffects.hpp.)
+        hldata::LogicWorld &w = hlrt::game.logic;
+        w.fadeFrom = debugFade.from != 0;
+        w.fadeMs = 0;
+        w.fadeWholeMs = debugFade.durationMs;
+        w.fadeHoldMs = debugFade.holdMs;
+        w.fadeDark = static_cast<std::uint8_t>(debugFade.amount);
+        w.fadeColour.value = static_cast<std::uint16_t>(debugFade.colour);
+        w.fadeLevel = w.fadeFrom ? w.fadeDark : 0;
+        w.fading = true;
+        debugFade.afterMs = -1;
+    }
+
     /// A development aid (tools/emu): a card with debug_start.txt on it starts
     /// where that says, save or no save.
     bool debugStart()
@@ -707,6 +763,17 @@ namespace
             hlrt::modelDraw.setLimit(n[6]);
         if (given == 10 && n[9] >= hldata::kSkillEasy && n[9] <= hldata::kSkillHard)
             debugSkill = n[9];
+        int f[8];
+        if (std::fscanf(file, " fade %d %d %d %d %d %d %d %d", &f[0], &f[1], &f[2], &f[3], &f[4], &f[5], &f[6],
+                        &f[7]) == 8)
+        {
+            debugFade.colour = (f[0] >> 3) | (f[1] >> 3) << 5 | (f[2] >> 3) << 10;
+            debugFade.amount = f[3] < 0 ? 0 : (f[3] > 255 ? 255 : f[3]);
+            debugFade.durationMs = f[4];
+            debugFade.holdMs = f[5];
+            debugFade.from = f[6];
+            debugFade.afterMs = f[7];
+        }
         std::fclose(file);
         return true;
     }
@@ -742,6 +809,8 @@ int main(int argc, char *argv[])
     hlrt::netGame.setMaps(multiplayerMaps);
 
     settings.load();
+    achievements.load();
+    achievements.started();
     const bool debugging = debugStart();
 
     global.InitVideo();
@@ -970,6 +1039,8 @@ int main(int argc, char *argv[])
                     {
                         hlrt::bottomScreen.setPressed(hlrt::input.touchOn);
                         hlrt::game.frame(elapsed);
+                        achievements.frame();
+                        debugFadeTick();
                     }
                 }
                 else
@@ -981,6 +1052,7 @@ int main(int argc, char *argv[])
                     {
                         hlrt::input.quiet();
                         hlrt::game.frame(elapsed);
+                        achievements.frame();
                         hlrt::input.startPressed = startPressed;
                     }
                     using hlrt::Menu;
@@ -1050,6 +1122,7 @@ int main(int argc, char *argv[])
                     {
                         paused = false;
                         settings.save();
+                        achievements.flush();
                         // (Once the card has been written to and the
                         // pictures are back: nothing then stands in the
                         // sound's way.)
@@ -1187,8 +1260,9 @@ int main(int argc, char *argv[])
                 hlrt::gpuStats.world(stats.polygons, stats.surfacesCut, stats.brushesDropped, stats.brushesOverflow,
                                      static_cast<std::uint32_t>(global.heapHeadroom()));
                 lastPass = now;
-                // A fade the map has asked for: the top screen's brightness.
-                hlrt::screenFade.setFade(hlrt::game.logic.fadeLevel);
+                // A fade the map has asked for: over the top screen, in its
+                // colour.
+                hlrt::screenFade.setFade(hlrt::game.logic.fadeLevel, hlrt::game.logic.fadeColour.value);
                 hlrt::screenFade.tick();
                 const hlrt::GpuStats::Frame &seen = hlrt::gpuStats.last();
                 // (More than a second is a load, not a slow pass.)

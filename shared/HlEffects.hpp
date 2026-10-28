@@ -268,11 +268,16 @@ namespace hldata
             }
             break;
         case LogicKind::Fade:
+            // extra[3]: bit 0 Fade From; with bit 31, the colour (RGB15) in
+            // bits 8-23 (a map cooked before that is black).
             w.fadeFrom = (record.extra[3] & 1) != 0;
             w.fadeMs = 0;
             w.fadeWholeMs = static_cast<std::int32_t>(record.extra[0]);
             w.fadeHoldMs = static_cast<std::int32_t>(record.extra[1]);
-            w.fadeDark = static_cast<std::uint8_t>(record.extra[2] * 16 / 255);
+            w.fadeDark = static_cast<std::uint8_t>(record.extra[2] > 255 ? 255 : record.extra[2]);
+            w.fadeColour.value =
+                (record.extra[3] & 0x80000000u) ? static_cast<std::uint16_t>((record.extra[3] >> 8) & 0x7FFF) : 0;
+            w.fadeLevel = w.fadeFrom ? w.fadeDark : 0;
             w.fading = true;
             break;
         default:
@@ -415,25 +420,25 @@ namespace hldata
     {
         if (w.shakeMs > 0)
             w.shakeMs -= ms;
-        // The fade: how dark the screen is now, of 16. Into black (and then
-        // held, and then let go at once), or from black.
+        // The fade: how far it is over the picture now, of 255, as the
+        // game's screen fade works it out (alpha = speed * (end - now)).
+        // Into the colour over `whole`, held, then let go at once; or from
+        // it, lifting from the first moment -- a fade from is not held (the
+        // game's hold only keeps it in its list).
         if (w.fading)
         {
             w.fadeMs += ms;
             const std::int32_t whole = w.fadeWholeMs > 0 ? w.fadeWholeMs : 1;
-            const std::int32_t along = w.fadeMs >= whole ? 16 : (w.fadeMs * 16) / whole;
+            const std::int32_t along = w.fadeMs >= whole ? whole : w.fadeMs;
             if (w.fadeFrom)
             {
-                // (Held dark first, then lifting.)
-                const std::int32_t lifting = w.fadeMs - w.fadeHoldMs;
-                w.fadeLevel = static_cast<std::uint8_t>(
-                    lifting <= 0 ? w.fadeDark : (lifting >= whole ? 0 : w.fadeDark * (whole - lifting) / whole));
-                if (lifting >= whole)
+                w.fadeLevel = static_cast<std::uint8_t>(w.fadeDark * (whole - along) / whole);
+                if (w.fadeMs >= whole)
                     w.fading = false;
             }
             else
             {
-                w.fadeLevel = static_cast<std::uint8_t>(w.fadeDark * along / 16);
+                w.fadeLevel = static_cast<std::uint8_t>(w.fadeDark * along / whole);
                 if (w.fadeMs >= whole + w.fadeHoldMs)
                 {
                     w.fading = false;

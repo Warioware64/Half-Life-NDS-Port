@@ -27,6 +27,7 @@
 //
 // std-only and inline, like the collision it sits on: the host tests run it.
 
+#include "HlAchEvents.hpp"
 #include "HlActors.hpp"
 #include "HlLevelReader.hpp"
 #include "HlPlayerMove.hpp"
@@ -227,6 +228,9 @@ namespace hldata
         /// caller shows them and sets the count back to 0.
         std::uint16_t shown[4] = {};
         int shownCount = 0;
+        /// What the achievements are told of (HlAchEvents.hpp): the
+        /// caller's, and emptied by it. Null: nothing is told.
+        AchEvents *achievements = nullptr;
         /// What has broken since the caller last looked (record indices):
         /// the caller throws its pieces and sets the count back to 0. And
         /// the way the blow that last struck something was going (Q12),
@@ -257,13 +261,15 @@ namespace hldata
 
         // What is seen and felt (HlEffects.hpp). The view's shake: how long
         // it has left, of how long, and how far it throws the eye at its
-        // worst. The screen's fade: how dark it is now, of 16 (the caller
-        // sets the screen's brightness by it).
+        // worst. The screen's fade: how far it is over the picture now, of
+        // 255 (the game's alpha), and in what colour (RGB15; black unless
+        // the env_fade said otherwise): the caller shows it.
         std::int32_t shakeMs = 0, shakeWholeMs = 0;
         fx shakeAmplitude = 0;
         bool fading = false, fadeFrom = false;
         std::int32_t fadeMs = 0, fadeWholeMs = 0, fadeHoldMs = 0;
         std::uint8_t fadeDark = 0, fadeLevel = 0;
+        Unsaved<std::uint16_t> fadeColour;
         std::uint32_t effectSeed = 4711;
         /// The level's Sprites, for how many frames each has; may be null.
         const SpriteRef *sprites = nullptr;
@@ -638,10 +644,14 @@ namespace hldata
     {
         if (name == 0 || depth > kMaxFireDepth)
             return;
+        bool answered = false;
         for (int i = 0; i < w.recordCount; ++i)
         {
             if (w.records[i].name == name && !w.states[i].dead)
+            {
+                answered = true;
                 logicUse(w, player, i, caller, useType, depth + 1);
+            }
         }
         // A turret or a monster by that name is switched: it finds out when
         // it next thinks (HlMonsters.hpp, HlAi.hpp).
@@ -649,8 +659,17 @@ namespace hldata
         {
             ActorState &actor = w.actors->states[i];
             if (actor.active && actor.name == name && (isTurret(actor.kind) || actorThinks(actor.kind)))
+            {
+                answered = true;
                 actor.switched = static_cast<std::uint8_t>(1 + useType);
+            }
         }
+        // (Only what something still there answered to: a name whose
+        // entities are gone is fired at nothing -- c5a1's loser_mm is,
+        // once the offer is taken.)
+        if (answered && w.achievements != nullptr && w.nameHashes != nullptr && name < w.nameCount &&
+            w.achievements->watches(w.nameHashes[name]))
+            w.achievements->push(AchEventType::Fired, w.nameHashes[name]);
     }
 
     /// Remove every entity called `name`: it stops working, and if it is a
@@ -1421,6 +1440,8 @@ namespace hldata
             state.timer = -1;
             if (w.brokeCount < 4)
                 w.broke[w.brokeCount++] = static_cast<std::uint16_t>(index);
+            if (w.achievements != nullptr)
+                w.achievements->push(AchEventType::Broke, 0);
             recordSound(w, index, false); // what it is made of, breaking
             if (record.brush != kNoBrush)
             {
@@ -3928,6 +3949,8 @@ namespace hldata
             {
                 ++state.bits;
                 logicHurt(player, -1);
+                if (w.achievements != nullptr)
+                    w.achievements->push(AchEventType::Soda, 0);
                 if (w.actors != nullptr)
                 {
                     const fx out[3] = {0, 0, -fxFromInt(40)};
@@ -3992,7 +4015,8 @@ namespace hldata
             w.fadeMs = 0;
             w.fadeWholeMs = static_cast<std::int32_t>(record.extra[0]);
             w.fadeHoldMs = static_cast<std::int32_t>(record.extra[1]) + 1000;
-            w.fadeDark = static_cast<std::uint8_t>(record.extra[2] * 16 / 255);
+            w.fadeDark = static_cast<std::uint8_t>(record.extra[2] > 255 ? 255 : record.extra[2]);
+            w.fadeColour.value = 0;
             w.fading = true;
             if (record.extra[3] != 0xFFFFFFFFu)
             {

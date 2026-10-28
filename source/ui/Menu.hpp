@@ -78,7 +78,34 @@ namespace hlrt
             TouchAim,    ///< how the stylus turns the view, and how hard it must press
             Buttons,     ///< which button does what (a custom layout)
             Difficulty,  ///< a new game's: EASY, MEDIUM, DIFFICULT
+            Achievements, ///< those earned and those not, a chapter at a time (its own page)
         };
+        // The achievements' page: drawn and touched apart from the rows
+        // (Menu.cpp). A chapter at a time, its achievements as rows to
+        // touch; the list slid aside for another chapter, dragged up and
+        // down when it is longer than there is room for.
+        int achChapter_ = 0;   ///< the chapter shown (kept while the console is on)
+        int achScroll_ = 0;    ///< how far down its list is scrolled, in pixels
+        int achSelected_ = -1; ///< the row read out in the box under the list; -1: none
+        int achSlide_ = 0;     ///< how far across the list is slid, in pixels
+        int achSlideTo_ = 0;   ///< ... where it is going by itself: 0 back; -256, 256 the next, the last chapter
+        int achPressed_ = -1;  ///< what the stylus went down on (a row, or kAch* in Menu.cpp)
+        int achDrag_ = 0;      ///< 0 a touch; 1 scrolling; 2 sliding
+        int achDownX_ = 0, achDownY_ = 0, achX_ = 0, achY_ = 0, achScrollAt_ = 0;
+        bool achTouching_ = false;
+        std::uint32_t achHeld_ = 0; ///< the buttons held a frame ago (so that only a press counts)
+        void openAchievements();
+        Action achievementsFrame();
+        Action achLeave();
+        void achTurn(int step);
+        void achSelect(int row);
+        int achHit(int x, int y) const;
+        void drawAchievements();
+        void drawAchHeader();
+        void drawAchList();
+        void drawAchRows(int chapter, int x, int scroll);
+        void drawAchDetail();
+        void drawAchBar();
         /// The buttons page: which of its two screens; and the action whose
         /// button is being asked for (-1: none), with what was held when it
         /// was asked (so that only a new press counts).

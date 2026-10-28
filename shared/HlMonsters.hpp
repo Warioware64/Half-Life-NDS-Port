@@ -660,7 +660,10 @@ namespace hldata
         }
         if (actor.active && isTurret(actor.kind))
         {
+            const bool standing = actor.ai < kAiDying;
             turretHurt(w, index, damage, bullet, group);
+            if (standing && actor.ai >= kAiDying && w.achievements != nullptr)
+                w.achievements->push(AchEventType::Killed, 0, actor.kind, attacker == kAiPlayer ? kAchByPlayer : 0);
             return;
         }
         if (actor.active && isMine(actor.kind))
@@ -701,6 +704,9 @@ namespace hldata
             return 0;
         ActorWorld &a = *w.actors;
         int killed = 0;
+        // (What a cheat kills counts for nothing.)
+        if (w.achievements != nullptr)
+            ++w.achievements->muted;
         for (int i = 0; i < a.count; ++i)
         {
             const ActorState &actor = a.states[i];
@@ -717,6 +723,8 @@ namespace hldata
             }
             ++killed;
         }
+        if (w.achievements != nullptr)
+            --w.achievements->muted;
         return killed;
     }
 
@@ -3200,6 +3208,8 @@ namespace hldata
         if (!detail::itemTakeAt(w, player, index, a.got))
             return false;
         a.got |= kGotItem;
+        if (w.achievements != nullptr)
+            w.achievements->push(AchEventType::Picked, 0, actor.item);
         if (w.heard != nullptr)
         {
             const auto item = static_cast<ItemKind>(actor.item);

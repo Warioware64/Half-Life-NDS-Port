@@ -74,6 +74,8 @@ namespace hlrt
             slots_[s].written = slots_[s].settled = 0;
             if (slots_[s].message.flags & kMessageLogo)
                 drawLogo(slots_[s], s);
+            if (slots_[s].badge)
+                drawBadge(slots_[s], s);
             place(slots_[s], s);
         }
     }
@@ -96,7 +98,7 @@ namespace hlrt
                 // (Wide, 64 by 32; drawn added to what is behind.)
                 entry[0] = static_cast<std::uint16_t>((slot.lines[l].y & 0xFF) | 0x0400 | 0x4000);
                 entry[1] = static_cast<std::uint16_t>((k * 64) | 0xC000);
-                entry[2] = static_cast<std::uint16_t>(band * 128 + k * 8);
+                entry[2] = static_cast<std::uint16_t>((band * 128 + k * 8) | ATTR2_PRIORITY(1));
             }
         }
     }
@@ -361,6 +363,60 @@ namespace hlrt
         const int shown = slot.elapsed - slot.message.fadeInMs;
         slot.message.holdMs = static_cast<std::uint16_t>((shown > 0 ? shown : 0) + holdMs);
         noticeSlot_ = -1;
+    }
+
+    bool TopText::announce(const char *text, int holdMs)
+    {
+        ensure();
+        int index = -1;
+        for (int s = 0; s < kSlots && index < 0; ++s)
+        {
+            if (!slots_[s].busy)
+                index = s;
+        }
+        if (index < 0)
+            return false;
+        // Under the notice's corner, in the HUD's amber, the trophy's width
+        // in from the edge.
+        MessageRecord m{};
+        m.x = 24;
+        m.y = 6;
+        m.effect = kMessageFade;
+        m.colour = m.colour2 = static_cast<std::uint16_t>(31 | 20 << 5 | 2 << 10);
+        m.fadeInMs = 250;
+        m.holdMs = static_cast<std::uint16_t>(holdMs);
+        m.fadeOutMs = 600;
+        font_ = kFontMedium;
+        layout(slots_[index], index, m, text);
+        font_ = -1;
+        if (!slots_[index].busy)
+            return false;
+        slots_[index].badge = true;
+        drawBadge(slots_[index], index);
+        return true;
+    }
+
+    /// A cup on a stem, 16 by 16, in the band of the slot's first line: in
+    /// its inks, so that it fades as the writing does.
+    void TopText::drawBadge(const Slot &slot, int index)
+    {
+        static constexpr const char *kTrophy[16] = {
+            "..############..", ".#.#o########.#.", "#..#o########..#", "#..#o########..#",
+            ".#.#o########.#.", "..##o#########..", "...#o########...", "....#o######....",
+            ".....######.....", "......####......", ".......##.......", ".......##.......",
+            "......####......", ".....######.....", "....########....", "................",
+        };
+        const int top = index * kLines * kBandHeight;
+        const int left = slot.lines[0].x - 20;
+        for (int y = 0; y < 16; ++y)
+        {
+            for (int x = 0; x < 16; ++x)
+            {
+                const char c = kTrophy[y][x];
+                if (c != '.')
+                    canvas_.pixel(left + x, top + y, inkBase(index) + (c == 'o' ? 1 : 2));
+            }
+        }
     }
 
     void TopText::clear()

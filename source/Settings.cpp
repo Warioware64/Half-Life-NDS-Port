@@ -39,6 +39,7 @@ void Settings::load()
         for (int a = 0; a < hldata::kActionCount; ++a)
             keys[a] = data.keys[a];
         autoaim = data.autoaim != 0;
+        achievementPopups = data.achievementPopups != 0;
     }
 }
 
@@ -66,6 +67,7 @@ bool Settings::save() const
     for (int a = 0; a < hldata::kActionCount; ++a)
         data.keys[a] = keys[a];
     data.autoaim = autoaim ? 1 : 0;
+    data.achievementPopups = achievementPopups ? 1 : 0;
     const std::vector<std::uint8_t> bytes = hldata::writeSettings(data);
 
     std::FILE *file = std::fopen(global.dataPath("settings.dat").c_str(), "wb");

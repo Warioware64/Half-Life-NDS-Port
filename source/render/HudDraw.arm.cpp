@@ -224,7 +224,8 @@ namespace hlrt
         {
             shadow[n][0] = static_cast<std::uint16_t>((y & 0xFF) | 0x0400 | (shape << 14));
             shadow[n][1] = static_cast<std::uint16_t>((x & 0x1FF) | (size << 14));
-            shadow[n][2] = static_cast<std::uint16_t>(tileOf(sx, sy) | (bank << 12));
+            // (Priority 1: under a fade's colour, ScreenFade.)
+            shadow[n][2] = static_cast<std::uint16_t>(tileOf(sx, sy) | (bank << 12) | ATTR2_PRIORITY(1));
         }
         void hide(int n)
         {

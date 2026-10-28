@@ -59,6 +59,9 @@ namespace hlrt
         /// The COMMAND line's cheats, for the session (not saved): the
         /// player's state points here.
         hldata::Cheats cheats;
+        /// What the game has told the achievements this frame (the logic
+        /// points here once a map is loaded: Achievements::attach).
+        hldata::AchEvents achievements;
         /// Whether the crosshair is drawn (the COMMAND line's crosshair).
         bool crosshair = true;
         /// Whether the guns' aim may bend towards a monster (the OPTIONS'

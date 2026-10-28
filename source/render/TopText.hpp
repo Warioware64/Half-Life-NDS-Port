@@ -37,6 +37,11 @@ namespace hlrt
         void notice(const char *text);
         /// The notice goes, `holdMs` from now, fading.
         void endNotice(int holdMs);
+        /// Two lines in the top left corner, a trophy before them (an
+        /// achievement earned), shown for `holdMs` and faded out. Only in
+        /// a slot nothing is in: false, and nothing shown, if there is
+        /// none. `text` must stay where it is.
+        bool announce(const char *text, int holdMs);
         /// `ms` more milliseconds.
         void tick(int ms);
         /// Nothing written: the map is going.
@@ -58,6 +63,7 @@ namespace hlrt
             hldata::MessageRecord message{};
             Line lines[kLines];
             int lineCount = 0;
+            bool badge = false; ///< the trophy before its first line (announce)
             int letters = 0;  ///< in all its lines
             int elapsed = 0;  ///< ms
             int written = 0;  ///< letters on the sheet
@@ -77,6 +83,7 @@ namespace hlrt
         void colours(int index, const Slot &slot, int strength);
         void letter(const Slot &slot, int index, int n, bool fresh);
         void drawLogo(Slot &slot, int index);
+        void drawBadge(const Slot &slot, int index);
     };
 
     HL_ENGINE_OBJECT(TopText, topText);
