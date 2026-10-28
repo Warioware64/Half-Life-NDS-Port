@@ -389,8 +389,12 @@ Milestone 11, "levels of detail".
   becomes how solid it is. Against the dark that is the same; against
   something bright it is dimmer than the game's.
 - What the maps show and shake, from their own entities
-  (`shared/HlEffects.hpp`): sprites and glows (`env_sprite`, `env_glow`),
-  beams and lasers (`env_beam`, `env_laser`: straight or thrown about like
+  (`shared/HlEffects.hpp`): sprites and glows (`env_sprite`, `env_glow`; a
+  glow, render mode 3, by the engine's rule (`glowFalloff`, HlSprite.hpp):
+  unless its render fx is 14 it is drawn dist/200 of its size, the same on
+  the screen near or far, and only 19000/dist² as bright, from 0.05 up.
+  So a ceiling lamp far off is a bright point, as in the game, not a big
+  disc), beams and lasers (`env_beam`, `env_laser`: straight or thrown about like
   lightning, striking and striking again as the map times them; one that
   burns stops on the first thing in its way -- the player, a monster,
   something that breaks -- and burns it, so c1a1's lasers cut through its

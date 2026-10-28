@@ -3,14 +3,17 @@
 //
 // A sprite made here by hand is read back as it was written, and cooked: its
 // frames in an atlas where the level's record says, light turned into
-// see-through. Then, with HLDS_VALVE_DIR, the game's own.
+// see-through. How a glow fades with distance (glowFalloff). Then, with
+// HLDS_VALVE_DIR, the game's own -- and which of the maps' glows fade.
 
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
+#include <memory>
+
 #include "HlSprite.hpp"
-#include "TestBspBuilder.hpp"
+#include "TestGame.hpp"
 #include "hlds/SpriteCook.hpp"
 
 using namespace hlds;
@@ -151,14 +154,64 @@ namespace
         }
         std::printf("test_sprite: the common sprites at their largest: %dK texels\n", texels / 1024);
     }
+    /// The engine's glow rule: the size kept on the screen (dist / 200 of
+    /// itself), the brightness 19000 / dist^2, between 0.05 and all.
+    void testFalloff()
+    {
+        int scale = 0, bright = 0;
+        glowFalloff(50, scale, bright);
+        check(scale == 64 && bright == 256, "a glow 50 units off: a quarter of its size, all its brightness");
+        glowFalloff(200, scale, bright);
+        check(scale == 256 && bright == 121, "200 units off: its own size, 19000/40000 of its brightness");
+        glowFalloff(300, scale, bright);
+        check(scale == 384 && bright == 54, "300 units off: half as big again, a fifth as bright");
+        glowFalloff(1000, scale, bright);
+        check(scale == 1280 && bright == 13, "1000 units off: five times as big, never fainter than 0.05");
+        glowFalloff(0, scale, bright);
+        check(scale >= 1 && bright == 256, "at the eye: tiny, and no divide by nothing");
+    }
+
+    /// Which of a map's glows fade (record.extra[3] bit 3: render fx 14 does not).
+    void testMapGlows(const char *dir)
+    {
+        auto glows = [&](const char *map, const char *name, int &fading, int &kept)
+        {
+            auto g = std::make_unique<Game>();
+            std::string error;
+            fading = kept = 0;
+            if (!g->bsp.load(std::string(dir) + "/maps/" + map + ".bsp", error))
+                return false;
+            static Globals globals;
+            finish(*g, &globals, dir);
+            for (int i = 0; i < g->logic.recordCount; ++i)
+            {
+                const LogicRecord &r = g->logic.records[i];
+                if (r.kind != static_cast<std::uint8_t>(LogicKind::Sprite) || !(r.extra[3] & 2))
+                    continue;
+                if (name != nullptr && (r.name == 0 || g->logic.nameHashes[r.name] != nameHash(name)))
+                    continue;
+                (r.extra[3] & 8 ? kept : fading) += 1;
+            }
+            return true;
+        };
+        int fading = 0, kept = 0;
+        check(glows("c1a0e", "red", fading, kept) && fading == 4 && kept == 0,
+              "c1a0e's red alarm lights (render fx 0) fade with distance");
+        check(glows("c1a0b", nullptr, fading, kept) && kept >= 3,
+              "c1a0b's lamps in the tubes (env_glow, render fx 14) keep their size and brightness");
+    }
 } // namespace
 
 int main()
 {
     testMade();
+    testFalloff();
     const char *dir = std::getenv("HLDS_VALVE_DIR");
     if (dir != nullptr && dir[0] != '\0')
+    {
         testGame(dir);
+        testMapGlows(dir);
+    }
     else
         std::printf("test_sprite: HLDS_VALVE_DIR not set, the game's sprites were not read\n");
     if (g_failures == 0)

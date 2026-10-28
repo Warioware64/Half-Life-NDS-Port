@@ -551,6 +551,20 @@ namespace hlrt
                 ++text;
             return text;
         }
+        /// `count` characters of `text` (all of it if negative) at (x, y), in
+        /// no more than `width`: what does not fit is left off, and "..."
+        /// says so. Where it ends.
+        int drawFitted(Canvas &canvas, const FontView &font, int x, int y, const char *text, const Ink &ink, int width,
+                       int count = -1)
+        {
+            if (textWidth(font, text, count) <= width)
+                return drawText(canvas, font, x, y, text, ink, count);
+            int fits = textFit(font, text, width - textWidth(font, "..."));
+            while (fits > 0 && text[fits - 1] == ' ')
+                --fits;
+            const int end = drawText(canvas, font, x, y, text, ink, fits);
+            return drawText(canvas, font, end, y, "...", ink);
+        }
 
         // Where things are: the chapter between its arrows along the top;
         // the list, a band of whole rows of tiles (so that what is drawn
@@ -586,7 +600,7 @@ namespace hlrt
             AchGeometry g;
             g.line = touchCanvas.font(kFontSmall).height();
             g.row = g.line + 5 > 20 ? g.line + 5 : 20;
-            g.detailHeight = 3 * g.line + 4;
+            g.detailHeight = 4 * g.line + 4;
             g.detailTop = kAchBarTop - 2 - g.detailHeight;
             g.listHeight = (g.detailTop - 2 - kAchListTop) / 8 * 8;
             return g;
@@ -613,6 +627,21 @@ namespace hlrt
         {
             return hldata::kAchievements[id].hidden && !tracker.has(id) ? "Hidden achievement"
                                                                          : hldata::kAchievements[id].title;
+        }
+        /// What a row says at its end: earned, how far along, or nothing.
+        void achStatus(const hldata::AchievementTracker &tracker, int id, char *out, std::size_t size)
+        {
+            if (tracker.has(id))
+                std::snprintf(out, size, "earned");
+            else if (hldata::kAchievements[id].goal != 0)
+                std::snprintf(out, size, "%d/%d", tracker.progress(id), hldata::kAchievements[id].goal);
+            else
+                out[0] = '\0';
+        }
+        /// How wide a row's title may be, beside that.
+        int achTitleRoom(const FontView &font, const char *status)
+        {
+            return kAchListWidth - 28 - textWidth(font, status);
         }
         const char *achText(const hldata::AchievementTracker &tracker, int id)
         {
@@ -683,16 +712,14 @@ namespace hlrt
         canvas.fill(0, 0, 256, kAchListTop, kUiBack);
         drawAchButton(kAchLeftBox, "<", achPressed_ == kAchLeft);
         drawAchButton(kAchRightBox, ">", achPressed_ == kAchRight);
-        int earned = 0;
-        for (int n = 0; n < achCount(achChapter_); ++n)
-            earned += tracker.has(achOf(achChapter_, n)) ? 1 : 0;
-        char count[16];
-        std::snprintf(count, sizeof(count), "  %d/%d", earned, achCount(achChapter_));
+        // The chapter's name between the arrows, as much of it as there is
+        // room for (how many are earned in it is in the box below).
+        (void)tracker;
         const char *name = hldata::kAchChapterNames[achChapter_];
-        const int nameWide = textWidth(small, name), wide = nameWide + textWidth(small, count);
-        const int x = 128 - wide / 2, y = (kAchHeadHeight - small.height()) / 2 + 1;
-        drawText(canvas, small, x, y, name, inkFor(small, kUiOrange));
-        drawText(canvas, small, x + nameWide, y, count, inkFor(small, earned == achCount(achChapter_) ? kUiOrange : kUiWhite));
+        const int left = kAchLeftBox.x + kAchLeftBox.w + 4, room = kAchRightBox.x - 4 - left;
+        const int wide = textWidth(small, name);
+        const int x = wide <= room ? left + (room - wide) / 2 : left;
+        drawFitted(canvas, small, x, (kAchHeadHeight - small.height()) / 2 + 1, name, inkFor(small, kUiOrange), room);
     }
 
     /// The list: the chapter's rows where the stylus has put them, and,
@@ -743,16 +770,13 @@ namespace hlrt
             if (chosen)
                 band.frame(x + 2, y + 1, kAchListWidth, g.row - 2, kUiOrange + 2);
             drawTrophy(band, x + 6, y + (g.row - 12) / 2, got);
-            char status[16] = "";
-            if (got)
-                std::snprintf(status, sizeof(status), "earned");
-            else if (hldata::kAchievements[id].goal != 0)
-                std::snprintf(status, sizeof(status), "%d/%d", tracker.progress(id), hldata::kAchievements[id].goal);
+            char status[16];
+            achStatus(tracker, id, status, sizeof(status));
             const int statusWide = textWidth(small, status);
             const int textY = y + (g.row - g.line) / 2;
             const char *title = achTitle(tracker, id);
-            drawText(band, small, x + 22, textY, title, inkFor(small, got ? kUiWhite : kUiGrey),
-                     textFit(small, title, kAchListWidth - 26 - statusWide));
+            drawFitted(band, small, x + 22, textY, title, inkFor(small, got ? kUiWhite : kUiGrey),
+                       achTitleRoom(small, status));
             drawText(band, small, x + kAchListWidth - 2 - statusWide, textY, status,
                      inkFor(small, got ? kUiOrange : kUiWhite));
         }
@@ -768,28 +792,50 @@ namespace hlrt
         const hldata::AchievementTracker &tracker = achievements.tracker;
         canvas.fill(0, g.detailTop - 1, 256, g.detailHeight + 2, kUiBack);
         canvas.frame(2, g.detailTop, 252, g.detailHeight, kUiEdge);
+        constexpr int kLines = 4, kWidth = 244;
         const char *rest = nullptr;
         Ink ink = inkFor(small, kUiGrey);
-        int line = 0;
+        int first = 1;
+        // The first line: the one touched, its whole title -- if its row had
+        // to cut it short; else what it asks has all four lines -- or, with
+        // none touched, how many are earned here and in all.
         if (achSelected_ >= 0 && achSelected_ < achCount(achChapter_))
         {
             const int id = achOf(achChapter_, achSelected_);
+            const bool got = tracker.has(id);
+            const char *title = achTitle(tracker, id);
+            char status[16];
+            achStatus(tracker, id, status, sizeof(status));
+            if (textWidth(small, title) > achTitleRoom(small, status))
+                drawFitted(canvas, small, 7, g.detailTop + 2, title, inkFor(small, got ? kUiOrange : kUiWhite), kWidth);
+            else
+                first = 0;
             rest = achText(tracker, id);
-            ink = inkFor(small, tracker.has(id) ? kUiWhite : kUiGrey);
+            ink = inkFor(small, got ? kUiWhite : kUiGrey);
         }
         else
         {
-            char earned[40];
-            std::snprintf(earned, sizeof(earned), "%d of %d earned", tracker.earned(),
-                          static_cast<int>(hldata::kAchievementCount));
-            drawText(canvas, small, 7, g.detailTop + 2, earned, inkFor(small, kUiOrange));
-            line = 1;
+            int here = 0;
+            for (int n = 0; n < achCount(achChapter_); ++n)
+                here += tracker.has(achOf(achChapter_, n)) ? 1 : 0;
+            char earned[48];
+            std::snprintf(earned, sizeof(earned), "This chapter: %d of %d - in all: %d of %d", here,
+                          achCount(achChapter_), tracker.earned(), static_cast<int>(hldata::kAchievementCount));
+            drawFitted(canvas, small, 7, g.detailTop + 2, earned, inkFor(small, kUiOrange), kWidth);
             rest = "Touch one to read it. Slide the list, or touch < >, for another chapter.";
         }
-        for (; line < 3 && *rest != '\0'; ++line)
+        // Then the rest, a word at a time; on the last line, what does not
+        // fit is left off and said to be.
+        for (int line = first; line < kLines && *rest != '\0'; ++line)
         {
-            const int fits = wrapped(small, rest, 244);
-            drawText(canvas, small, 7, g.detailTop + 2 + line * g.line, rest, ink, fits);
+            const int y = g.detailTop + 2 + line * g.line;
+            if (line == kLines - 1)
+            {
+                drawFitted(canvas, small, 7, y, rest, ink, kWidth);
+                break;
+            }
+            const int fits = wrapped(small, rest, kWidth);
+            drawText(canvas, small, 7, y, rest, ink, fits);
             rest = skipSpaces(rest + fits);
         }
     }

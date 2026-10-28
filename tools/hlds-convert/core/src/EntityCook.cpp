@@ -2641,9 +2641,13 @@ namespace hlds
                     const bool glow = cls == "env_glow";
                     const bool cycler = cls == "cycler_sprite";
                     // (Bit 1: a glow, which the game draws over whatever
-                    // it sits in -- a lamp's glass, as a rule.)
+                    // it sits in -- a lamp's glass, as a rule. Bit 3: one
+                    // whose render fx is 14, kRenderFxNoDissipation -- as
+                    // big and as bright at any distance; the others fade
+                    // and keep their size on the screen: glowFalloff.)
+                    const bool keeps = static_cast<int>(numberKey(entity, "renderfx")) == 14;
                     record.extra[3] = (!glow && !cycler && (spawnflags & 2) ? 1 : 0) | (glow || mode == 3 ? 2 : 0) |
-                                      (cycler ? 4 : 0);
+                                      (cycler ? 4 : 0) | (keeps ? 8 : 0);
                     if (glow || cycler || (spawnflags & 1) || !named)
                         record.flags |= kLogicStartOpen;
                 }

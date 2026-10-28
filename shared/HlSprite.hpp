@@ -56,6 +56,23 @@ namespace hldata
         return kPaths[static_cast<int>(sprite)];
     }
 
+    // A map's sprite drawn as a glow (render mode 3): the engine's own rule
+    // for it (Xash3D's R_SpriteGlowBlend gives it, as the game draws it).
+    // Unless its render fx is 14 (kRenderFxNoDissipation) it is drawn as big
+    // as `dist` / 200 of itself -- the same size on the screen, near or far
+    // -- and only as bright as 19000 / dist^2 of itself, between 0.05 and
+    // all of it.
+    inline constexpr int kGlowFalloff = 19000;
+    /// For a glow `dist` units from the eye: how big (of 256) and how bright
+    /// (of 256) it is drawn.
+    inline void glowFalloff(int dist, int &scaleQ8, int &brightnessQ8)
+    {
+        dist = dist < 1 ? 1 : (dist > 16384 ? 16384 : dist);
+        scaleQ8 = dist * 256 / 200;
+        const std::int64_t bright = static_cast<std::int64_t>(kGlowFalloff) * 256 / (static_cast<std::int64_t>(dist) * dist);
+        brightnessQ8 = bright > 256 ? 256 : (bright < 13 ? 13 : static_cast<int>(bright));
+    }
+
     inline std::string spriteFile(const char *name, int width, int height)
     {
         return std::string(name) + "." + std::to_string(width) + "x" + std::to_string(height) + ".htx";

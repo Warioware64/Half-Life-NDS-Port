@@ -810,11 +810,31 @@ namespace hlrt
             if (known == nullptr)
                 return;
             const int scale = static_cast<int>(record.extra[2] >> 24); // Q4
-            const int halfWide = known->worldWidth * scale / 32;
-            const int halfHigh = known->worldHeight * scale / 32;
+            int halfWide = known->worldWidth * scale / 32;
+            int halfHigh = known->worldHeight * scale / 32;
+            int alpha = effectAlpha(record);
+            // A glow that dissipates (HlSprite.hpp): its size kept on the
+            // screen, fainter with distance.
+            if ((record.extra[3] & 2) && !(record.extra[3] & 8))
+            {
+                const std::int32_t d[3] = {fxToInt(record.move[0] - camera.pos[0]), fxToInt(record.move[1] - camera.pos[1]),
+                                           fxToInt(record.move[2] - camera.pos[2])};
+                const int dist = static_cast<int>(isqrt64(static_cast<std::uint64_t>(
+                    static_cast<std::int64_t>(d[0]) * d[0] + static_cast<std::int64_t>(d[1]) * d[1] +
+                    static_cast<std::int64_t>(d[2]) * d[2])));
+                int grow, bright;
+                glowFalloff(dist, grow, bright);
+                halfWide = (halfWide * grow) >> 8;
+                halfHigh = (halfHigh * grow) >> 8;
+                halfWide = halfWide < 1 ? 1 : halfWide;
+                halfHigh = halfHigh < 1 ? 1 : halfHigh;
+                alpha = (alpha * bright + 128) >> 8;
+                if (alpha < 1)
+                    return;
+            }
             if (!worldDraw.ballVisible(at, halfWide > halfHigh ? halfWide : halfHigh))
                 return;
-            const SpriteRef *ref = sprite(record.extra[0], effectAlpha(record), effectColour(record));
+            const SpriteRef *ref = sprite(record.extra[0], alpha, effectColour(record));
             // (Its frame of the game's own count, as the atlas has it.)
             const int source = ref->sourceFrames ? ref->sourceFrames : 1;
             const int frame = ((logic.states[i].phase >> 8) % source) * ref->frames / source;
