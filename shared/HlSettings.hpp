@@ -25,8 +25,8 @@ namespace hldata
     {
         /// Deprecated, can be reused for something else later
         std::uint8_t renderMode = 0;
-        /// On a DSi: the DSP plays the music in stereo and adds the rooms'
-        /// echo. Off unless asked for: a DSi then sounds as a DS does.
+        /// Before version 13: the DSi's DSP on (now roomEffects' Enhanced).
+        /// Still written, for a build before to read.
         std::uint8_t dspAudio = 0;
         /// How loud each layer of the sound is, 0 (off) to 10: the music,
         /// the effects (the player's and the world's), the voices, and the
@@ -68,6 +68,13 @@ namespace hldata
         /// An achievement earned is shown on the top screen as it is
         /// (Achievements.cpp). On unless asked off: off, it is still earned.
         std::uint8_t achievementPopups = 1;
+        /// The rooms heard (kRoom*: off, the game's own, or -- on a DSi --
+        /// the DSP's richer one); how the sound is laid out (kOutput*: the
+        /// console's speakers, headphones, one channel); and, on a DSi, how
+        /// fine it is (kQuality*).
+        std::uint8_t roomEffects = 1;
+        std::uint8_t outputMode = 0;
+        std::uint8_t soundQuality = 0;
 
         /// What a file of version 8 held: all but the controls.
         template <class Ar>
@@ -100,20 +107,34 @@ namespace hldata
             serializeTen(ar);
             ar &autoaim;
         }
+        /// ... and of version 12: no sound settings but the DSP and the
+        /// volumes.
         template <class Ar>
-        void serialize(Ar &ar)
+        void serializeTwelve(Ar &ar)
         {
             serializeEleven(ar);
             ar &achievementPopups;
         }
+        template <class Ar>
+        void serialize(Ar &ar)
+        {
+            serializeTwelve(ar);
+            ar &roomEffects &outputMode &soundQuality;
+        }
     };
 
+    inline constexpr std::uint8_t kRoomOff = 0, kRoomClassic = 1, kRoomEnhanced = 2, kRoomChoices = 3;
+    inline constexpr std::uint8_t kOutputSpeakers = 0, kOutputHeadphones = 1, kOutputMono = 2, kOutputChoices = 3;
+    inline constexpr std::uint8_t kQualityStandard = 0, kQualityHigh = 1, kQualityChoices = 2;
+
     inline constexpr char kSettingsMagic[4] = {'H', 'L', 'S', 'T'};
-    inline constexpr std::uint16_t kSettingsVersion = 12;
-    /// The versions before, which are still read: 11 had no achievements'
-    /// pop-ups to turn off; 10 had no autoaim; 9 had
+    inline constexpr std::uint16_t kSettingsVersion = 13;
+    /// The versions before, which are still read: 12 had no room effects,
+    /// output or quality (its DSP switch is the room effects' Enhanced);
+    /// 11 had no achievements' pop-ups to turn off; 10 had no autoaim; 9 had
     /// the layouts but no aim speed, custom buttons or stylus pressure; 8 no
     /// controls to choose.
+    inline constexpr std::uint16_t kSettingsVersionTwelve = 12;
     inline constexpr std::uint16_t kSettingsVersionEleven = 11;
     inline constexpr std::uint16_t kSettingsVersionTen = 10;
     inline constexpr std::uint16_t kSettingsVersionNine = 9;
@@ -165,7 +186,8 @@ namespace hldata
             return false;
         std::memcpy(&header, bytes, sizeof(header));
         if (std::memcmp(header.magic, kSettingsMagic, sizeof(header.magic)) != 0 ||
-            (header.version != kSettingsVersion && header.version != kSettingsVersionEleven &&
+            (header.version != kSettingsVersion && header.version != kSettingsVersionTwelve &&
+             header.version != kSettingsVersionEleven &&
              header.version != kSettingsVersionTen &&
              header.version != kSettingsVersionNine && header.version != kSettingsVersionBefore) ||
             header.payloadBytes != size - sizeof(header) ||
@@ -183,8 +205,17 @@ namespace hldata
             read.serializeTen(ia);
         else if (header.version == kSettingsVersionEleven)
             read.serializeEleven(ia);
+        else if (header.version == kSettingsVersionTwelve)
+            read.serializeTwelve(ia);
         else
             ia &read;
+        // (Before 13: the DSP switched on is the DSP's rooms; else the
+        // game's own.)
+        if (header.version != kSettingsVersion)
+            read.roomEffects = read.dspAudio != 0 ? kRoomEnhanced : kRoomClassic;
+        if (read.roomEffects >= kRoomChoices || read.outputMode >= kOutputChoices ||
+            read.soundQuality >= kQualityChoices)
+            return false;
         if (read.controlScheme >= kControlsSchemes || read.padTurns > 1 || read.padLooks > 1)
             return false;
         if (read.aimSpeed < 1 || read.aimSpeed > kAimSpeedMost || read.pitchSpeed < 1 ||

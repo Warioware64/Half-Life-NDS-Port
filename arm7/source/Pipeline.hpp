@@ -18,6 +18,12 @@ namespace hlaudio
     /// `blocks` more blocks, as the timer has counted them.
     void pipelineRun(hldata::AudioLink &link, std::uint32_t blocks);
 
+    /// The room's effect (kAudioEffects*) and how the sound is laid out
+    /// (kAudioOutput*).
+    void pipelineMode(std::uint8_t effects, std::uint8_t output);
+    /// The room the player is in (0..28).
+    void pipelineRoom(int room);
+
     void musicOpen(hldata::AudioLink &link, const hldata::AudioCommand &command);
     void musicStop(hldata::AudioLink &link);
     void musicVolume(int volume);

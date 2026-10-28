@@ -20,7 +20,9 @@ void Settings::load()
     hldata::SettingsData data;
     if (hldata::readSettings(bytes, size, data))
     {
-        dspAudio = data.dspAudio != 0;
+        roomEffects = data.roomEffects;
+        outputMode = data.outputMode;
+        soundQuality = data.soundQuality;
         for (int i = 0; i < 4; ++i)
             volume[i] = data.volume[i];
         debugReadout = data.debugReadout != 0;
@@ -49,7 +51,9 @@ void Settings::reset(int category)
     switch (category)
     {
     case 0:
-        dspAudio = first.dspAudio;
+        roomEffects = first.roomEffects;
+        outputMode = first.outputMode;
+        soundQuality = first.soundQuality;
         for (int i = 0; i < 4; ++i)
             volume[i] = first.volume[i];
         break;
@@ -93,7 +97,11 @@ bool Settings::save() const
     if (!global.hasFat)
         return false;
     hldata::SettingsData data;
-    data.dspAudio = dspAudio ? 1 : 0;
+    data.roomEffects = roomEffects;
+    data.outputMode = outputMode;
+    data.soundQuality = soundQuality;
+    // (For a build before, which has only the DSP's switch.)
+    data.dspAudio = roomEffects == hldata::kRoomEnhanced ? 1 : 0;
     for (int i = 0; i < 4; ++i)
         data.volume[i] = volume[i];
     data.debugReadout = debugReadout ? 1 : 0;

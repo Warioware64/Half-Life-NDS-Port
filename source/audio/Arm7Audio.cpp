@@ -221,11 +221,20 @@ namespace hlrt
         });
     }
 
-    void Arm7Audio::setPipeline(bool on)
+    void Arm7Audio::setMode(bool pipeline, std::uint8_t effects, std::uint8_t output, std::uint8_t quality)
     {
         AudioCommand c;
         c.op = AudioOp::Mode;
-        c.a = on ? kAudioPipeline : 0;
+        c.a = effects | static_cast<std::uint32_t>(output) << 8 | static_cast<std::uint32_t>(quality) << 16 |
+              (pipeline ? kAudioPipeline : 0);
+        push(c);
+    }
+
+    void Arm7Audio::setRoom(int room)
+    {
+        AudioCommand c;
+        c.op = AudioOp::Room;
+        c.a = static_cast<std::uint32_t>(room);
         push(c);
     }
 

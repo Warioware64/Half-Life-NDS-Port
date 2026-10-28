@@ -613,7 +613,16 @@ Milestone 11, "levels of detail".
   music added, is written 7.8 ms ahead into the rings channels 1 and 3 play
   -- which the speakers take directly and the mixer, so the capture, does
   not hear: what is added is never captured again (tools/hwtest/routing
-  measured it on a DS and a DSi). This is where the room's effect goes.
+  measured it on a DS and a DSi). The room's effect is put on what was
+  captured there (`shared/HlRoomDsp.hpp`): the game's 29 rooms
+  (`shared/HlRoomPresets.hpp`, its own table of numbers), the lowpass under
+  water, the wandering of weirdo 1 and the left side's lateness at the
+  output rate, the reverb and the echo at about 11 kHz, as the game's run;
+  a room changed fades out and in. The room is the nearest env_sound the
+  player is within, looked at four times a second (under water, 14); the
+  music is added after it, as in the game; then the sound is laid out for
+  the console's speakers (a little narrower), headphones, or one channel
+  (SOUND: Room effects, Output). About a fifth of the ARM7's time.
   With the DSi's DSP option on, the DSP has the capture, and the pipeline
   is off.
 - The pause menu: RESUME, QUICK SAVE, SAVE GAME, LOAD GAME, NEW GAME (asks

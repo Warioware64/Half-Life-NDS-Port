@@ -12,6 +12,7 @@
 
 #include "Global.hpp"
 #include "Settings.hpp"
+#include "HlRoomPresets.hpp"
 #include "HlStereoMusic.hpp"
 #include "audio/Arm7Audio.hpp"
 #include "audio/DspAudio.hpp"
@@ -70,10 +71,10 @@ namespace hlrt
                 describe(ui_[n]);
         }
         if (dsi)
-            extended_ = settings.dspAudio && dspAudio.start();
+            extended_ = settings.roomEffects == kRoomEnhanced && dspAudio.start();
         // The pipeline (the mix captured and played again on the ARM7, the
-        // music added) -- unless the DSP has the capture.
-        arm7Audio.setPipeline(!extended_);
+        // music and the room added) -- unless the DSP has the capture.
+        sendMode();
         lastVblank_ = Global::vblanks();
     }
 
@@ -280,26 +281,51 @@ namespace hlrt
         {
             // (The capture is the DSP's echo's, then: the pipeline let go of
             // first, and taken back if the DSP does not start.)
-            arm7Audio.setPipeline(false);
+            arm7Audio.setMode(false, kAudioEffectsOff, settings.outputMode, settings.soundQuality);
             arm7Audio.sync();
             extended_ = dspAudio.start();
-            if (!extended_)
-                arm7Audio.setPipeline(true);
         }
         else
         {
             dspAudio.stop();
             extended_ = false;
-            arm7Audio.setPipeline(true);
         }
+        sendMode();
         resumeMusic();
         return extended_;
+    }
+
+    void Sound::sendMode()
+    {
+        const std::uint8_t effects = extended_ || settings.roomEffects == kRoomOff ? kAudioEffectsOff
+                                                                                    : kAudioEffectsClassic;
+        arm7Audio.setMode(!extended_, effects, settings.outputMode, settings.soundQuality);
+        // (The room the player is in, again: a pipeline started afresh has
+        // none.)
+        arm7Audio.setRoom(room_);
+    }
+
+    void Sound::applySoundMode()
+    {
+        const bool wantDsp = settings.roomEffects == kRoomEnhanced && DspAudio::available();
+        if (wantDsp != extended_)
+            setDsp(wantDsp);
+        else
+            sendMode();
+        if (settings.roomEffects == kRoomEnhanced && !extended_)
+            settings.roomEffects = kRoomClassic; // (the DSP would not)
     }
 
     void Sound::unload()
     {
         if (up_)
             arm7Audio.stopAll();
+        // (A new map is no room until it says otherwise.)
+        if (room_ != 0)
+        {
+            room_ = 0;
+            arm7Audio.setRoom(0);
+        }
         fading_[0] = fading_[1] = Fading();
         for (int v = 0; v < Mixer::kVoices; ++v)
         {
@@ -1088,7 +1114,7 @@ namespace hlrt
         int type = 0;
         if (player.state.waterLevel == 3)
         {
-            type = 15;
+            type = kRoomUnderwater; // (the game's waterroom_type)
         }
         else
         {
@@ -1108,8 +1134,18 @@ namespace hlrt
                 nearest = distance;
             }
         }
-        if (type != 0)
-            dspAudio.room(roomEcho(type < 0 ? 0 : type));
+        if (type == 0)
+            return; // (in none: the last stays, as the game has it)
+        type = type < 0 ? 0 : type;
+        if (dspAudio.up())
+        {
+            dspAudio.room(roomEcho(type));
+        }
+        else if (type != room_)
+        {
+            room_ = type;
+            arm7Audio.setRoom(type);
+        }
     }
 
     void Sound::ui(int which, int volume)
@@ -1345,14 +1381,13 @@ namespace hlrt
             queue.count = 0;
             return;
         }
-        if (dspAudio.up())
+        // The room the player is in, looked at four times a second, as the
+        // game does: for the DSP's echo, or the ARM7's rooms.
+        roomDue_ -= ms;
+        if (roomDue_ <= 0)
         {
-            roomDue_ -= ms;
-            if (roomDue_ <= 0)
-            {
-                roomDue_ = 500;
-                roomTick();
-            }
+            roomDue_ = 250;
+            roomTick();
         }
         for (int i = 0; i < queue.count; ++i)
         {

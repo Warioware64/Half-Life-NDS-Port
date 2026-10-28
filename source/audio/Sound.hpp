@@ -74,6 +74,11 @@ namespace hlrt
         /// was by the other way of playing it. Returns whether it is on (it
         /// cannot be, where there is no DSP).
         bool setDsp(bool on);
+        /// The sound settings (Settings::roomEffects, outputMode) applied:
+        /// the DSi's DSP for its rooms, or the ARM7's pipeline with the
+        /// game's own (or none). Enhanced that the DSP cannot give falls
+        /// back to the game's own.
+        void applySoundMode();
 
         int loaded() const { return loaded_; }
         /// How many voices each layer has just now (for the readout).
@@ -208,6 +213,8 @@ namespace hlrt
         void resumeMusic();
         bool extended_ = false;
         int roomDue_ = 0;
+        int room_ = 0; ///< the room the ARM7 was last told
+        void sendMode();
         hldata::Mixer mixer_;
         Voice voices_[hldata::Mixer::kVoices];
         std::uint32_t lastVblank_ = 0;

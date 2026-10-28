@@ -1,7 +1,9 @@
 // The pipeline. The console's own mixer adds up the sounds' channels; its
 // left and right outputs are captured (capture units 0 and 1) into rings
 // here in the ARM7's memory; every block -- 64 samples -- what was captured
-// is taken, the music added (and, to come, the room's effect), and written
+// is taken, the room's effect put on it (HlRoomDsp.hpp: the game's rooms),
+// the music added after it (as the game's, it is not in the room), laid out
+// for speakers, headphones or one channel, and written
 // into the rings channels 1 and 3 play, which the speakers take directly and
 // the mixer does not hear (SOUNDCNT): so nothing that is added is captured
 // again. tools/hwtest/routing measured all of it on a DS and a DSi.
@@ -15,6 +17,7 @@
 
 #include <nds.h>
 
+#include "HlRoomDsp.hpp"
 #include "HlStereoMusic.hpp"
 #include "Pipeline.hpp"
 
@@ -32,7 +35,12 @@ namespace hlaudio
 
         alignas(32) std::int16_t capLeft[kRing];
         alignas(32) std::int16_t capRight[kRing];
+        std::int16_t roomLeft[kBlock], roomRight[kBlock];
         std::int32_t mixLeft[kBlock], mixRight[kBlock];
+        RoomDsp room; // (23 KB: its delay lines)
+        bool roomInit = false;
+        std::uint8_t effects = kAudioEffectsClassic;
+        std::uint8_t output = kAudioOutputSpeakers;
 
         bool on = false;
         std::uint32_t block = 0; ///< blocks done since it was set going
@@ -58,6 +66,11 @@ namespace hlaudio
     {
         if (on)
             return;
+        if (!roomInit)
+        {
+            room.init(kOutRate, 3);
+            roomInit = true;
+        }
         const int ime = enterCriticalSection();
         REG_SNDCAP0CNT = 0;
         REG_SNDCAP1CNT = 0;
@@ -108,12 +121,44 @@ namespace hlaudio
         for (std::uint32_t n = 0; n < blocks; ++n, ++block)
         {
             const int from = static_cast<int>((block * kBlock) & (kRing - 1));
-            for (int i = 0; i < kBlock; ++i)
+            // The room on what the console played...
+            if (effects == kAudioEffectsClassic)
             {
-                mixLeft[i] = capLeft[from + i];
-                mixRight[i] = capRight[from + i];
+                room.process(capLeft + from, capRight + from, roomLeft, roomRight, kBlock);
+                for (int i = 0; i < kBlock; ++i)
+                {
+                    mixLeft[i] = roomLeft[i];
+                    mixRight[i] = roomRight[i];
+                }
             }
+            else
+            {
+                for (int i = 0; i < kBlock; ++i)
+                {
+                    mixLeft[i] = capLeft[from + i];
+                    mixRight[i] = capRight[from + i];
+                }
+            }
+            // ... the music after it ...
             music.mix(mixLeft, mixRight, kBlock, written);
+            // ... laid out: the console's speakers are close together, and
+            // a little less apart is easier on them (six tenths of what is
+            // to one side); headphones have all of it; one channel, both.
+            if (output == kAudioOutputSpeakers)
+            {
+                for (int i = 0; i < kBlock; ++i)
+                {
+                    const std::int32_t middle = (mixLeft[i] + mixRight[i]) >> 1;
+                    const std::int32_t side = (((mixLeft[i] - mixRight[i]) >> 1) * 154) >> 8;
+                    mixLeft[i] = middle + side;
+                    mixRight[i] = middle - side;
+                }
+            }
+            else if (output == kAudioOutputMono)
+            {
+                for (int i = 0; i < kBlock; ++i)
+                    mixLeft[i] = mixRight[i] = (mixLeft[i] + mixRight[i]) >> 1;
+            }
             const int to = static_cast<int>((block * kBlock + kLead) & (kRing - 1));
             for (int i = 0; i < kBlock; ++i)
             {
@@ -128,6 +173,29 @@ namespace hlaudio
             link.musicDry = music.dry();
             link.musicOver = music.over() ? 1 : 0;
         }
+    }
+
+    void pipelineMode(std::uint8_t newEffects, std::uint8_t newOutput)
+    {
+        // (The room going off and on again: what it had, emptied.)
+        if (newEffects == kAudioEffectsClassic && effects != kAudioEffectsClassic && roomInit)
+        {
+            const int was = room.room();
+            room.init(kOutRate, 3);
+            room.setRoom(was);
+        }
+        effects = newEffects == kAudioEffectsClassic ? kAudioEffectsClassic : kAudioEffectsOff;
+        output = newOutput < 3 ? newOutput : kAudioOutputSpeakers;
+    }
+
+    void pipelineRoom(int which)
+    {
+        if (!roomInit)
+        {
+            room.init(kOutRate, 3);
+            roomInit = true;
+        }
+        room.setRoom(which);
     }
 
     void musicOpen(AudioLink &link, const AudioCommand &command)

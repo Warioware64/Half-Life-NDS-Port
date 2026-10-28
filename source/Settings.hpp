@@ -9,8 +9,12 @@
 class Settings
 {
 public:
-    /// DSi: the DSP's music and echo (off unless asked for).
-    bool dspAudio = false;
+    /// The rooms heard (hldata::kRoom*: off, the game's own, the DSi's
+    /// DSP's), how the sound is laid out (kOutput*), and on a DSi how fine
+    /// it is (kQuality*).
+    std::uint8_t roomEffects = hldata::kRoomClassic;
+    std::uint8_t outputMode = hldata::kOutputSpeakers;
+    std::uint8_t soundQuality = hldata::kQualityStandard;
     /// How loud each layer of the sound is, 0 to 10 (hldata::kVolume*).
     std::uint8_t volume[4] = {8, 10, 10, 8};
     /// The debug readout along the top of the touch screen.

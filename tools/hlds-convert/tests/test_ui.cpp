@@ -216,6 +216,46 @@ namespace
         bytes = writeSettings(bobbing);
         check(SettingsData().viewBob == 0 && readSettings(bytes.data(), bytes.size(), back) && back.viewBob == 1,
               "the view does not bob unless it is asked to, and the asking is kept");
+        // The sound's: the game's own rooms and the speakers unless asked
+        // otherwise; what is asked kept; nothing out of range.
+        SettingsData sounding;
+        sounding.roomEffects = kRoomOff;
+        sounding.outputMode = kOutputHeadphones;
+        sounding.soundQuality = kQualityHigh;
+        bytes = writeSettings(sounding);
+        check(SettingsData().roomEffects == kRoomClassic && SettingsData().outputMode == kOutputSpeakers &&
+                  readSettings(bytes.data(), bytes.size(), back) && back.roomEffects == kRoomOff &&
+                  back.outputMode == kOutputHeadphones && back.soundQuality == kQualityHigh,
+              "the rooms and the speakers unless asked otherwise; what is asked, kept");
+        sounding.outputMode = kOutputChoices;
+        bytes = writeSettings(sounding);
+        check(!readSettings(bytes.data(), bytes.size(), back), "an output there is not: not read");
+        // A file of version 12: its DSP switch is the DSP's rooms; off, the
+        // game's own.
+        for (int dsp = 0; dsp < 2; ++dsp)
+        {
+            SettingsData twelve;
+            twelve.dspAudio = static_cast<std::uint8_t>(dsp);
+            twelve.volume[kVolumeMusic] = 5;
+            constexpr std::size_t flags = yas::mem | yas::binary | yas::no_header;
+            yas::mem_ostream os;
+            yas::binary_oarchive<yas::mem_ostream, flags> oa(os);
+            twelve.serializeTwelve(oa);
+            const auto buf = os.get_intrusive_buffer();
+            SettingsHeader header{};
+            std::memcpy(header.magic, kSettingsMagic, sizeof(header.magic));
+            header.version = kSettingsVersionTwelve;
+            header.payloadBytes = static_cast<std::uint16_t>(buf.size);
+            header.crc32 = crc32(reinterpret_cast<const std::uint8_t *>(buf.data), static_cast<std::uint32_t>(buf.size));
+            std::vector<std::uint8_t> file(sizeof(header) + buf.size);
+            std::memcpy(file.data(), &header, sizeof(header));
+            std::memcpy(file.data() + sizeof(header), buf.data, buf.size);
+            SettingsData read;
+            check(readSettings(file.data(), file.size(), read) && read.volume[kVolumeMusic] == 5 &&
+                      read.roomEffects == (dsp ? kRoomEnhanced : kRoomClassic) && read.outputMode == kOutputSpeakers,
+                  dsp ? "a file of version 12 with the DSP on: the DSP's rooms"
+                      : "a file of version 12 with the DSP off: the game's own rooms");
+        }
     }
 
     /// The lamp's rules: the game's.

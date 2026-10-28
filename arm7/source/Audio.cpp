@@ -277,7 +277,12 @@ namespace hlaudio
                 case AudioOp::Master:
                     REG_SOUNDCNT = static_cast<std::uint16_t>((REG_SOUNDCNT & ~0x7F) | (command.a & 0x7F));
                     break;
+                case AudioOp::Room:
+                    pipelineRoom(static_cast<int>(command.a));
+                    break;
                 case AudioOp::Mode:
+                    pipelineMode(static_cast<std::uint8_t>(command.a & 0xFF),
+                                 static_cast<std::uint8_t>((command.a >> 8) & 0xFF));
                     if (command.a & kAudioPipeline)
                     {
                         if (!pipelineOn())
@@ -312,7 +317,7 @@ namespace hlaudio
                     }
                     break;
                 default:
-                    break; // (rooms: not yet)
+                    break;
                 }
             }
             // The sounds that ended on their own -- and, where one was to

@@ -53,8 +53,12 @@ namespace hlrt
 
         /// The pipeline (the mix captured and played again by the ARM7, the
         /// music and the room's effect added) on, or the plain mixer -- the
-        /// DSi's DSP has the capture then. Taken by the ARM7 within 2 ms.
-        void setPipeline(bool on);
+        /// DSi's DSP has the capture then; the room's effect (kAudioEffects*)
+        /// and how the sound is laid out (kAudioOutput*) in it. Taken by the
+        /// ARM7 within 2 ms.
+        void setMode(bool pipeline, std::uint8_t effects, std::uint8_t output, std::uint8_t quality);
+        /// The room the player is in (HlRoomPresets.hpp, 0..28).
+        void setRoom(int room);
         /// Every command so far taken by the ARM7 (a few ms at most).
         void sync();
 
