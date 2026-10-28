@@ -603,9 +603,19 @@ Milestone 11, "levels of detail".
   goes on from there** (a DS's channel cannot be stopped and continued: it
   is slowed to the slowest the hardware has and silenced, which costs a
   sound a quarter of a second for ten of menu); the menu's clicks are
-  heard meanwhile. The music, on a DS, is a ring of 8-bit samples the
-  ARM7 plays round on one channel, which the ARM9 keeps filled from the
-  card half a second ahead; the ARM7 says how far it has played.
+  heard meanwhile. The music is the track's stereo file (23.8 kHz IMA, the
+  DSi's DSP's format), its blocks put into a ring by the ARM9 as they are
+  read off the card, decoded on the ARM7 and drawn out to the output rate
+  (`shared/HlStereoMusic.hpp`), as loud as the music slider says.
+- The pipeline (`arm7/source/Pipeline.arm.cpp`): the console's own mixer
+  adds up the sounds' channels; its left and right are captured into rings
+  in the ARM7's memory, and every 64 samples what was captured, with the
+  music added, is written 7.8 ms ahead into the rings channels 1 and 3 play
+  -- which the speakers take directly and the mixer, so the capture, does
+  not hear: what is added is never captured again (tools/hwtest/routing
+  measured it on a DS and a DSi). This is where the room's effect goes.
+  With the DSi's DSP option on, the DSP has the capture, and the pipeline
+  is off.
 - The pause menu: RESUME, QUICK SAVE, SAVE GAME, LOAD GAME, NEW GAME (asks
   first), OPTIONS, ACHIEVEMENTS, COMMAND. Buttons act when the stylus is
   lifted from them. The command line has a keyboard of the port's own.

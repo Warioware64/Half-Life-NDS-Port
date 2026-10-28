@@ -136,6 +136,7 @@ if(HLDS_BUILD_TESTS)
             test_mixer
             test_roomdsp
             test_audiolink
+            test_stereomusic
             test_cascade
             test_actors
             test_sound

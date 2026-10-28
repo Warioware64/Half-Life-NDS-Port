@@ -82,9 +82,7 @@ namespace hlrt
 
         /// For maxmod: the header of sample `id`, or null.
         const void *sample(std::uint32_t id) const;
-        /// ... and `count` samples of music for its ring.
-        void fillMusic(std::int8_t *out, std::uint32_t count);
-        /// Samples of the track played since it started (or was taken up).
+        /// Pairs of the track played since it started (or was taken up).
         std::uint32_t musicPlayed() const;
 
     private:
@@ -162,7 +160,6 @@ namespace hlrt
         static constexpr int kUiSample = kSpeechSample - hldata::kUiSoundCount;
         static constexpr int kMaxSpoken = 32;
         static constexpr int kLoops = 8; ///< loops of a place at once, where there are voices
-        static constexpr int kStreamSamples = 8192; ///< half a second of music ahead
 
         bool readClip(const char *name, Clip &clip);
         void describe(Clip &clip);
@@ -232,14 +229,13 @@ namespace hlrt
         /// switched off.
         std::uint32_t *played_ = nullptr;
 
-        // The music (a DS's way: a stream of maxmod's).
+        // The music (the ARM7's way: its stereo file, in blocks).
         std::FILE *music_ = nullptr;
-        std::uint32_t musicLeft_ = 0;    ///< bytes of the file not yet read
-        std::uint32_t musicFed_ = 0;     ///< samples handed to the stream since it started
-        std::uint32_t musicPast_ = 0;    ///< ... of them, silence after the track's end
+        std::uint32_t musicLeft_ = 0;    ///< blocks of the file not yet read
+        std::uint32_t musicRate_ = 23802; ///< the track's (its stereo file's) rate
         int musicTrack_ = -1;
         std::uint32_t musicHeldMs_ = 0;  ///< how far in it was when it was put down
-        std::uint32_t musicSkipped_ = 0; ///< samples of the track before where it was taken up
+        std::uint32_t musicSkipped_ = 0; ///< pairs of the track before where it was taken up
         bool musicHeld_ = false;
     };
 

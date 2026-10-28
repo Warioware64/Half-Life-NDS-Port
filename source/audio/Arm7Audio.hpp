@@ -51,14 +51,25 @@ namespace hlrt
         /// Once a frame: the ends the ARM7 has said.
         void frame();
 
-        /// The music: a ring of 8-bit mono samples at `rate`, which the
-        /// caller keeps filled ahead of where it is played.
-        void musicOpen(const void *ring, std::uint32_t bytes, std::uint32_t rate);
+        /// The pipeline (the mix captured and played again by the ARM7, the
+        /// music and the room's effect added) on, or the plain mixer -- the
+        /// DSi's DSP has the capture then. Taken by the ARM7 within 2 ms.
+        void setPipeline(bool on);
+        /// Every command so far taken by the ARM7 (a few ms at most).
+        void sync();
+
+        /// The music: a ring of `blocks` of the track's stereo blocks as in
+        /// its file (HlStereoMusic.hpp), which the caller keeps filled; the
+        /// track `rate` Hz and `pairs` long from where it starts; `volume`
+        /// 0..256. Heard while the pipeline is on.
+        void musicOpen(const void *ring, std::uint32_t blocks, std::uint32_t rate, std::uint32_t pairs, int volume);
         void musicStop();
-        /// Bytes played, and written, all told since musicOpen.
+        void musicVolume(int volume);
+        /// Pairs of the track played, and blocks written, since musicOpen.
         std::uint32_t musicRead() const;
         std::uint32_t musicWritten() const;
-        void musicWrote(std::uint32_t bytes);
+        void musicWrote(std::uint32_t blocks);
+        bool musicOver() const;
 
         /// The ARM7's own figures (the debug readout).
         std::uint32_t late() const;

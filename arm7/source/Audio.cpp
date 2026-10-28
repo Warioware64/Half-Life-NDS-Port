@@ -9,15 +9,17 @@
 // the block, by the token the ARM9 gave it -- so the ARM9 knows when a voice
 // is free and a word has been said, and never guesses by the clock.
 //
-// The channels: 1 is not ours (its clock is what the DSi's capture for the
-// DSP's echo keeps time by: libnds's sound messages, from the ARM9); 3 plays
-// the music, a ring of 8-bit samples the ARM9 keeps filled; the other
-// fourteen are the sounds'.
+// The channels: 1 and 3 are the pipeline's (Pipeline.arm.cpp: the mix
+// captured and played again, with the music added) -- or, with the pipeline
+// off, 1's clock is what the DSi's capture for the DSP's echo keeps time by
+// (libnds's sound messages, from the ARM9); the other fourteen are the
+// sounds'.
 
 #include <nds.h>
 
 #include "Audio.hpp"
 #include "HlAudioLink.hpp"
+#include "Pipeline.hpp"
 
 using namespace hldata;
 
@@ -25,12 +27,8 @@ namespace hlaudio
 {
     namespace
     {
-        constexpr int kMusicChannel = 3;
         constexpr int kChannelCount = 14;
         constexpr std::uint8_t kChannels[kChannelCount] = {0, 2, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15};
-        /// Sound-clock ticks in a block (the block timer counts the bus
-        /// clock, twice as fast: 65536 of those).
-        constexpr std::uint32_t kBlockSoundTicks = 32768;
 
         struct Channel
         {
@@ -49,12 +47,6 @@ namespace hlaudio
         volatile std::uint32_t pending = 0; ///< blocks the timer has counted, not yet done
         bool paused = false;
 
-        // The music.
-        bool musicOn = false;
-        std::uint32_t musicRingBytes = 0;
-        std::uint32_t musicAcc = 0;   ///< bytes played, in 65536ths
-        std::uint32_t musicPerBlock = 0;
-        bool musicMuted = false;
 
         void linkHandler(u32 value, void *)
         {
@@ -245,56 +237,11 @@ namespace hlaudio
             }
         }
 
-        void musicOpen(const AudioCommand &command)
-        {
-            const std::uint32_t rate = command.c & 0xFFFF;
-            const std::uint16_t timer = audioTimer(rate, 1024);
-            SCHANNEL_CR(kMusicChannel) = 0;
-            if (timer == 0 || command.b < 64)
-            {
-                musicOn = false;
-                return;
-            }
-            musicRingBytes = command.b;
-            // Bytes played in a block, in 65536ths: the block's sound ticks
-            // over the ticks of one sample.
-            const std::uint32_t perSample = 0x10000u - timer;
-            musicPerBlock = static_cast<std::uint32_t>((static_cast<std::uint64_t>(kBlockSoundTicks) << 16) / perSample);
-            musicAcc = 0;
-            link->musicRead = 0;
-            musicMuted = true; // (until there is something in the ring)
-            SCHANNEL_SOURCE(kMusicChannel) = command.a;
-            SCHANNEL_TIMER(kMusicChannel) = timer;
-            SCHANNEL_REPEAT_POINT(kMusicChannel) = 0;
-            SCHANNEL_LENGTH(kMusicChannel) = musicRingBytes / 4;
-            SCHANNEL_CR(kMusicChannel) = 0u | 64u << 16 | 1u << 27 | 0u << 29 | 1u << 31;
-            musicOn = true;
-        }
-
-        void musicBlock(std::uint32_t blocks)
-        {
-            if (!musicOn)
-                return;
-            musicAcc += musicPerBlock * blocks;
-            link->musicRead = link->musicRead + (musicAcc >> 16);
-            musicAcc &= 0xFFFF;
-            // Run dry (the ARM9 behind): silent rather than going round
-            // what it already played.
-            const std::int32_t ahead = static_cast<std::int32_t>(link->musicWrite - link->musicRead);
-            const bool dry = ahead <= 0;
-            if (dry)
-                link->musicDry = link->musicDry + blocks;
-            if (dry != musicMuted)
-            {
-                musicMuted = dry;
-                SCHANNEL_VOL(kMusicChannel) = dry ? 0 : 127;
-            }
-        }
-
         void run(std::uint32_t blocks)
         {
             AudioLink &l = *link;
             AudioCommand command;
+            bool restarted = false;
             while (audioPop(l, command))
             {
                 switch (command.op)
@@ -330,12 +277,32 @@ namespace hlaudio
                 case AudioOp::Master:
                     REG_SOUNDCNT = static_cast<std::uint16_t>((REG_SOUNDCNT & ~0x7F) | (command.a & 0x7F));
                     break;
+                case AudioOp::Mode:
+                    if (command.a & kAudioPipeline)
+                    {
+                        if (!pipelineOn())
+                        {
+                            pipelineStart(l);
+                            // (The blocks counted so far were before it.)
+                            restarted = true;
+                            const int ime = enterCriticalSection();
+                            pending = 0;
+                            leaveCriticalSection(ime);
+                        }
+                    }
+                    else
+                    {
+                        pipelineStop();
+                    }
+                    break;
                 case AudioOp::MusicOpen:
-                    musicOpen(command);
+                    musicOpen(l, command);
                     break;
                 case AudioOp::MusicStop:
-                    SCHANNEL_CR(kMusicChannel) = 0;
-                    musicOn = false;
+                    musicStop(l);
+                    break;
+                case AudioOp::MusicVolume:
+                    musicVolume(static_cast<int>(command.a));
                     break;
                 case AudioOp::StopAll:
                     for (int c = 0; c < kChannelCount; ++c)
@@ -345,7 +312,7 @@ namespace hlaudio
                     }
                     break;
                 default:
-                    break; // (rooms and modes: not yet)
+                    break; // (rooms: not yet)
                 }
             }
             // The sounds that ended on their own -- and, where one was to
@@ -366,7 +333,8 @@ namespace hlaudio
                 ch.nextToken = 0;
                 begin(c, token, next);
             }
-            musicBlock(blocks);
+            if (!restarted)
+                pipelineRun(l, blocks);
         }
     } // namespace
 

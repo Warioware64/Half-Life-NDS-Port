@@ -221,17 +221,50 @@ namespace hlrt
         });
     }
 
-    void Arm7Audio::musicOpen(const void *ring, std::uint32_t bytes, std::uint32_t rate)
+    void Arm7Audio::setPipeline(bool on)
+    {
+        AudioCommand c;
+        c.op = AudioOp::Mode;
+        c.a = on ? kAudioPipeline : 0;
+        push(c);
+    }
+
+    void Arm7Audio::sync()
+    {
+        for (int frame = 0; link_ != nullptr && frame < 10 && link_->commandRead != link_->commandWrite; ++frame)
+            swiWaitForVBlank();
+    }
+
+    void Arm7Audio::musicOpen(const void *ring, std::uint32_t blocks, std::uint32_t rate, std::uint32_t pairs,
+                              int volume)
     {
         if (link_ == nullptr)
             return;
-        link_->musicWrite = 0;
         AudioCommand c;
         c.op = AudioOp::MusicOpen;
         c.a = reinterpret_cast<std::uint32_t>(ring);
-        c.b = bytes;
-        c.c = (rate & 0xFFFF) | 1u << 16;
+        c.b = (blocks & 0xFFFF) | (rate & 0xFFFF) << 16;
+        c.c = pairs;
+        c.d = static_cast<std::uint32_t>(volume);
+        // (What was written before is not this track's: counted from here.
+        // The ARM7 starts its own count with the command.)
+        sync();
+        link_->musicWrite = 0;
         push(c);
+        sync(); // (so that what it says of the music is of this track)
+    }
+
+    void Arm7Audio::musicVolume(int volume)
+    {
+        AudioCommand c;
+        c.op = AudioOp::MusicVolume;
+        c.a = static_cast<std::uint32_t>(volume);
+        push(c);
+    }
+
+    bool Arm7Audio::musicOver() const
+    {
+        return link_ == nullptr || link_->musicOver != 0;
     }
 
     void Arm7Audio::musicStop()

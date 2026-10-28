@@ -48,15 +48,22 @@ namespace hldata
         /// a: the room (HlRoomPresets.hpp, 0..28).
         Room,
         /// a: effects (kAudioEffects*), output (bits 8-15, kAudioOutput*),
-        /// quality (bits 16-23, kAudioQuality*).
+        /// quality (bits 16-23, kAudioQuality*), and bit 24: the pipeline
+        /// on -- the mix captured and played again by this program, with
+        /// the music (and the room) added (0: the plain mixer; the DSi's
+        /// DSP has the capture then).
         Mode,
         /// a: the master volume, 0..127.
         Master,
-        /// a: the ring's address; b: its bytes; c: rate in Hz (low 16),
-        /// channels (high 16). Blocks of HlDsp's stereo IMA (as the DSi's
-        /// music files are), the ARM9 feeding the ring (`musicWrite`).
+        /// a: the ring's address; b: its blocks (low 16), the track's rate
+        /// in Hz (high 16); c: the track's pairs from where it starts; d:
+        /// its volume (0..256). The ring holds blocks of the track as they
+        /// are in its file (HlStereoMusic.hpp), the ARM9 feeding it
+        /// (`musicWrite`). Played only while the pipeline is on.
         MusicOpen,
         MusicStop,
+        /// a: the music's volume, 0..256.
+        MusicVolume,
         /// Every sound stopped (a map let go of).
         StopAll,
         /// A Play (its fields as a Play's) to begin on the same channel the
@@ -74,6 +81,7 @@ namespace hldata
     inline constexpr std::uint8_t kAudioEffectsOff = 0, kAudioEffectsClassic = 1, kAudioEffectsEnhanced = 2;
     inline constexpr std::uint8_t kAudioOutputSpeakers = 0, kAudioOutputHeadphones = 1, kAudioOutputMono = 2;
     inline constexpr std::uint8_t kAudioQualityStandard = 0, kAudioQualityHigh = 1;
+    inline constexpr std::uint32_t kAudioPipeline = 1u << 24;
 
     struct AudioCommand
     {
@@ -100,10 +108,13 @@ namespace hldata
         static constexpr std::uint32_t kCommands = 64; ///< a power of two
         static constexpr std::uint32_t kEnds = 32;     ///< a power of two
         static constexpr int kVoices = 16;
+        /// The pipeline's output rings (samples; a power of two), which
+        /// channels 1 and 3 play round.
+        static constexpr int kOutRing = 512;
 
         // ARM9 writes:
         volatile std::uint32_t commandWrite;
-        volatile std::uint32_t musicWrite; ///< bytes put into the music ring, all told
+        volatile std::uint32_t musicWrite; ///< blocks put into the music ring, all told
         AudioCommand commands[kCommands];
         // ARM7 writes:
         volatile std::uint32_t commandRead;
@@ -114,8 +125,12 @@ namespace hldata
         volatile std::uint32_t late;      ///< blocks done after their time
         volatile std::uint32_t cpuAvg;    ///< ARM7 ticks per block, averaged
         volatile std::uint32_t cpuMost;   ///< ... the most since last read
-        volatile std::uint32_t musicRead; ///< bytes of the music ring played
-        volatile std::uint32_t musicDry;  ///< blocks the music ran out
+        volatile std::uint32_t musicRead; ///< pairs of the track played
+        volatile std::uint32_t musicDry;  ///< samples the music ran out (the ARM9 behind)
+        volatile std::uint32_t musicOver; ///< 1 once the track has all been played
+        // ARM7 writes, channels 1 and 3 read:
+        alignas(32) std::int16_t outLeft[kOutRing];
+        alignas(32) std::int16_t outRight[kOutRing];
     };
 
     // ---- the ARM9's side

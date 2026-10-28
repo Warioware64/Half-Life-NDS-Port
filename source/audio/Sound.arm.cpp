@@ -12,6 +12,7 @@
 
 #include "Global.hpp"
 #include "Settings.hpp"
+#include "HlStereoMusic.hpp"
 #include "audio/Arm7Audio.hpp"
 #include "audio/DspAudio.hpp"
 #include "game/Player.hpp"
@@ -27,9 +28,18 @@ namespace hlrt
     {
         using namespace hldata;
 
-        /// The music's ring, which the ARM7 plays round and round and
-        /// musicTick keeps filled ahead of it (half a second).
-        alignas(32) std::int8_t musicRing[8192];
+        /// The music's ring: blocks of the track as they are in its file,
+        /// which the ARM7 decodes and plays (HlStereoMusic.hpp) and
+        /// musicTick keeps filled ahead of it (a third of a second).
+        constexpr std::uint32_t kMusicRingBlocks = 4;
+        alignas(32) std::uint16_t musicRing[kMusicRingBlocks * StereoMusic::kBlockWords];
+
+        /// The music as loud as the player has it (the track itself is
+        /// played at about four fifths of full): 0..256.
+        int musicGain()
+        {
+            return settings.volume[kVolumeMusic] * 205 / 10;
+        }
     } // namespace
 
     void Sound::init()
@@ -51,9 +61,6 @@ namespace hlrt
         }
         // The game's own sound on the ARM7 (arm7/source/Audio.cpp), which
         // plays the clips where they are in memory: nothing is "loaded".
-        // (Channel 1 is not its: its clock is what a DSi's sound capture
-        // keeps time by -- DspAudio.)
-        static_assert(sizeof(musicRing) == kStreamSamples);
         up_ = arm7Audio.start();
         applyVolumes();
         // The menu's own sounds, for as long as the game runs.
@@ -64,6 +71,9 @@ namespace hlrt
         }
         if (dsi)
             extended_ = settings.dspAudio && dspAudio.start();
+        // The pipeline (the mix captured and played again on the ARM7, the
+        // music added) -- unless the DSP has the capture.
+        arm7Audio.setPipeline(!extended_);
         lastVblank_ = Global::vblanks();
     }
 
@@ -89,8 +99,9 @@ namespace hlrt
         mixer_.volume[static_cast<int>(SoundLayer::Ui)] = effects;
         mixer_.volume[static_cast<int>(SoundLayer::Voice)] = settings.volume[kVolumeVoices];
         mixer_.volume[static_cast<int>(SoundLayer::Ambience)] = settings.volume[kVolumeAmbience];
-        // (The music's is taken as it is fed: fillMusic. What is playing in
-        // the other layers is told when it is next placed.)
+        // (The music's is the ARM7's to apply. What is playing in the other
+        // layers is told when it is next placed.)
+        arm7Audio.musicVolume(musicGain());
         loopsDue_ = 0;
     }
 
@@ -227,7 +238,7 @@ namespace hlrt
             // in hand, less any silence after the end.)
             const std::uint32_t played = musicPlayed();
             const int track = musicTrack_;
-            const bool over = musicLeft_ == 0;
+            const bool over = arm7Audio.musicOver();
             const std::uint32_t before = musicSkipped_;
             stopMusic();
             if (!over)
@@ -235,7 +246,7 @@ namespace hlrt
                 musicHeld_ = true;
                 musicTrack_ = track;
                 musicHeldMs_ = static_cast<std::uint32_t>(
-                    (static_cast<std::uint64_t>(before + played) * 1000) / kMusicRate);
+                    (static_cast<std::uint64_t>(before + played) * 1000) / musicRate_);
             }
         }
     }
@@ -254,8 +265,9 @@ namespace hlrt
             dspAudio.startMusic(track, static_cast<std::uint32_t>(
                                            (static_cast<std::uint64_t>(musicHeldMs_) * kStereoRate) / 1000)))
             return;
-        // ... or the DS's.
-        musicSkipped_ = musicHeldMs_ * (kMusicRate / 1000);
+        // ... or the ARM7's, from the pair of the moment (the track's rate:
+        // what its stereo file says, the DSP's own).
+        musicSkipped_ = static_cast<std::uint32_t>((static_cast<std::uint64_t>(musicHeldMs_) * kStereoRate) / 1000);
         startMusic(track);
     }
 
@@ -266,12 +278,19 @@ namespace hlrt
         holdMusic();
         if (on)
         {
+            // (The capture is the DSP's echo's, then: the pipeline let go of
+            // first, and taken back if the DSP does not start.)
+            arm7Audio.setPipeline(false);
+            arm7Audio.sync();
             extended_ = dspAudio.start();
+            if (!extended_)
+                arm7Audio.setPipeline(true);
         }
         else
         {
             dspAudio.stop();
             extended_ = false;
+            arm7Audio.setPipeline(true);
         }
         resumeMusic();
         return extended_;
@@ -1156,7 +1175,7 @@ namespace hlrt
         if (music_ == nullptr)
             return 0;
         const std::uint32_t played = musicPlayed();
-        return static_cast<std::uint32_t>((static_cast<std::uint64_t>(musicSkipped_ + played) * 1000) / kMusicRate);
+        return static_cast<std::uint32_t>((static_cast<std::uint64_t>(musicSkipped_ + played) * 1000) / musicRate_);
     }
 
     void Sound::setMusic(int track, std::uint32_t ms)
@@ -1185,77 +1204,56 @@ namespace hlrt
         musicSkipped_ = 0;
         stopMusic();
         dspAudio.stopMusic();
-        // A DSi's DSP plays it in stereo, if it is there and so is the file.
-        if (dspAudio.startMusic(track, 0))
+        // A DSi's DSP plays it, if the player has asked for the DSP.
+        if (dspAudio.startMusic(track, skip))
             return;
         if (!up_)
             return;
+        // Otherwise the ARM7, in stereo: the track's stereo file, its blocks
+        // into the ring as they are.
         char name[16];
-        musicFileName(track, name, sizeof(name));
+        musicFileName(track, name, sizeof(name), true);
         const std::string path = global.dataPath("music/") + name;
         std::FILE *file = std::fopen(path.c_str(), "rb");
         if (file == nullptr)
             return;
-        MusicHeader header;
+        StereoHeader header;
         std::fseek(file, 0, SEEK_END);
         const long size = std::ftell(file);
         std::fseek(file, 0, SEEK_SET);
-        if (std::fread(&header, sizeof(header), 1, file) != 1 ||
-            std::memcmp(header.magic, kMusicMagic, 4) != 0 || header.version != kSoundVersion ||
-            header.rate != kMusicRate || size < static_cast<long>(sizeof(header)) ||
-            header.bytes > static_cast<std::uint32_t>(size) - sizeof(header) ||
-            global.heapHeadroom() < 300 * 1024)
+        const long blockBytes = StereoMusic::kBlockWords * 2;
+        if (std::fread(&header, sizeof(header), 1, file) != 1 || std::memcmp(header.magic, kStereoMagic, 4) != 0 ||
+            header.version != kSoundVersion || header.blocks == 0 || header.rate == 0 ||
+            size != static_cast<long>(sizeof(header)) + static_cast<long>(header.blocks) * blockBytes)
         {
             std::fclose(file);
             return;
         }
-        // (No buffer of the C library's own: the reads are small and
-        // regular, and a second copy of each is time and memory for
-        // nothing.)
+        // Taken up part of the way in, if it was put down there: at the
+        // block that holds the moment.
+        const std::uint32_t block = skip / StereoMusic::kPairsPerBlock;
+        if (block >= header.blocks)
+        {
+            std::fclose(file); // (it was over already)
+            return;
+        }
+        std::fseek(file, static_cast<long>(sizeof(header)) + static_cast<long>(block) * blockBytes, SEEK_SET);
+        // (No buffer of the C library's own: the reads are whole blocks,
+        // straight into the ring.)
         std::setvbuf(file, nullptr, _IONBF, 0);
         music_ = file;
         musicTrack_ = track;
-        musicLeft_ = header.bytes;
-        musicFed_ = 0;
-        musicPast_ = 0;
-        // Taken up part of the way in, if it was put down there.
-        if (skip != 0 && skip < musicLeft_)
-        {
-            std::fseek(music_, static_cast<long>(sizeof(MusicHeader) + skip), SEEK_SET);
-            musicLeft_ -= skip;
-            musicSkipped_ = skip;
-        }
-        // A ring the ARM7 plays round and round, which musicTick keeps
-        // filled ahead of it: eight bits, one channel, as the file is.
-        std::memset(musicRing, 0, sizeof(musicRing));
-        DC_FlushRange(musicRing, sizeof(musicRing));
-        arm7Audio.musicOpen(musicRing, sizeof(musicRing), kMusicRate);
+        musicRate_ = header.rate;
+        musicLeft_ = header.blocks - block;
+        musicSkipped_ = block * StereoMusic::kPairsPerBlock;
+        const std::uint32_t pairs = header.pairs > musicSkipped_ ? header.pairs - musicSkipped_ : 0;
+        arm7Audio.musicOpen(musicRing, kMusicRingBlocks, header.rate, pairs, musicGain());
         musicTick();
     }
 
     std::uint32_t Sound::musicPlayed() const
     {
-        // (What the ARM7 has played of what was handed over, less any
-        // silence after the end.)
-        const std::uint32_t read = arm7Audio.musicRead(), fed = musicFed_ - musicPast_;
-        return read < fed ? read : fed;
-    }
-
-    void Sound::fillMusic(std::int8_t *out, std::uint32_t count)
-    {
-        const std::uint32_t want = music_ == nullptr ? 0 : (musicLeft_ < count ? musicLeft_ : count);
-        const std::size_t got = want != 0 ? std::fread(out, 1, want, music_) : 0;
-        musicLeft_ -= static_cast<std::uint32_t>(got);
-        // As loud as the player has the music (the track itself is played
-        // at about four fifths of full).
-        const int level = settings.volume[kVolumeMusic] * 205; // of 2560
-        for (std::size_t i = 0; i < got; ++i)
-            out[i] = static_cast<std::int8_t>((out[i] * level) / 2560);
-        // Past the end of the track: silence.
-        if (got < count)
-            std::memset(out + got, 0, count - got);
-        musicFed_ += count;
-        musicPast_ += count - static_cast<std::uint32_t>(got);
+        return arm7Audio.musicRead();
     }
 
     void Sound::stopMusic()
@@ -1272,29 +1270,25 @@ namespace hlrt
     {
         if (music_ == nullptr)
             return;
-        // The ring filled up to just short of where the ARM7 is playing (a
-        // ring's worth ahead; if it got ahead of what was written -- a long
-        // load -- the writing starts again from where it is).
-        const std::uint32_t read = arm7Audio.musicRead();
+        // The ring kept full: a block may be written over once the ARM7 has
+        // moved past it.
+        const std::uint32_t reading = arm7Audio.musicRead() / StereoMusic::kPairsPerBlock;
         std::uint32_t written = arm7Audio.musicWritten();
-        if (static_cast<std::int32_t>(written - read) < 0)
+        while (musicLeft_ != 0 && written < reading + kMusicRingBlocks)
         {
-            arm7Audio.musicWrote(read - written);
-            written = read;
-        }
-        const std::uint32_t target = read + kStreamSamples - 256;
-        while (static_cast<std::int32_t>(target - written) > 0)
-        {
-            const std::uint32_t at = written & (kStreamSamples - 1);
-            std::uint32_t n = target - written;
-            n = n < kStreamSamples - at ? n : kStreamSamples - at;
-            fillMusic(musicRing + at, n);
-            DC_FlushRange(musicRing + at, n);
-            arm7Audio.musicWrote(n);
-            written += n;
+            std::uint16_t *slot = musicRing + (written % kMusicRingBlocks) * StereoMusic::kBlockWords;
+            if (std::fread(slot, 2, StereoMusic::kBlockWords, music_) != StereoMusic::kBlockWords)
+            {
+                musicLeft_ = 0; // (the file ends short: so does the track)
+                break;
+            }
+            DC_FlushRange(slot, StereoMusic::kBlockWords * 2);
+            arm7Audio.musicWrote(1);
+            ++written;
+            --musicLeft_;
         }
         // The track is over once all of it has been played.
-        if (musicLeft_ == 0 && read >= musicFed_ - musicPast_)
+        if (arm7Audio.musicOver())
             stopMusic();
     }
 
