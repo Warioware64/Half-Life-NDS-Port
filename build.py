@@ -68,12 +68,19 @@ arm9 = Arm9Binary(
 
 arm9.generate_elf()
 
-# The other processor's program has to be of the same build as the ARM9's
-# wireless library: the two share the structures they talk through, and the
-# library refuses a pair that do not match.
-arm7 = Arm7BinaryDefault(
-    elf_path='${BLOCKSDSEXT}/dswifi_dl/sys/arm7/arm7_dswifi_dl_maxmod.elf'
+# The other processor's program: the game's own (arm7/source) -- what
+# BlocksDS's default does, with the game's sound instead of maxmod. It links
+# the wireless library of the same build as the ARM9's: the two share the
+# structures they talk through, and the library refuses a pair that do not
+# match.
+arm7 = Arm7Binary(
+    sourcedirs=['arm7/source'],
+    includedirs=['shared'],
+    libs=['nds7', 'dswifi_dl7'],
+    libdirs=['${BLOCKSDS}/libs/libnds', '${BLOCKSDSEXT}/dswifi_dl'],
+    cxxflags='-Wall -O2 -std=gnu++20 -fno-exceptions -fno-rtti',
 )
+arm7.generate_elf()
 
 hl = Arm9DynamicLibrary(
     name='hl',

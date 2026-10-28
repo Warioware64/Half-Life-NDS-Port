@@ -12,6 +12,7 @@
 
 #include "Global.hpp"
 #include "Settings.hpp"
+#include "audio/Arm7Audio.hpp"
 #include "audio/DspAudio.hpp"
 #include "game/Player.hpp"
 #include "data/LevelFile.hpp"
@@ -26,25 +27,9 @@ namespace hlrt
     {
         using namespace hldata;
 
-        /// Maxmod's table of what is loaded: a word a sample.
-        mm_word bankMemory[1024];
-
-        /// Maxmod asks for a sample by number, and says when it has done
-        /// with one. The samples are ours and stay where they are: asked,
-        /// it is told where; told, nothing is done.
-        mm_word bankHandler(mm_word message, mm_word parameter)
-        {
-            if (message == MMCB_SAMPREQUEST)
-                return reinterpret_cast<mm_word>(sound.sample(parameter));
-            return 0;
-        }
-
-        mm_word musicHandler(mm_word length, mm_addr dest, mm_stream_formats format)
-        {
-            (void)format;
-            sound.fillMusic(static_cast<std::int8_t *>(dest), length);
-            return length;
-        }
+        /// The music's ring, which the ARM7 plays round and round and
+        /// musicTick keeps filled ahead of it (half a second).
+        alignas(32) std::int8_t musicRing[8192];
     } // namespace
 
     void Sound::init()
@@ -64,32 +49,18 @@ namespace hlrt
             NEA_SoundSetDSiMixRatio(8);
             NEA_SoundEnableDSiOutput(NEA_DSI_SOUND_FREQ_47KHZ);
         }
-        // Maxmod, with a bank that is ours (Sound.hpp): NEA's own start-up
-        // wants a bank file, so it is told only to make its sound ready,
-        // and maxmod is started here.
-        static_assert(sizeof(Header) == 24);
-        static_assert(sizeof(bankMemory) / sizeof(bankMemory[0]) == kSamples);
-        NEA_SoundSystemResetPool(1);
-        mm_ds_system system{};
-        system.mod_count = 0;
-        system.samp_count = kSamples;
-        system.mem_bank = bankMemory;
-        system.fifo_channel = FIFO_MAXMOD;
-        mmInit(&system);
-        mmSetCustomSoundBankHandler(bankHandler);
-        // (Channel 1 is not maxmod's: its clock is what a DSi's sound
-        // capture keeps time by -- DspAudio.)
-        mmLockChannels(1u << 1);
-        up_ = true;
+        // The game's own sound on the ARM7 (arm7/source/Audio.cpp), which
+        // plays the clips where they are in memory: nothing is "loaded".
+        // (Channel 1 is not its: its clock is what a DSi's sound capture
+        // keeps time by -- DspAudio.)
+        static_assert(sizeof(musicRing) == kStreamSamples);
+        up_ = arm7Audio.start();
         applyVolumes();
         // The menu's own sounds, for as long as the game runs.
         for (int n = 0; n < kUiSoundCount; ++n)
         {
             if (global.hasFat && readClip(kUiSoundFiles[n], ui_[n]))
-            {
                 describe(ui_[n]);
-                mmLoadEffect(kUiSample + n);
-            }
         }
         if (dsi)
             extended_ = settings.dspAudio && dspAudio.start();
@@ -228,8 +199,6 @@ namespace hlrt
                 readClip(view.sounds[i].name, clips_[i]))
             {
                 describe(clips_[i]);
-                if (up_)
-                    mmLoadEffect(i);
                 ++loaded_;
                 bytes_ += static_cast<int>(clips_[i].bytes);
             }
@@ -256,8 +225,7 @@ namespace hlrt
         {
             // (What has been handed over, less what the stream still has
             // in hand, less any silence after the end.)
-            const std::uint32_t fed = musicFed_ - musicPast_;
-            const std::uint32_t played = fed > kStreamSamples / 2 ? fed - kStreamSamples / 2 : 0;
+            const std::uint32_t played = musicPlayed();
             const int track = musicTrack_;
             const bool over = musicLeft_ == 0;
             const std::uint32_t before = musicSkipped_;
@@ -312,7 +280,7 @@ namespace hlrt
     void Sound::unload()
     {
         if (up_)
-            mmEffectCancelAll();
+            arm7Audio.stopAll();
         fading_[0] = fading_[1] = Fading();
         for (int v = 0; v < Mixer::kVoices; ++v)
         {
@@ -328,8 +296,6 @@ namespace hlrt
         swiWaitForVBlank();
         for (int i = 0; i < count_; ++i)
         {
-            if (clips_[i].data != nullptr && up_)
-                mmUnloadEffect(i);
             std::free(clips_[i].data);
         }
         for (Speech &speech : speech_)
@@ -385,17 +351,21 @@ namespace hlrt
             return -1;
         if (mixer_.voices[v].active)
             retire(v);
-        // (Maxmod's unit of speed: 1024 is as recorded.)
+        // (The unit of speed: 1024 is as recorded.)
         int rate = (1024 * pitch) / 100;
         rate = rate < 64 ? 64 : (rate > 4095 ? 4095 : rate);
-        mm_sfxhand handle = NEA_SfxPlayEx(static_cast<mm_word>(sample), static_cast<mm_byte>(gain * 2),
-                                          static_cast<mm_byte>(pan * 2), static_cast<mm_hword>(rate));
+        (void)sample;
+        auto playIt = [&]()
+        {
+            return arm7Audio.play(clip.data, clip.bytes / 4, clip.loopWord, clip.rate, gain * 2, pan * 2, rate,
+                                  layer == SoundLayer::Ui);
+        };
+        std::uint16_t handle = playIt();
         if (handle == 0 && (fading_[0].handle != 0 || fading_[1].handle != 0))
         {
             // No channel: what was on its way out is out now.
             killFading();
-            handle = NEA_SfxPlayEx(static_cast<mm_word>(sample), static_cast<mm_byte>(gain * 2),
-                                   static_cast<mm_byte>(pan * 2), static_cast<mm_hword>(rate));
+            handle = playIt();
         }
         if (handle == 0)
         {
@@ -408,8 +378,7 @@ namespace hlrt
                               Mixer::rank(mixer_.voices[least].layer) > Mixer::rank(layer)))
                 return -1;
             stop(least);
-            handle = NEA_SfxPlayEx(static_cast<mm_word>(sample), static_cast<mm_byte>(gain * 2),
-                                   static_cast<mm_byte>(pan * 2), static_cast<mm_hword>(rate));
+            handle = playIt();
             if (handle == 0)
                 return -1;
         }
@@ -427,14 +396,14 @@ namespace hlrt
     void Sound::stop(int v)
     {
         if (voices_[v].handle != 0)
-            NEA_SfxStop(voices_[v].handle);
+            arm7Audio.stop(voices_[v].handle);
         voices_[v] = Voice();
         mixer_.stop(v);
     }
 
     void Sound::retire(int v)
     {
-        const mm_sfxhand handle = voices_[v].handle;
+        const std::uint16_t handle = voices_[v].handle;
         const int level = voices_[v].shown;
         voices_[v] = Voice();
         mixer_.stop(v);
@@ -443,7 +412,7 @@ namespace hlrt
         // (Too quiet to click, or the game standing still: simply stopped.)
         if (level < 8 || paused_)
         {
-            NEA_SfxStop(handle);
+            arm7Audio.stop(handle);
             return;
         }
         // A place on the way out; if both are taken, the older has had its
@@ -451,13 +420,13 @@ namespace hlrt
         int slot = fading_[0].handle == 0 ? 0 : (fading_[1].handle == 0 ? 1 : -1);
         if (slot < 0)
         {
-            NEA_SfxStop(fading_[0].handle);
+            arm7Audio.stop(fading_[0].handle);
             fading_[0] = fading_[1];
             slot = 1;
         }
         fading_[slot].handle = handle;
         fading_[slot].level = static_cast<std::uint8_t>(level / 2);
-        NEA_SfxSetVolume(handle, static_cast<mm_word>(level));
+        arm7Audio.setVolume(handle, static_cast<int>(level));
     }
 
     /// Every frame: what is on its way out is half as loud again, and gone
@@ -471,12 +440,12 @@ namespace hlrt
             fading.level = static_cast<std::uint8_t>(fading.level / 2);
             if (fading.level < 4)
             {
-                NEA_SfxStop(fading.handle);
+                arm7Audio.stop(fading.handle);
                 fading = Fading();
             }
             else
             {
-                NEA_SfxSetVolume(fading.handle, static_cast<mm_word>(fading.level * 2));
+                arm7Audio.setVolume(fading.handle, static_cast<int>(fading.level * 2));
             }
         }
     }
@@ -486,7 +455,7 @@ namespace hlrt
         for (Fading &fading : fading_)
         {
             if (fading.handle != 0)
-                NEA_SfxStop(fading.handle);
+                arm7Audio.stop(fading.handle);
             fading = Fading();
         }
     }
@@ -531,8 +500,6 @@ namespace hlrt
         if (lazyClip_[place] >= 0)
         {
             const int gone = lazyClip_[place];
-            if (up_)
-                mmUnloadEffect(gone);
             std::free(clips_[gone].data);
             clips_[gone] = Clip();
             lazyClip_[place] = -1;
@@ -540,8 +507,6 @@ namespace hlrt
         if (global.heapHeadroom() < 200 * 1024 || !readClip(level.view.sounds[sound].name, clips_[sound]))
             return;
         describe(clips_[sound]);
-        if (up_)
-            mmLoadEffect(sound);
         lazyClip_[place] = sound;
         lazyPlayed_[place] = now;
     }
@@ -637,20 +602,18 @@ namespace hlrt
             {
                 voice.shown = static_cast<std::uint8_t>(gain);
                 mix.gain = voice.shown;
-                NEA_SfxSetVolume(voice.handle, static_cast<mm_word>(gain * 2));
+                arm7Audio.setVolume(voice.handle, static_cast<int>(gain * 2));
             }
             if (dp > 3 || dp < -3)
             {
                 voice.pan = static_cast<std::uint8_t>(pan);
-                NEA_SfxSetPanning(voice.handle, static_cast<mm_byte>(pan * 2));
+                arm7Audio.setPanning(voice.handle, static_cast<int>(pan * 2));
             }
         }
     }
 
     void Sound::releaseWord(Speech &speech, int which)
     {
-        if (speech.loaded[which] && up_)
-            mmUnloadEffect(static_cast<mm_word>(kSpeechSample + (&speech - speech_) * 2 + which));
         speech.loaded[which] = false;
         std::free(speech.clip[which].data);
         speech.clip[which] = Clip();
@@ -719,8 +682,7 @@ namespace hlrt
         if (!readClip(level.view.sounds[index].name, speech.clip[other]))
             return;
         describe(speech.clip[other]);
-        speech.loaded[other] =
-            up_ && mmLoadEffect(static_cast<mm_word>(kSpeechSample + (&speech - speech_) * 2 + other)) == 0;
+        speech.loaded[other] = up_;
         if (speech.loaded[other])
             speech.ahead = index;
         else
@@ -937,12 +899,12 @@ namespace hlrt
             {
                 voice.shown = static_cast<std::uint8_t>(gain);
                 mix.gain = voice.shown;
-                NEA_SfxSetVolume(voice.handle, static_cast<mm_word>(gain * 2));
+                arm7Audio.setVolume(voice.handle, static_cast<int>(gain * 2));
             }
             if (dp > 3 || dp < -3)
             {
                 voice.pan = static_cast<std::uint8_t>(wantPan[found]);
-                NEA_SfxSetPanning(voice.handle, static_cast<mm_byte>(voice.pan * 2));
+                arm7Audio.setPanning(voice.handle, static_cast<int>(voice.pan * 2));
             }
             // (A train's engine is higher the faster it goes.)
             if (view.logic[want[found]].kind == static_cast<std::uint8_t>(LogicKind::TrackTrain) && !paused_)
@@ -951,7 +913,7 @@ namespace hlrt
                 if (rate - voice.rate > 16 || voice.rate - rate > 16)
                 {
                     voice.rate = static_cast<std::uint16_t>(rate);
-                    NEA_SfxSetRate(voice.handle, voice.rate);
+                    arm7Audio.setRate(voice.handle, voice.rate);
                 }
             }
         }
@@ -1039,13 +1001,13 @@ namespace hlrt
                 // (A channel's clock is sixteen bits of the 16.7 MHz bus:
                 // 256 Hz is as slow as it goes. A little above that.)
                 const int slow = (300 * 1024) / (voice.hz > 0 ? voice.hz : 11025) + 1;
-                NEA_SfxSetVolume(voice.handle, 0);
-                NEA_SfxSetRate(voice.handle, static_cast<mm_hword>(slow));
+                arm7Audio.setVolume(voice.handle, 0);
+                arm7Audio.setRate(voice.handle, static_cast<int>(slow));
             }
             else
             {
-                NEA_SfxSetRate(voice.handle, voice.rate);
-                NEA_SfxSetVolume(voice.handle, static_cast<mm_word>(voice.shown * 2));
+                arm7Audio.setRate(voice.handle, voice.rate);
+                arm7Audio.setVolume(voice.handle, static_cast<int>(voice.shown * 2));
             }
         }
         if (paused)
@@ -1075,10 +1037,7 @@ namespace hlrt
             return static_cast<std::uint32_t>((static_cast<std::uint64_t>(dspAudio.musicPair()) * 1000) / kStereoRate);
         if (music_ == nullptr)
             return 0;
-        // (As holdMusic reckons it: what has been handed over, less what
-        // the stream still has in hand, less any silence after the end.)
-        const std::uint32_t fed = musicFed_ - musicPast_;
-        const std::uint32_t played = fed > kStreamSamples / 2 ? fed - kStreamSamples / 2 : 0;
+        const std::uint32_t played = musicPlayed();
         return static_cast<std::uint32_t>((static_cast<std::uint64_t>(musicSkipped_ + played) * 1000) / kMusicRate);
     }
 
@@ -1148,16 +1107,20 @@ namespace hlrt
             musicLeft_ -= skip;
             musicSkipped_ = skip;
         }
-        // A stream of maxmod's, which asks for more when it is told to
-        // look (musicTick): eight bits, one channel, as the file is.
-        mm_stream stream{};
-        stream.sampling_rate = kMusicRate;
-        stream.buffer_length = kStreamSamples;
-        stream.callback = musicHandler;
-        stream.format = MM_STREAM_8BIT_MONO;
-        stream.timer = MM_TIMER3;
-        stream.manual = true;
-        mmStreamOpen(&stream);
+        // A ring the ARM7 plays round and round, which musicTick keeps
+        // filled ahead of it: eight bits, one channel, as the file is.
+        std::memset(musicRing, 0, sizeof(musicRing));
+        DC_FlushRange(musicRing, sizeof(musicRing));
+        arm7Audio.musicOpen(musicRing, sizeof(musicRing), kMusicRate);
+        musicTick();
+    }
+
+    std::uint32_t Sound::musicPlayed() const
+    {
+        // (What the ARM7 has played of what was handed over, less any
+        // silence after the end.)
+        const std::uint32_t read = arm7Audio.musicRead(), fed = musicFed_ - musicPast_;
+        return read < fed ? read : fed;
     }
 
     void Sound::fillMusic(std::int8_t *out, std::uint32_t count)
@@ -1181,7 +1144,7 @@ namespace hlrt
     {
         if (music_ == nullptr)
             return;
-        mmStreamClose();
+        arm7Audio.musicStop();
         std::fclose(music_);
         music_ = nullptr;
         musicTrack_ = -1;
@@ -1191,10 +1154,29 @@ namespace hlrt
     {
         if (music_ == nullptr)
             return;
-        mmStreamUpdate();
-        // The track is over once all of it, and what the stream had in
-        // hand, has been played.
-        if (musicLeft_ == 0 && musicPast_ > kStreamSamples)
+        // The ring filled up to just short of where the ARM7 is playing (a
+        // ring's worth ahead; if it got ahead of what was written -- a long
+        // load -- the writing starts again from where it is).
+        const std::uint32_t read = arm7Audio.musicRead();
+        std::uint32_t written = arm7Audio.musicWritten();
+        if (static_cast<std::int32_t>(written - read) < 0)
+        {
+            arm7Audio.musicWrote(read - written);
+            written = read;
+        }
+        const std::uint32_t target = read + kStreamSamples - 256;
+        while (static_cast<std::int32_t>(target - written) > 0)
+        {
+            const std::uint32_t at = written & (kStreamSamples - 1);
+            std::uint32_t n = target - written;
+            n = n < kStreamSamples - at ? n : kStreamSamples - at;
+            fillMusic(musicRing + at, n);
+            DC_FlushRange(musicRing + at, n);
+            arm7Audio.musicWrote(n);
+            written += n;
+        }
+        // The track is over once all of it has been played.
+        if (musicLeft_ == 0 && read >= musicFed_ - musicPast_)
             stopMusic();
     }
 
@@ -1227,7 +1209,7 @@ namespace hlrt
             if (!((ended >> v) & 1))
                 continue;
             if (voices_[v].handle != 0)
-                NEA_SfxStop(voices_[v].handle);
+                arm7Audio.stop(voices_[v].handle);
             voices_[v] = Voice();
         }
         if (clips_ == nullptr)

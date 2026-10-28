@@ -2,22 +2,19 @@
 
 #include "EngineObject.hpp"
 
-// What is heard: the map's sounds in memory, played through maxmod (by way
-// of NEA where NEA has the call), in layers.
+// What is heard: the map's sounds in memory, played by the game's own sound
+// program on the ARM7 (arm7/source/Audio.cpp, by way of Arm7Audio), in layers.
 //
 // A layer (HlSound.hpp) is a kind of sound: the player's own, the world's,
 // the voice, the loops of a place, the menu. Each has its share of the
-// fifteen voices and gives way in its turn (HlMixer.hpp has the rules), and
-// each has a volume the player sets. The music is beside them: a stream of
-// maxmod's, read off the card as it plays, on a DS; the DSP's, in stereo, on
-// a DSi that has it switched on.
+// thirteen voices and gives way in its turn (HlMixer.hpp has the rules), and
+// each has a volume the player sets. The music is beside them: a ring the
+// ARM7 plays round, read off the card as it plays, on a DS; the DSP's, in
+// stereo, on a DSi that has it switched on.
 //
-// Maxmod plays samples out of a "sound bank". Ours is not a file: it is the
-// map's cooked sounds where they already are in memory, each given to
-// maxmod as a small header that points at it -- maxmod asks for a sample by
-// number, and the number is the sound's index in the level (the menu's
-// sounds and the word being spoken have numbers of their own at the top).
-// The hardware plays the ADPCM itself, loops and all.
+// The clips are the map's cooked sounds where they already are in memory:
+// the ARM7 is told where each is, and the hardware plays the ADPCM itself,
+// loops and all. A sound is known by a token (a "handle"), as maxmod's were.
 //
 // The game's shared code says what was heard and where (a SoundQueue); this
 // turns each into a volume and a side by where the camera is, plays it, and
@@ -85,8 +82,10 @@ namespace hlrt
 
         /// For maxmod: the header of sample `id`, or null.
         const void *sample(std::uint32_t id) const;
-        /// ... and `count` samples of music for its stream.
+        /// ... and `count` samples of music for its ring.
         void fillMusic(std::int8_t *out, std::uint32_t count);
+        /// Samples of the track played since it started (or was taken up).
+        std::uint32_t musicPlayed() const;
 
     private:
         /// What maxmod wants in front of a sample: its file header and its

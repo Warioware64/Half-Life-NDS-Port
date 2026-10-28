@@ -548,11 +548,16 @@ Milestone 11, "levels of detail".
 - Everything see-through -- glass, sprites, beams, effects -- is drawn in
   one order, far to near, and what the effects cost is counted against the
   polygon budget with the rest.
-- Sound in layers, through maxmod (by way of NEA where NEA has the call).
-  Maxmod plays samples out of a "sound bank"; ours is not a file but the
-  map's cooked sounds where they already are in memory, each handed over as
-  a small header that points at it, so nothing is cooked twice and the
-  hardware still plays the ADPCM itself, loops included. Every sound is of
+- Sound in layers, played by the game's own ARM7 program (`arm7/source`,
+  in place of BlocksDS's default with maxmod; it keeps the rest of what that
+  did: input, wifi for Download Play, the DSi's card, the clock). The ARM9
+  (`source/audio/Arm7Audio`) puts commands -- play this clip, change, stop,
+  the music's ring -- into one block of shared memory
+  (`shared/HlAudioLink.hpp`); the ARM7 takes them every 2 ms block, plays
+  each sound on a free hardware channel straight out of the map's cooked
+  sounds in memory (the hardware decodes the ADPCM, loops included), and
+  says when each has ended, by the token it was given. 66 KB of code and
+  19 KB of data on the ARM7, against 110 KB for the default with maxmod. Every sound is of
   a layer -- the player's own, the world's, the voice, the loops of a
   place, the menu -- and each layer has its share of the fourteen voices
   the hardware really has beside the music (3, 4, 2, 4, 1), which no other
@@ -594,8 +599,9 @@ Milestone 11, "levels of detail".
   goes on from there** (a DS's channel cannot be stopped and continued: it
   is slowed to the slowest the hardware has and silenced, which costs a
   sound a quarter of a second for ten of menu); the menu's clicks are
-  heard meanwhile. The music, on a DS, is a maxmod stream fed from the
-  card.
+  heard meanwhile. The music, on a DS, is a ring of 8-bit samples the
+  ARM7 plays round on one channel, which the ARM9 keeps filled from the
+  card half a second ahead; the ARM7 says how far it has played.
 - The pause menu: RESUME, QUICK SAVE, SAVE GAME, LOAD GAME, NEW GAME (asks
   first), OPTIONS, ACHIEVEMENTS, COMMAND. Buttons act when the stylus is
   lifted from them. The command line has a keyboard of the port's own.
