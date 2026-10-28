@@ -1,9 +1,8 @@
-// The game's DSP program (DSi): the music in stereo, and the room's echo.
+// The game's DSP program (DSi): the room (the room effects' Enhanced).
 //
 // All of it is assembly: this file is the start and the loop that takes the
-// ARM9's commands; tick.s works a pair of samples out, music.s and reverb.s
-// are what it is made of, irq.s hands the pairs to the speakers, data.s is
-// its memory. What it must work out is written down in C in
+// ARM9's commands; tick.s works a pair of samples out, reverb.s the room
+// in it, irq.s hands the pairs to the speakers, data.s is its memory. What it must work out is written down in C in
 // shared/dsp/hl_dsp.h, its model, and tools/dspsim holds the two against
 // each other, sample for sample.
 //
@@ -21,7 +20,7 @@
 #define APBP_CMD0_NEW 0x100
 
 // (data.s: from hlState to its end.)
-#define HL_STATE_WORDS (HL_DSP_OUT_WORDS + 5 + 7 + 5 + 8 + HL_DSP_ROOM_WORDS + 32)
+#define HL_STATE_WORDS (HL_DSP_OUT_WORDS + 5 + 4 + 2 + HL_DSP_ROOM_WORDS + 32)
 
     .section .bss.hl_main, "aw", %nobits
     .align 2
@@ -91,12 +90,6 @@ BEGIN_ASM_FUNC main
     br      .Lcmd_ping, eq
     cmp     HL_DSP_CMD_INFO, a0
     br      .Lcmd_info, eq
-    cmp     HL_DSP_CMD_MUSIC_START, a0
-    br      .Lcmd_start, eq
-    cmp     HL_DSP_CMD_MUSIC_STOP, a0
-    br      .Lcmd_stop, eq
-    cmp     HL_DSP_CMD_MUSIC_FED, a0
-    br      .Lcmd_music, eq
     cmp     HL_DSP_CMD_SEND_FED, a0
     br      .Lcmd_send, eq
     cmp     HL_DSP_CMD_ROOM, a0
@@ -114,10 +107,7 @@ BEGIN_ASM_FUNC main
 
 // Where the ARM9 is to write: addresses in the DSP's data memory.
 .Lcmd_info:
-    mov     hlMusicRing, a1
     mov     [mn_arg1], a0
-    cmp     HL_DSP_INFO_MUSIC, a0
-    br      .Lcmd_info_is, eq
     mov     hlRoomBlock, a1
     cmp     HL_DSP_INFO_ROOM, a0
     br      .Lcmd_info_is, eq
@@ -126,53 +116,8 @@ BEGIN_ASM_FUNC main
     mov     a1l, [mn_answer]
     br      .Lcmd_done, always
 
-// The music starts (or starts again somewhere else): the ring is read from
-// its beginning, where a block begins.
-.Lcmd_start:
-    clr     a0, always
-    mov     a0l, [hlMusicOn]
-    mov     a0l, [hlMusicWrite]
-    mov     [mn_arg1], a1
-    cmp     0x0u8, a1
-    br      .Lcmd_start_at, lt
-    cmp     HL_DSP_MUSIC_WORDS, a1
-    br      .Lcmd_start_at, ge
-    mov     a1l, [hlMusicWrite]
-.Lcmd_start_at:
-    mov     a0l, [hlValue]
-    mov     a0l, [hlValue+1]
-    mov     a0l, [hlLast]
-    mov     a0l, [hlLast+1]
-    mov     a0l, [hlIndex]
-    mov     a0l, [hlIndex+1]
-    mov     a0l, [hlMusicRead]
-    mov     a0l, [hlMusicHalf]
-    mov     a0l, [hlBlockLeft]
-    mov     a0l, [hlFault]
-    mov     a0l, [hlPinned]
-    mov     0x1, a0
-    mov     a0l, [hlMusicOn]
-    br      .Lcmd_done, always
-
-.Lcmd_stop:
-    clr     a0, always
-    mov     a0l, [hlMusicOn]
-    br      .Lcmd_done, always
-
-// More has been written into a ring: where to; the answer is where it has
-// been read to.
-.Lcmd_music:
-    mov     [mn_arg1], a1
-    cmp     0x0u8, a1
-    br      .Lcmd_music_read, lt
-    cmp     HL_DSP_MUSIC_WORDS, a1
-    br      .Lcmd_music_read, ge
-    mov     a1l, [hlMusicWrite]
-.Lcmd_music_read:
-    mov     [hlMusicRead], a0
-    mov     a0l, [mn_answer]
-    br      .Lcmd_done, always
-
+// More has been written into the echo's ring: where to; the answer is
+// where it has been read to.
 .Lcmd_send:
     mov     [mn_arg1], a1
     cmp     0x0u8, a1
@@ -337,24 +282,11 @@ BEGIN_ASM_FUNC main
     br      .Lroom_clear_at, neq
     br      .Lcmd_done, always
 
-// How often the music ran dry or the speakers went short since last asked,
-// and whether the music has been stopped as wrong.
+// How often the speakers went short since last asked.
 .Lcmd_status:
-    mov     [hlDry], a0
-    mov     [hlStarved], a1
-    add     a1, a0
-    cmp     0x7fff, a0
-    br      .Lcmd_status_fits, le
-    mov     0x7fff, a0
-.Lcmd_status_fits:
-    mov     [hlFault], a1
-    cmp     0x0u8, a1
-    br      .Lcmd_status_well, eq
-    or      HL_DSP_FAULT, a0
-.Lcmd_status_well:
+    mov     [hlStarved], a0
     mov     a0l, [mn_answer]
     clr     a0, always
-    mov     a0l, [hlDry]
     mov     a0l, [hlStarved]
     br      .Lcmd_done, always
 

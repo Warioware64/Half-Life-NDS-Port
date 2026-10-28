@@ -12,12 +12,8 @@
 #define MINIMP3_NO_SIMD
 #include "minimp3/minimp3.h"
 
-// The DSP program's own arithmetic (it is plain C, and keeps its state in
-// statics: this file's copy is this file's).
-extern "C"
-{
-#include "dsp/hl_dsp.h"
-}
+// The ARM7's music decoder: what is coded is coded against what it will have.
+#include "HlStereoMusic.hpp"
 
 namespace hlds
 {
@@ -484,16 +480,16 @@ namespace hlds
         std::vector<std::uint16_t> words;
         words.reserve(blocks * (kMusicBlockWords + 4));
 
-        // The decoders' states are the DSP's own variables: each sample is
-        // coded, then the DSP's decoder is run on the code, so that what is
-        // coded next is coded against exactly what the DSP will have.
-        hlDspInit();
+        // Each sample is coded, then the ARM7's decoder is run on the code,
+        // so that what is coded next is coded against exactly what the ARM7
+        // will have.
+        std::int32_t value[2] = {0, 0}, index[2] = {0, 0};
         for (std::size_t block = 0; block < blocks; ++block)
         {
-            words.push_back(static_cast<std::uint16_t>(hlValue[0]));
-            words.push_back(static_cast<std::uint16_t>(hlIndex[0]));
-            words.push_back(static_cast<std::uint16_t>(hlValue[1]));
-            words.push_back(static_cast<std::uint16_t>(hlIndex[1]));
+            words.push_back(static_cast<std::uint16_t>(value[0]));
+            words.push_back(static_cast<std::uint16_t>(index[0]));
+            words.push_back(static_cast<std::uint16_t>(value[1]));
+            words.push_back(static_cast<std::uint16_t>(index[1]));
             for (int w = 0; w < kMusicBlockWords; ++w)
             {
                 std::uint16_t word = 0;
@@ -504,10 +500,10 @@ namespace hlds
                     {
                         // (Past the end of the track: silence.)
                         const int want = at < pairs ? channel[c][at] : 0;
-                        const int step = hlStepTable[hlIndex[c]];
+                        const int step = StereoMusic::kSteps[index[c]];
                         // The code whose step, as the decoder takes it
                         // ((2c + 1) / 8 of the step), lands nearest.
-                        int delta = want - hlValue[c];
+                        int delta = want - value[c];
                         std::uint16_t code = 0;
                         if (delta < 0)
                         {
@@ -516,7 +512,7 @@ namespace hlds
                         }
                         const int size = std::clamp((delta * 4) / step, 0, 7);
                         code |= static_cast<std::uint16_t>(size);
-                        hlDecode(c, code);
+                        StereoMusic::decode(value[c], index[c], code);
                         word |= static_cast<std::uint16_t>(code << (half * 8 + c * 4));
                     }
                 }
@@ -542,7 +538,7 @@ namespace hlds
         if (std::memcmp(header.magic, kStereoMagic, 4) != 0 || header.version != kSoundVersion ||
             file.size() != sizeof(header) + header.blocks * blockBytes)
             return false;
-        hlDspInit();
+        std::int32_t value[2] = {0, 0}, index[2] = {0, 0};
         for (std::size_t block = fromBlock; block < header.blocks; ++block)
         {
             const std::uint8_t *at = file.data() + sizeof(header) + block * blockBytes;
@@ -550,20 +546,20 @@ namespace hlds
             if (block == fromBlock)
             {
                 // Taken up here: the states the block starts from.
-                hlValue[0] = static_cast<std::int16_t>(word(0));
-                hlIndex[0] = static_cast<std::int16_t>(word(1));
-                hlValue[1] = static_cast<std::int16_t>(word(2));
-                hlIndex[1] = static_cast<std::int16_t>(word(3));
+                value[0] = static_cast<std::int16_t>(word(0));
+                index[0] = static_cast<std::int16_t>(word(1));
+                value[1] = static_cast<std::int16_t>(word(2));
+                index[1] = static_cast<std::int16_t>(word(3));
             }
             for (int w = 0; w < kMusicBlockWords; ++w)
             {
                 const std::uint16_t packed = word(4 + w);
                 for (int half = 0; half < 2; ++half)
                 {
-                    hlDecode(0, (packed >> (half * 8)) & 15);
-                    hlDecode(1, (packed >> (half * 8 + 4)) & 15);
-                    left.push_back(hlValue[0]);
-                    right.push_back(hlValue[1]);
+                    StereoMusic::decode(value[0], index[0], (packed >> (half * 8)) & 15);
+                    StereoMusic::decode(value[1], index[1], (packed >> (half * 8 + 4)) & 15);
+                    left.push_back(static_cast<std::int16_t>(value[0]));
+                    right.push_back(static_cast<std::int16_t>(value[1]));
                 }
             }
         }

@@ -18,7 +18,7 @@
 // Which voice plays what is the ARM9's choice (HlMixer.hpp's rules); the
 // ARM7 plays each sound on a free channel and says, by the caller's token,
 // when it ended. (A sound being faded out keeps its token after its voice
-// has gone to another, as a maxmod handle did.)
+// has gone to another.)
 //
 // Every field one side writes, the other only reads; indices only grow
 // (wrapping at 2^32), so either side sees how far the other has got.

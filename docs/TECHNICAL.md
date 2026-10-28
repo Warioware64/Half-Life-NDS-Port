@@ -476,9 +476,10 @@ Milestone 11, "levels of detail".
   library's arithmetic, which are Thumb; `--check` fails if one of the
   frame's inner loops has come out of fast memory or calls a routine for a
   multiply. `./make.sh` prints its first line.
-- On a DSi the 47.6 kHz output is asked of NEA
-  (`NEA_SoundEnableDSiOutput`); it is the same output the game had by
-  asking libnds directly.
+- On a DSi the speakers' rate (32.7 or 47.6 kHz) and their share between
+  the console's sound and the DSP are asked of libnds
+  (`Arm7Audio::setDsiRate`, `setDsiRatio`), both sent every time:
+  `soundEnable()` puts them back behind the game's back.
 - Soldiers (`shared/HlGrunt.hpp`): the game's human grunt by its rules and
   its numbers. Cooked with the head, gun and skin of what the map has him
   carry (MP5, shotgun, hand grenades, the launcher). He sees what is in
@@ -560,8 +561,9 @@ Milestone 11, "levels of detail".
   moment its sound is over, and a spoken line's next word is queued behind
   the word being said, on its channel, to begin in the same 2 ms block
   that word ends (no gap between words; a word the line cuts short is
-  still cut by its time). 66 KB of code and
-  19 KB of data on the ARM7, against 110 KB for the default with maxmod. Every sound is of
+  still cut by its time). 66 KB of code and 19 KB of data on the ARM7,
+  against 110 KB for the default with maxmod; the ARM9 links no maxmod
+  either. Every sound is of
   a layer -- the player's own, the world's, the voice, the loops of a
   place, the menu -- and each layer has its share of the fourteen voices
   the hardware really has beside the music (3, 4, 2, 4, 1), which no other
@@ -603,8 +605,9 @@ Milestone 11, "levels of detail".
   goes on from there** (a DS's channel cannot be stopped and continued: it
   is slowed to the slowest the hardware has and silenced, which costs a
   sound a quarter of a second for ten of menu); the menu's clicks are
-  heard meanwhile. The music is the track's stereo file (23.8 kHz IMA, the
-  DSi's DSP's format), its blocks put into a ring by the ARM9 as they are
+  heard meanwhile. The music is the track's stereo file (`.hsd`, 23.8 kHz
+  IMA, on a DS and a DSi alike: the converter writes nothing else), its
+  blocks put into a ring by the ARM9 as they are
   read off the card, decoded on the ARM7 and drawn out to the output rate
   (`shared/HlStereoMusic.hpp`), as loud as the music slider says.
 - The pipeline (`arm7/source/Pipeline.arm.cpp`): the console's own mixer

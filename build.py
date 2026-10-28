@@ -45,16 +45,15 @@ arm9 = Arm9Binary(
     # the geometry engine, on the overlay and in perf.txt. Off, every one of
     # its entry points is an empty inline (DebugLog.hpp), so the shipped
     # build carries none of it.
-    defines=['NEA_MAXMOD', 'HL_HW_MATH'] + profile,
+    defines=['HL_HW_MATH'] + profile,
     # The wireless is the dswifi fork that also does DS Download Play
     # (github.com/Warioware64/dswifi, installed as "dswifi_dl" beside the
     # stock one). Its headers have the stock names (dswifi9.h), so
     # ${BLOCKSDS}/libs/dswifi must NOT be among the libdirs as well: which
     # set of headers came first would decide the build.
-    libs=['NEA', 'mm9', 'nds9', 'dswifi_dl9_noip'],
+    libs=['NEA', 'nds9', 'dswifi_dl9_noip'],
     libdirs=[
         '${BLOCKSDS}/libs/libnds',
-        '${BLOCKSDS}/libs/maxmod',
         '${BLOCKSDSEXT}/dswifi_dl',
         '${BLOCKSDSEXT}/nitro-engine-advanced',
     ],
@@ -69,7 +68,7 @@ arm9 = Arm9Binary(
 arm9.generate_elf()
 
 # The other processor's program: the game's own (arm7/source) -- what
-# BlocksDS's default does, with the game's sound instead of maxmod. It links
+# BlocksDS's default does, with the game's own sound core. It links
 # the wireless library of the same build as the ARM9's: the two share the
 # structures they talk through, and the library refuses a pair that do not
 # match.
@@ -90,12 +89,11 @@ hl = Arm9DynamicLibrary(
     # (What Arm9Binary defines by itself, as well: libnds's and the engine's
     # headers lay their structures out by them, and the library reads the
     # engine's.)
-    defines=['__NDS__', '__BLOCKSDS__', 'ARM9', 'NEA_MAXMOD', 'HL_HW_MATH', 'HL_DSL'] + profile,
+    defines=['__NDS__', '__BLOCKSDS__', 'ARM9', 'HL_HW_MATH', 'HL_DSL'] + profile,
     # (Only their headers: the library links nothing of its own. What it
     # calls of libc and the rest is the ELF's, by address.)
     libdirs=[
         '${BLOCKSDS}/libs/libnds',
-        '${BLOCKSDS}/libs/maxmod',
         '${BLOCKSDSEXT}/dswifi_dl',
         '${BLOCKSDSEXT}/nitro-engine-advanced',
     ],

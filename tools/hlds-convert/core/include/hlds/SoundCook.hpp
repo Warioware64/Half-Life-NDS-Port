@@ -94,11 +94,11 @@ namespace hlds
                    std::vector<std::int16_t> *left = nullptr,
                    std::vector<std::int16_t> *right = nullptr);
 
-    /// Two channels at `rate`, as a .hsd file (HlSound.hpp): what the DSi's
-    /// DSP plays the music from.
+    /// Two channels at `rate`, as a .hsd file (HlSound.hpp): what the ARM7
+    /// plays the music from (HlStereoMusic.hpp).
     std::vector<std::uint8_t> encodeMusicStereo(const std::vector<std::int16_t> &left,
                                                 const std::vector<std::int16_t> &right, int rate);
-    /// What the DSP will make of a .hsd file, both channels: for the tests.
+    /// What the ARM7 will make of a .hsd file, both channels: for the tests.
     /// Starts at block `fromBlock`, as a track taken up part way does.
     bool decodeMusicStereo(const std::vector<std::uint8_t> &file, std::size_t fromBlock,
                            std::vector<std::int16_t> &left, std::vector<std::int16_t> &right);

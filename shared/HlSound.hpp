@@ -50,24 +50,12 @@ namespace hldata
                h.samples <= (h.dataBytes - 4) * 2;
     }
 
-    // Music (.hsm, under music/ on the card): a header and then eight-bit
-    // signed samples, one channel, to be read off the card as it plays.
-    inline constexpr char kMusicMagic[4] = {'H', 'L', 'S', 'M'};
-    inline constexpr int kMusicRate = 16000;
-    struct MusicHeader
-    {
-        char magic[4];
-        std::uint16_t version; ///< kSoundVersion
-        std::uint16_t rate;
-        std::uint32_t bytes;   ///< of samples, after this header
-    };
-    static_assert(sizeof(MusicHeader) == 12);
-
-    // The same music for a DSi (.hsd): two channels of ADPCM at half the
-    // DSP's output rate, as the DSP program unpacks it (shared/dsp/hl_dsp.h).
-    // Blocks of kMusicBlockWords words, each after four words that are both
-    // decoders' states at its start (left sample, left step, right sample,
-    // right step) -- so that a track can be taken up at any block.
+    // Music (.hsd, under music/ on the card, read off it as it plays): two
+    // channels of ADPCM at half the DSi's high rate, as the ARM7 unpacks it
+    // (HlStereoMusic.hpp), on a DS and a DSi alike. Blocks of
+    // kMusicBlockWords words, each after four words that are both decoders'
+    // states at its start (left sample, left step, right sample, right step)
+    // -- so that a track can be taken up at any block.
     inline constexpr char kStereoMagic[4] = {'H', 'L', 'S', 'D'};
     inline constexpr int kStereoRate = 23802;      ///< 47,605 / 2
     inline constexpr int kMusicBlockWords = 1024;  ///< 2048 pairs: 86 ms
@@ -82,12 +70,11 @@ namespace hldata
     static_assert(sizeof(StereoHeader) == 16);
 
     /// The file a track of the game's music is in, under music/.
-    /// `stereo`: the DSi's (.hsd) rather than the DS's (.hsm).
-    inline void musicFileName(int track, char *out, std::size_t size, bool stereo = false)
+    inline void musicFileName(int track, char *out, std::size_t size)
     {
         // Two digits: tracks are numbered 2 to 28.
         const char name[] = {'t', 'r', 'a', 'c', 'k', static_cast<char>('0' + (track / 10) % 10),
-                             static_cast<char>('0' + track % 10), '.', 'h', 's', stereo ? 'd' : 'm', '\0'};
+                             static_cast<char>('0' + track % 10), '.', 'h', 's', 'd', '\0'};
         std::size_t i = 0;
         for (; i + 1 < size && name[i] != '\0'; ++i)
             out[i] = name[i];

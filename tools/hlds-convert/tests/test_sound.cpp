@@ -12,6 +12,7 @@
 #include <fstream>
 
 #include "HlDspRoom.hpp"
+#include "HlStereoMusic.hpp"
 #include "TestBspBuilder.hpp"
 #include "hlds/SoundCook.hpp"
 
@@ -271,67 +272,53 @@ namespace
         check(any == 0, "with no room set there is no echo");
     }
 
-    /// The music ring's own rules: blocks behind a mark, each with the
-    /// decoders' states -- so that what goes wrong is over with its block,
-    /// and what is out of step is silence, not noise.
+    /// The music as the ARM7 plays it (HlStereoMusic.hpp), from the track's
+    /// file as the converter writes it: the track, as the converter's own
+    /// decoder has it; and a block of rubbish over when the next begins
+    /// (each block brings its decoders' states).
     void testMusicBlocks()
     {
-        const int rate = 44100;
+        const int rate = 23802;
         const std::vector<std::uint8_t> file =
             encodeMusicStereo(tone(rate, 330, 0.3, 10000), tone(rate, 550, 0.3, 7000), rate);
         std::vector<std::int16_t> wantL, wantR;
         decodeMusicStereo(file, 0, wantL, wantR);
-        const std::size_t blockWords = HL_DSP_BLOCK_WORDS + 4;
-        auto fileWord = [&](std::size_t n)
-        { return static_cast<std::uint16_t>(file[16 + n * 2] | (file[16 + n * 2 + 1] << 8)); };
-        // Three blocks into the ring as the console sends them. `spoil`
-        // fills the second block's samples with rubbish.
-        auto play = [&](bool spoil, bool badMark, std::vector<std::int16_t> &left) -> bool
+        const std::size_t blockWords = hldata::StereoMusic::kBlockWords;
+        auto play = [&](bool spoil, std::vector<std::int32_t> &left)
         {
-            hlDspInit();
-            std::uint16_t at = 0;
+            static std::vector<std::uint16_t> ring;
+            ring.assign(3 * blockWords, 0);
             std::uint32_t seed = 7;
-            for (std::size_t b = 0; b < 3; ++b)
+            for (std::size_t w = 0; w < ring.size(); ++w)
             {
-                hlMusicRing[at++] = badMark && b == 1 ? 0x1234 : HL_DSP_BLOCK_MARK;
-                for (std::size_t w = 0; w < blockWords; ++w)
+                ring[w] = static_cast<std::uint16_t>(file[16 + w * 2] | (file[16 + w * 2 + 1] << 8));
+                if (spoil && w >= blockWords + 4 && w < 2 * blockWords)
                 {
-                    std::uint16_t word = fileWord(b * blockWords + w);
-                    if (spoil && b == 1 && w >= 4)
-                    {
-                        seed = seed * 1664525u + 1013904223u;
-                        word = static_cast<std::uint16_t>(seed >> 12);
-                    }
-                    hlMusicRing[at++] = word;
+                    seed = seed * 1664525u + 1013904223u;
+                    ring[w] = static_cast<std::uint16_t>(seed >> 12);
                 }
             }
-            hlDspCommand(HL_DSP_CMD_MUSIC_START, at, 0);
-            left.clear();
-            // (Every other tick is a decoded pair; the ticks between are
-            // half way.)
-            for (int tick = 0; tick < 3 * HL_DSP_BLOCK_WORDS * 4; ++tick)
-            {
-                hlDspTick();
-                if (tick & 1)
-                    left.push_back(hlOutL);
-            }
-            return hlFault != 0;
+            static hldata::StereoMusic music;
+            const std::uint32_t pairs = 3 * hldata::StereoMusic::kPairsPerBlock;
+            music.open(ring.data(), 3, rate, rate, pairs, 256);
+            left.assign(pairs, 0);
+            std::vector<std::int32_t> right(pairs, 0);
+            music.mix(left.data(), right.data(), static_cast<int>(pairs), 3);
         };
-        std::vector<std::int16_t> clean, spoiled, marked;
-        check(!play(false, false, clean) && clean.size() >= 6000 && wantL.size() >= clean.size() &&
-                  std::equal(clean.begin(), clean.end(), wantL.begin()),
-              "music fed in blocks is the track");
-        play(true, false, spoiled);
-        const std::size_t third = static_cast<std::size_t>(HL_DSP_BLOCK_WORDS) * 4;
+        std::vector<std::int32_t> clean, spoiled;
+        play(false, clean);
+        // (At its own rate each sample is the pair before: the line to the
+        // next not yet begun.)
+        bool same = wantL.size() >= clean.size();
+        for (std::size_t i = 1; same && i < clean.size(); ++i)
+            same = clean[i] == wantL[i - 1];
+        check(same, "music played from its blocks is the track, as the converter decodes it");
+        play(true, spoiled);
+        const std::size_t third = 2 * hldata::StereoMusic::kPairsPerBlock;
         bool healed = true;
-        for (std::size_t i = third + 8; i < third + 2000; ++i)
+        for (std::size_t i = third + 2; i < third + 2000; ++i)
             healed = healed && spoiled[i] == clean[i];
         check(healed, "a block of rubbish is over when the next block begins");
-        const bool fault = play(false, true, marked);
-        int after = 0;
-        for (std::size_t i = static_cast<std::size_t>(HL_DSP_BLOCK_WORDS) * 2 + 8; i < marked.size(); ++i)
-            after |= marked[i];
-        check(fault && after == 0, "a block out of step is silence, and is said to be");
         // Starved: the interrupt's side with nothing to take fades, it does
         // not jump.
         hlDspInit();

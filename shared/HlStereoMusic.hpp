@@ -8,10 +8,10 @@
 //
 // A block is the two decoders' states at its start (left sample, left step,
 // right sample, right step) and then its samples, a byte a pair (left in
-// the low four bits), two pairs a word. The decoder is the DSP's (the
-// multiply kind: (2c + 1) / 8 of the step; shared/dsp/hl_dsp.h), and comes
-// out the same, sample for sample -- the host tests say so. Each block takes
-// its states afresh, so nothing that goes wrong outlasts one.
+// the low four bits), two pairs a word. The decoder is the multiply kind
+// ((2c + 1) / 8 of the step), and the converter codes against it
+// (SoundCook.cpp). Each block takes its states afresh, so nothing that goes
+// wrong outlasts one.
 //
 // Integer only, no division per sample: std-only, for the host tests.
 
@@ -101,8 +101,7 @@ namespace hldata
             3660,  4026,  4428,  4871,  5358,  5894,  6484,  7132,  7845,  8630,  9493,  10442, 11487,
             12635, 13899, 15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794, 32767};
 
-        /// One sample of one decoder out of its four bits (hl_dsp.h's
-        /// hlDecode, the same arithmetic).
+        /// One sample of one decoder out of its four bits.
         static void decode(std::int32_t &value, std::int32_t &index, unsigned code)
         {
             static constexpr std::int8_t kIndexStep[8] = {-1, -1, -1, -1, 2, 4, 6, 8};

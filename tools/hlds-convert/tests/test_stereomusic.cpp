@@ -1,6 +1,6 @@
-// The music in stereo as the ARM7 plays it (shared/HlStereoMusic.hpp): its
-// decoder gives what the DSP's model gives (shared/dsp/hl_dsp.h), sample for
-// sample; played at its own rate it is the track as decoded; at the
+// The music in stereo as the ARM7 plays it (shared/HlStereoMusic.hpp)
+// (test_sound has it against the converter's own files): played at its own
+// rate it is the track as decoded; at the
 // console's rate it takes as many of the track's pairs as the time is long;
 // a ring the ARM9 is behind with is silence, counted, until it catches up;
 // and the end of the track is silence, not counted.
@@ -12,10 +12,6 @@
 #include "HlStereoMusic.hpp"
 #include "TestBspBuilder.hpp"
 
-extern "C"
-{
-#include "dsp/hl_dsp.h"
-}
 
 using namespace hldata;
 using namespace hldstest;
@@ -67,24 +63,6 @@ namespace
 
 int main()
 {
-    // The decoder against the DSP's model.
-    {
-        bool same = true;
-        std::uint32_t seed = 12345;
-        std::int32_t value = 0, index = 0;
-        hlValue[0] = 0;
-        hlIndex[0] = 0;
-        for (int i = 0; i < 200000 && same; ++i)
-        {
-            seed = seed * 1664525u + 1013904223u;
-            const unsigned code = (seed >> 20) & 15;
-            StereoMusic::decode(value, index, code);
-            hlDecode(0, static_cast<std::uint16_t>(code));
-            same = value == hlValue[0] && index == hlIndex[0];
-        }
-        check(same, "the decoder is the DSP's, sample for sample");
-    }
-
     static StereoMusic music;
     const std::vector<std::uint16_t> blocks = makeBlocks(6, 777);
     std::vector<std::int16_t> wantL, wantR;

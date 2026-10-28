@@ -7,7 +7,6 @@
 
 #include <nds.h>
 
-#include <NEAMain.h>
 
 #include "Global.hpp"
 #include "HlDspRoom.hpp"
@@ -77,7 +76,7 @@ namespace hlrt
         started_ = false;
         room_ = -1;
         level_ = 0;
-        NEA_SoundSetDSiMixRatio(8);
+        arm7Audio.setDsiRatio(8);
     }
 
     bool DspAudio::start()
@@ -102,12 +101,11 @@ namespace hlrt
         // (What the ARM7 sends from here on.)
         sendRead_ = arm7Audio.sendWritten();
         sendWrite_ = 0;
-        // Half the speakers each to the ordinary channels and to the DSP.
-        // (Three quarters of the speakers to the ordinary channels -- the
+        // Three quarters of the speakers to the ordinary channels -- the
         // ARM7 makes up the rest: Pipeline.arm.cpp -- and a quarter to the
-        // DSP's echo, which is all it puts out. Half and half, the game was
+        // DSP's echo, which is all it puts out. (Half and half, the game was
         // quieter by half.)
-        NEA_SoundSetDSiMixRatio(6);
+        arm7Audio.setDsiRatio(6);
         return true;
     }
 

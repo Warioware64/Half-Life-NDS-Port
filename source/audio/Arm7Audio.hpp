@@ -5,7 +5,7 @@
 // put into the shared block (shared/HlAudioLink.hpp), and what the ARM7 says
 // back -- which sounds have ended -- taken out of it once a frame.
 //
-// A sound is known by a token, as a maxmod handle was: 0 is none. The ARM7
+// A sound is known by a token: 0 is none. The ARM7
 // has fourteen channels for sounds; play() gives 0 when all of them are
 // taken (the caller lets something go and asks again), counting a sound as
 // taken from when it is asked for until its end is seen.
@@ -28,7 +28,7 @@ namespace hlrt
 
         /// A clip (DS-hardware IMA-ADPCM, `words` long with its preamble;
         /// looping from `loopWord`, or kAudioNoLoop) at `rate` Hz, `volume`
-        /// and `pan` 0..255 (maxmod's scale), `pitch` 1024 as recorded.
+        /// and `pan` 0..255, `pitch` 1024 as recorded.
         /// `menu`: it plays on while the game is paused. 0: no channel free.
         std::uint16_t play(const void *data, std::uint32_t words, std::uint32_t loopWord, std::uint16_t rate,
                            int volume, int pan, int pitch, bool menu);
@@ -84,6 +84,15 @@ namespace hlrt
         const volatile std::int16_t *send() const { return link_ != nullptr ? link_->send : nullptr; }
         std::uint32_t sendWritten() const { return link_ != nullptr ? link_->sendWrite : 0; }
 
+        /// A DSi's speakers (DSi games only, run as one): whether there are
+        /// any; their rate in kHz (32 or 47, changed only while nothing is
+        /// heard); and the console's sound's share of them against the
+        /// DSP's, in eighths. Both are sent every time, by way of the ARM7's
+        /// libnds: soundEnable() puts them back to 32 and 8 behind our back.
+        static bool dsiSpeakers();
+        void setDsiRate(int khz);
+        void setDsiRatio(int ratio);
+
         /// The ARM7's own figures (the debug readout).
         std::uint32_t late() const;
         std::uint32_t loadPercent() const;
@@ -106,6 +115,7 @@ namespace hlrt
         std::uint32_t endRead_ = 0;
         std::uint16_t next_ = 1;
         std::uint16_t live_[kChannels] = {};
+        int dsiKhz_ = 32, dsiRatio_ = 8;
     };
 
     extern Arm7Audio arm7Audio;

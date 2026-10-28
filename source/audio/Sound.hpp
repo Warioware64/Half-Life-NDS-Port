@@ -8,13 +8,13 @@
 // A layer (HlSound.hpp) is a kind of sound: the player's own, the world's,
 // the voice, the loops of a place, the menu. Each has its share of the
 // thirteen voices and gives way in its turn (HlMixer.hpp has the rules), and
-// each has a volume the player sets. The music is beside them: a ring the
-// ARM7 plays round, read off the card as it plays, on a DS; the DSP's, in
-// stereo, on a DSi that has it switched on.
+// each has a volume the player sets. The music is beside them: stereo, a
+// ring the ARM7 plays round, read off the card as it plays. The room the
+// player is in is the ARM7's (or, Enhanced, the DSi's DSP's: DspAudio).
 //
 // The clips are the map's cooked sounds where they already are in memory:
 // the ARM7 is told where each is, and the hardware plays the ADPCM itself,
-// loops and all. A sound is known by a token (a "handle"), as maxmod's were.
+// loops and all. A sound is known by a token (a "handle").
 //
 // The game's shared code says what was heard and where (a SoundQueue); this
 // turns each into a volume and a side by where the camera is, plays it, and
@@ -68,10 +68,9 @@ namespace hlrt
         /// from where it was); -1 for none.
         void setMusic(int track, std::uint32_t ms);
 
-        /// On a DSi: the DSP is in use (stereo music, echo).
+        /// On a DSi: the DSP is in use (the room, Enhanced).
         bool extended() const { return extended_; }
-        /// Switch the DSP's part on or off, the music going on from where it
-        /// was by the other way of playing it. Returns whether it is on (it
+        /// Switch the DSP's part on or off. Returns whether it is on (it
         /// cannot be, where there is no DSP).
         bool setDsp(bool on);
         /// The sound settings (Settings::roomEffects, outputMode) applied:
@@ -90,26 +89,10 @@ namespace hlrt
         int voicesOf(hldata::SoundLayer layer) const { return mixer_.count(layer); }
         int bytes() const { return bytes_; }
 
-        /// For maxmod: the header of sample `id`, or null.
-        const void *sample(std::uint32_t id) const;
         /// Pairs of the track played since it started (or was taken up).
         std::uint32_t musicPlayed() const;
 
     private:
-        /// What maxmod wants in front of a sample: its file header and its
-        /// sample header (mm_mas_prefix, mm_mas_ds_sample), the data being
-        /// wherever `point` says.
-        struct Header
-        {
-            std::uint32_t size;
-            std::uint8_t type, version, reserved[2];
-            std::uint32_t loopStart; ///< in words
-            std::uint32_t length;    ///< in words: of the loop, or of it all
-            std::uint8_t format;
-            std::uint8_t repeat;
-            std::uint16_t frequency;
-            std::uint32_t point;
-        };
         struct Clip
         {
             std::uint8_t *data = nullptr; ///< the ADPCM; null if not in memory
@@ -117,7 +100,13 @@ namespace hlrt
             std::uint32_t loopWord = hldata::kSoundNoLoop;
             std::uint16_t rate = 0;
             std::uint32_t ms = 0; ///< how long it lasts
-            Header header{};
+            /// Whether it goes round (from loopWord: a channel's loop start
+            /// is sixteen bits of words).
+            bool loops() const
+            {
+                return data != nullptr && loopWord != hldata::kSoundNoLoop && loopWord < bytes / 4 &&
+                       loopWord < 0xFFFF;
+            }
         };
         /// A voice of the mixer's, as it is being played.
         struct Voice
@@ -127,9 +116,9 @@ namespace hlrt
             hldata::fx pos[3] = {0, 0, 0};
             std::uint8_t volume = 0;  ///< as loud as it is at its source
             std::int16_t radius = 0;
-            std::uint8_t shown = 0;   ///< what maxmod was last told: how loud, and where
+            std::uint8_t shown = 0;   ///< what the ARM7 was last told: how loud, and where
             std::uint8_t pan = 64;
-            std::uint16_t rate = 1024; ///< how fast it is played (maxmod's unit: 1024 is as recorded)
+            std::uint16_t rate = 1024; ///< how fast it is played (1024 is as recorded)
             std::uint16_t hz = 11025;  ///< what it was recorded at
         };
         /// Someone speaking: the words of their line still to come, the one
@@ -146,7 +135,6 @@ namespace hlrt
             hldata::fx pos[3] = {0, 0, 0};
             std::int16_t radius = 0;
             Clip clip[2];            ///< read off the card: [cur] in the air, the other the next
-            bool loaded[2] = {false, false}; ///< maxmod has it as a sample
             int cur = 0;
             int ahead = -1;          ///< the sound the other one holds, or -1
             int voice = -1;
@@ -163,19 +151,14 @@ namespace hlrt
             bool busy() const { return leftMs > 0 || at < count; }
         };
         static constexpr int kSpeakers = 2;
-        static constexpr int kSamples = 1024;
-        /// The top of maxmod's numbers: the words being spoken (two a
-        /// speaker), then the menu's sounds.
-        static constexpr int kSpeechSample = kSamples - kSpeakers * 2;
-        static constexpr int kUiSample = kSpeechSample - hldata::kUiSoundCount;
+        static constexpr int kMaxSounds = 1012; ///< of a map's, at most (no map has near as many)
         static constexpr int kMaxSpoken = 32;
         static constexpr int kLoops = 8; ///< loops of a place at once, where there are voices
 
         bool readClip(const char *name, Clip &clip);
-        void describe(Clip &clip);
         void place(const hldata::fx *pos, int volume, int radius, int &outVolume, int &outPan) const;
-        int start(hldata::SoundLayer layer, int sample, const Clip &clip, int volume, int pan, bool loop,
-                  int tag = -1, int pitch = 100);
+        int start(hldata::SoundLayer layer, const Clip &clip, int volume, int pan, bool loop, int tag = -1,
+                  int pitch = 100);
         /// Let a voice go without a click: it is taken off the mixer at
         /// once and brought to silence over a few frames on the channel
         /// kept back for that (HlMixer.hpp).
@@ -227,8 +210,8 @@ namespace hlrt
         std::uint32_t lastVblank_ = 0;
         int loopsDue_ = 0;
 
-        /// Voices on their way out: what maxmod knows them by, and how loud
-        /// they still are.
+        /// Voices on their way out: their tokens, and how loud they still
+        /// are.
         struct Fading
         {
             std::uint16_t handle = 0;

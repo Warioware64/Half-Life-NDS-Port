@@ -938,8 +938,8 @@ namespace hlds
             result.soundKb = static_cast<int>(total / 1024);
             result.soundKbDsi = static_cast<int>(totalDsi / 1024);
         }
-        // The music the map starts: each track decoded once, to something
-        // that can be read off the card as it plays.
+        // The music the map starts: each track decoded once, to stereo
+        // blocks the ARM7 plays as they are read off the card.
         for (const hldata::LogicRecord &record : level.logic)
         {
             if (record.kind != static_cast<std::uint8_t>(hldata::LogicKind::Music))
@@ -951,15 +951,8 @@ namespace hlds
             char cardName[16];
             hldata::musicFileName(track, cardName, sizeof(cardName));
             const fs::path file = dataDir(options_.cardRoot) / "music" / cardName;
-            // ... and the same in stereo for a DSi, whose DSP plays it.
-            char stereoName[16];
-            hldata::musicFileName(track, stereoName, sizeof(stereoName), true);
-            const fs::path stereoFile = dataDir(options_.cardRoot) / "music" / stereoName;
             std::error_code ec;
-            const bool haveMono = fs::exists(file, ec) && fs::file_size(file, ec) > sizeof(hldata::MusicHeader);
-            const bool haveStereo =
-                fs::exists(stereoFile, ec) && fs::file_size(stereoFile, ec) > sizeof(hldata::StereoHeader);
-            if (haveMono && haveStereo)
+            if (fs::exists(file, ec) && fs::file_size(file, ec) > sizeof(hldata::StereoHeader))
                 continue;
             // The game's track N is the file numbered N - 1: the first
             // track of its disc was the program.
@@ -972,24 +965,7 @@ namespace hlds
             std::string why;
             if (mp3.empty() || !readFile(mp3, packed, why) || !decodeMp3(packed, music, why, &left, &right))
                 continue; // a game folder without its music has none
-            if (!haveMono)
-            {
-                const std::vector<std::int16_t> samples =
-                    resample(music.samples, music.rate, hldata::kMusicRate);
-                hldata::MusicHeader header{};
-                std::memcpy(header.magic, hldata::kMusicMagic, 4);
-                header.version = hldata::kSoundVersion;
-                header.rate = hldata::kMusicRate;
-                header.bytes = static_cast<std::uint32_t>(samples.size());
-                std::vector<std::uint8_t> out(sizeof(header) + samples.size());
-                std::memcpy(out.data(), &header, sizeof(header));
-                for (std::size_t i = 0; i < samples.size(); ++i)
-                    out[sizeof(header) + i] = static_cast<std::uint8_t>(samples[i] >> 8);
-                if (!writeFileAtomic(file, out, result.error))
-                    return result;
-            }
-            if (!haveStereo &&
-                !writeFileAtomic(stereoFile, encodeMusicStereo(left, right, music.rate), result.error))
+            if (!writeFileAtomic(file, encodeMusicStereo(left, right, music.rate), result.error))
                 return result;
         }
 
@@ -1520,8 +1496,7 @@ namespace hlds
                         std::memcpy(at + hldata::kIntroTexelBytes + hldata::kIntroIndexBytes, encoded.palette.data(),
                                     encoded.palette.size());
                     }
-                    // Its sound: the music's way, in mono for a DS and in
-                    // stereo (the same both sides) for a DSi.
+                    // Its sound: the music's way (the same both sides).
                     if (ok && !avi.samples.empty() && avi.sampleRate > 0)
                     {
                         std::vector<std::int16_t> mono = avi.samples;
@@ -1531,23 +1506,11 @@ namespace hlds
                             for (std::size_t i = 0; i + 1 < avi.samples.size(); i += 2)
                                 mono.push_back(static_cast<std::int16_t>((avi.samples[i] + avi.samples[i + 1]) / 2));
                         }
-                        const std::vector<std::int16_t> samples = resample(mono, avi.sampleRate, hldata::kMusicRate);
-                        hldata::MusicHeader musicHeader{};
-                        std::memcpy(musicHeader.magic, hldata::kMusicMagic, 4);
-                        musicHeader.version = hldata::kSoundVersion;
-                        musicHeader.rate = hldata::kMusicRate;
-                        musicHeader.bytes = static_cast<std::uint32_t>(samples.size());
-                        std::vector<std::uint8_t> track(sizeof(musicHeader) + samples.size());
-                        std::memcpy(track.data(), &musicHeader, sizeof(musicHeader));
-                        for (std::size_t i = 0; i < samples.size(); ++i)
-                            track[sizeof(musicHeader) + i] = static_cast<std::uint8_t>(samples[i] >> 8);
-                        char name[16], stereoName[16];
+                        char name[16];
                         hldata::musicFileName(hldata::kIntroTrack, name, sizeof(name));
-                        hldata::musicFileName(hldata::kIntroTrack, stereoName, sizeof(stereoName), true);
                         const fs::path music = dataDir(options_.cardRoot) / "music";
                         fs::create_directories(music, ec);
-                        ok = writeFileAtomic(music / name, track, why) &&
-                             writeFileAtomic(music / stereoName, encodeMusicStereo(mono, mono, avi.sampleRate), why);
+                        ok = writeFileAtomic(music / name, encodeMusicStereo(mono, mono, avi.sampleRate), why);
                     }
                     if (ok && writeFileAtomic(out, film, why))
                         result.intro = true;

@@ -6,9 +6,6 @@
 
 #include <nds.h>
 
-#include <NEAMain.h>
-#include <maxmod9.h>
-#include <mm_mas.h>
 
 #include "Global.hpp"
 #include "Settings.hpp"
@@ -50,13 +47,10 @@ namespace hlrt
         // quality setting has it: sendMode, after the sound is switched on --
         // which puts it back to 32.7), and the DSP, used only for the room
         // effects' Enhanced. Neither exists on a DS.
-        const bool dsi = NEA_SoundDSiOutputAvailable();
-        if (dsi)
-        {
-            // (All of the speakers to the ordinary channels, until the DSP
-            // has something for them: DspAudio. The rate: sendMode.)
-            NEA_SoundSetDSiMixRatio(8);
-        }
+        const bool dsi = Arm7Audio::dsiSpeakers();
+        // (All of the speakers to the ordinary channels, until the DSP has
+        // something for them: DspAudio. The rate: sendMode.)
+        arm7Audio.setDsiRatio(8);
         // The game's own sound on the ARM7 (arm7/source/Audio.cpp), which
         // plays the clips where they are in memory: nothing is "loaded".
         up_ = arm7Audio.start();
@@ -64,8 +58,8 @@ namespace hlrt
         // The menu's own sounds, for as long as the game runs.
         for (int n = 0; n < kUiSoundCount; ++n)
         {
-            if (global.hasFat && readClip(kUiSoundFiles[n], ui_[n]))
-                describe(ui_[n]);
+            if (global.hasFat)
+                readClip(kUiSoundFiles[n], ui_[n]);
         }
         if (dsi)
             extended_ = settings.roomEffects == kRoomEnhanced && dspAudio.start();
@@ -73,20 +67,6 @@ namespace hlrt
         // music and the room added) -- unless the DSP has the capture.
         sendMode();
         lastVblank_ = Global::vblanks();
-    }
-
-    const void *Sound::sample(std::uint32_t id) const
-    {
-        if (id >= static_cast<std::uint32_t>(kSpeechSample) && id < static_cast<std::uint32_t>(kSamples))
-        {
-            const Clip &clip = speech_[(id - kSpeechSample) / 2].clip[(id - kSpeechSample) & 1];
-            return clip.data != nullptr ? &clip.header : nullptr;
-        }
-        if (id >= static_cast<std::uint32_t>(kUiSample) && id < static_cast<std::uint32_t>(kUiSample + kUiSoundCount))
-            return ui_[id - kUiSample].data != nullptr ? &ui_[id - kUiSample].header : nullptr;
-        if (id < static_cast<std::uint32_t>(count_) && clips_ != nullptr && clips_[id].data != nullptr)
-            return &clips_[id].header;
-        return nullptr;
     }
 
     void Sound::applyVolumes()
@@ -145,31 +125,10 @@ namespace hlrt
         return true;
     }
 
-    /// The header maxmod reads a clip by. The hardware plays the ADPCM as
-    /// it is: all of it once, or round and round from where it loops.
-    void Sound::describe(Clip &clip)
-    {
-        const std::uint32_t words = clip.bytes / 4;
-        const bool loops = clip.loopWord != kSoundNoLoop && clip.loopWord < words && clip.loopWord < 0xFFFF;
-        Header &h = clip.header;
-        h = Header{};
-        h.size = sizeof(Header) - 8;
-        h.type = 2; // (a DS sample)
-        h.loopStart = loops ? clip.loopWord : 0;
-        h.length = loops ? words - clip.loopWord : words;
-        h.format = MM_SFORMAT_ADPCM;
-        h.repeat = loops ? MM_SREPEAT_FORWARD : MM_SREPEAT_OFF;
-        // (Maxmod's unit: 1024ths of 32768 Hz.)
-        h.frequency = static_cast<std::uint16_t>((static_cast<std::uint32_t>(clip.rate) * 1024 + 16384) / 32768);
-        h.point = reinterpret_cast<std::uint32_t>(clip.data);
-        DC_FlushRange(&h, sizeof(h));
-    }
-
     void Sound::load()
     {
         const LevelView &view = level.view;
-        // (The numbers at the top are the menu's and the spoken word's.)
-        const int count = static_cast<int>(view.soundCount) < kUiSample ? static_cast<int>(view.soundCount) : kUiSample;
+        const int count = static_cast<int>(view.soundCount) < kMaxSounds ? static_cast<int>(view.soundCount) : kMaxSounds;
         clips_ = static_cast<Clip *>(std::calloc(count + 1, sizeof(Clip)));
         bool *kept = static_cast<bool *>(std::calloc(view.soundCount + 1, sizeof(bool)));
         if (clips_ == nullptr || kept == nullptr)
@@ -207,7 +166,6 @@ namespace hlrt
             if ((global.isDSi && soundTwinName(view.sounds[i], twin, sizeof(twin)) && readClip(twin, clips_[i])) ||
                 readClip(view.sounds[i].name, clips_[i]))
             {
-                describe(clips_[i]);
                 ++loaded_;
                 bytes_ += static_cast<int>(clips_[i].bytes);
             }
@@ -298,14 +256,11 @@ namespace hlrt
         const std::uint8_t quality = extended_ ? kQualityHigh : settings.soundQuality;
         // A DSi's speakers fed at the pipeline's rate: 47.6 kHz at the high
         // quality (and for the DSP, which is made for it), else 32.7.
-        if (NEA_SoundDSiOutputAvailable())
+        const int hz = quality == kQualityHigh ? 47 : 32;
+        if (Arm7Audio::dsiSpeakers() && hz != dsiHz_)
         {
-            const int hz = quality == kQualityHigh ? 47 : 32;
-            if (hz != dsiHz_)
-            {
-                dsiHz_ = hz;
-                NEA_SoundEnableDSiOutput(hz == 47 ? NEA_DSI_SOUND_FREQ_47KHZ : NEA_DSI_SOUND_FREQ_32KHZ);
-            }
+            dsiHz_ = hz;
+            arm7Audio.setDsiRate(hz);
         }
         arm7Audio.setMode(held_ == 0, effects, settings.outputMode, quality);
         // (The room the player is in, again: a pipeline started afresh has
@@ -388,11 +343,10 @@ namespace hlrt
         }
     }
 
-    /// Play sample `sample` (which is `clip`) in `layer`, `volume` loud
-    /// (0..127, before the layer's own volume) and `pan` to one side
-    /// (0..127). The voice it got, or -1 if it is not to be heard.
-    int Sound::start(SoundLayer layer, int sample, const Clip &clip, int volume, int pan, bool loop, int tag,
-                     int pitch)
+    /// Play `clip` in `layer`, `volume` loud (0..127, before the layer's own
+    /// volume) and `pan` to one side (0..127). The voice it got, or -1 if it
+    /// is not to be heard.
+    int Sound::start(SoundLayer layer, const Clip &clip, int volume, int pan, bool loop, int tag, int pitch)
     {
         if (!up_ || (paused_ && layer != SoundLayer::Ui))
             return -1;
@@ -407,7 +361,6 @@ namespace hlrt
         // (The unit of speed: 1024 is as recorded.)
         int rate = (1024 * pitch) / 100;
         rate = rate < 64 ? 64 : (rate > 4095 ? 4095 : rate);
-        (void)sample;
         auto playIt = [&]()
         {
             return arm7Audio.play(clip.data, clip.bytes / 4, clip.loopWord, clip.rate, gain * 2, pan * 2, rate,
@@ -560,7 +513,6 @@ namespace hlrt
         }
         if (global.heapHeadroom() < 200 * 1024 || !readClip(level.view.sounds[sound].name, clips_[sound]))
             return;
-        describe(clips_[sound]);
         lazyClip_[place] = sound;
         lazyPlayed_[place] = now;
     }
@@ -575,7 +527,7 @@ namespace hlrt
         const bool placed = !(event.flags & kSoundHere);
         if (placed)
             place(event.pos, event.volume, event.radius, volume, pan);
-        const int v = start(event.layer, event.sound, clip, volume, pan, false, -1, event.pitch);
+        const int v = start(event.layer, clip, volume, pan, false, -1, event.pitch);
         if (v < 0 || !placed)
             return;
         Voice &voice = voices_[v];
@@ -595,7 +547,7 @@ namespace hlrt
         if (event.sound >= count_ || clips_[event.sound].data == nullptr)
             return;
         const Clip &clip = clips_[event.sound];
-        if (clip.header.repeat != MM_SREPEAT_FORWARD)
+        if (!clip.loops())
         {
             playOnce(event);
             return;
@@ -616,7 +568,7 @@ namespace hlrt
         const bool placed = !(event.flags & kSoundHere);
         if (placed)
             place(event.pos, event.volume, event.radius, volume, pan);
-        const int v = start(event.layer, event.sound, clip, volume, pan, true, event.tag, event.pitch);
+        const int v = start(event.layer, clip, volume, pan, true, event.tag, event.pitch);
         if (v < 0)
             return;
         Voice &voice = voices_[v];
@@ -668,7 +620,6 @@ namespace hlrt
 
     void Sound::releaseWord(Speech &speech, int which)
     {
-        speech.loaded[which] = false;
         std::free(speech.clip[which].data);
         speech.clip[which] = Clip();
     }
@@ -741,9 +692,7 @@ namespace hlrt
             return;
         if (!readClip(level.view.sounds[index].name, speech.clip[other]))
             return;
-        describe(speech.clip[other]);
-        speech.loaded[other] = up_;
-        if (speech.loaded[other])
+        if (up_)
             speech.ahead = index;
         else
             releaseWord(speech, other);
@@ -896,7 +845,7 @@ namespace hlrt
                 if (borrowed)
                 {
                     lasts = clips_[index].ms;
-                    v = start(SoundLayer::Voice, index, clips_[index], volume, pan, false, s, pitch);
+                    v = start(SoundLayer::Voice, clips_[index], volume, pan, false, s, pitch);
                 }
                 else
                 {
@@ -909,8 +858,7 @@ namespace hlrt
                     speech.ahead = -1;
                     Clip &clip = speech.clip[speech.cur];
                     lasts = clip.ms;
-                    v = start(SoundLayer::Voice, kSpeechSample + s * 2 + speech.cur, clip, volume, pan, false, s,
-                              pitch);
+                    v = start(SoundLayer::Voice, clip, volume, pan, false, s, pitch);
                 }
                 if (v >= 0 && speech.placed)
                 {
@@ -996,7 +944,7 @@ namespace hlrt
                 continue;
             // Something that does not go round is played once when it is
             // switched on, as the game plays it, and that is all.
-            if (clips_[sample].header.repeat != MM_SREPEAT_FORWARD && played_ != nullptr &&
+            if (!clips_[sample].loops() && played_ != nullptr &&
                 (played_[i >> 5] & (1u << (i & 31))))
                 continue;
             int volume = ambient ? static_cast<int>(record.extra[2]) : 100, pan = 64;
@@ -1096,9 +1044,9 @@ namespace hlrt
             const bool ambient = record.kind == static_cast<std::uint8_t>(LogicKind::Ambient);
             const int sample = static_cast<int>(ambient ? record.extra[0] : view.logicSounds[want[n]].move);
             const Clip &clip = clips_[sample];
-            const bool round = clip.header.repeat == MM_SREPEAT_FORWARD;
+            const bool round = clip.loops();
             const bool train = record.kind == static_cast<std::uint8_t>(LogicKind::TrackTrain);
-            const int v = start(SoundLayer::Ambience, sample, clip, wantVolume[n], wantPan[n], round, want[n],
+            const int v = start(SoundLayer::Ambience, clip, wantVolume[n], wantPan[n], round, want[n],
                                 train ? trainPitch(game.logic.states[want[n]].speed)
                                       : (ambient && record.pad != 0 ? record.pad : 100));
             if (v >= 0 && !round && played_ != nullptr)
@@ -1161,7 +1109,7 @@ namespace hlrt
     {
         if (which < 0 || which >= kUiSoundCount || ui_[which].data == nullptr)
             return;
-        start(SoundLayer::Ui, kUiSample + which, ui_[which], volume, 64, false);
+        start(SoundLayer::Ui, ui_[which], volume, 64, false);
     }
 
     void Sound::setPaused(bool paused)
@@ -1248,7 +1196,7 @@ namespace hlrt
         // The ARM7 plays it, in stereo: the track's stereo file, its blocks
         // into the ring as they are.
         char name[16];
-        musicFileName(track, name, sizeof(name), true);
+        musicFileName(track, name, sizeof(name));
         const std::string path = global.dataPath("music/") + name;
         std::FILE *file = std::fopen(path.c_str(), "rb");
         if (file == nullptr)

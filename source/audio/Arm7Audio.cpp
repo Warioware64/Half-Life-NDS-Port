@@ -306,6 +306,27 @@ namespace hlrt
             link_->musicWrite = link_->musicWrite + bytes;
     }
 
+    bool Arm7Audio::dsiSpeakers()
+    {
+        return isDSiMode() && (__DSiHeader->appflags & 0x01) != 0;
+    }
+    void Arm7Audio::setDsiRate(int khz)
+    {
+        if (!dsiSpeakers())
+            return;
+        dsiKhz_ = khz == 47 ? 47 : 32;
+        soundExtSetFrequency(dsiKhz_);
+        soundExtSetRatio(dsiRatio_);
+    }
+    void Arm7Audio::setDsiRatio(int ratio)
+    {
+        if (!dsiSpeakers())
+            return;
+        dsiRatio_ = ratio < 0 ? 0 : (ratio > 8 ? 8 : ratio);
+        soundExtSetFrequency(dsiKhz_);
+        soundExtSetRatio(dsiRatio_);
+    }
+
     std::uint32_t Arm7Audio::late() const
     {
         return link_ != nullptr ? link_->late : 0;
