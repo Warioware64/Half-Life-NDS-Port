@@ -28,6 +28,7 @@ namespace hlrt
             BG_PALETTE_SUB[i] = hldata::uiColour(i);
         canvas_.tiles = reinterpret_cast<std::uint32_t *>(reinterpret_cast<std::uint8_t *>(BG_TILE_RAM_SUB(0)) +
                                                           kFirstTile * 32);
+        screen_ = canvas_.tiles;
         canvas_.width = 256;
         canvas_.height = 192;
         canvas_.clear();

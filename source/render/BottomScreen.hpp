@@ -39,8 +39,14 @@ namespace hlrt
         unsigned have() const { return have_; }
         unsigned empty() const { return empty_; }
         /// A slot's list of weapons (HlWeaponList.hpp), drawn up over the pad
-        /// as far as it has slid -- each frame, as it moves.
+        /// as far as it has slid -- each frame, as it moves: off the screen,
+        /// to be put on it by present().
         void setWeaponList(const hldata::WeaponList &list);
+        /// Right after the wait for the vertical blank, before anything is
+        /// drawn: the pad as setWeaponList last drew it, put on the screen
+        /// while the screen is not being shown (a pad half drawn, the list
+        /// rubbed out and not yet drawn again, is never seen).
+        void present();
         /// The lamp's button: whether there is a suit to have one, whether
         /// it is alight, and how much is in it (0..100).
         void setLamp(bool suit, bool on, int percent);
@@ -86,6 +92,7 @@ namespace hlrt
         unsigned have_ = 0;
         int held_ = 0;
         bool mirrored_ = false; ///< as the pad was last drawn
+        bool padPending_ = false; ///< the pad drawn off the screen, not yet on it
         bool iconsTried_ = false;
     };
 

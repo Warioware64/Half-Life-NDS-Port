@@ -233,7 +233,59 @@ if kind_of_elf == "dsl":
         name = line.split()[-1]
         if game(name) or name.startswith("Global::") or name.startswith("NEA_"):
             failed.append("the library takes %s by its name (not through hlEngine)" % name)
+    # What libnds'"'"'s loader (dlfcn.c) does not do, and would get wrong
+    # without a word: put a section on more than eight bytes (the block is
+    # malloc'"'"'s), apply more than the first relocation section, keep the
+    # addend of a word that points into the program.
+    progbits_offset = None
+    rel_sections = 0
+    for line in run(tools + "/arm-none-eabi-readelf", "-SW", elf).splitlines():
+        m = re.match(r"\s*\[\s*\d+\]\s+(\S+)\s+(\S+)\s+([0-9a-f]+)\s+([0-9a-f]+)\s+([0-9a-f]+)\s+\S+\s+(\S*)\s+\d+\s+\d+\s+(\d+)", line)
+        if not m:
+            continue
+        name, kind, flags, align = m.group(1), m.group(2), m.group(6), int(m.group(7))
+        if "A" in flags and align > 8:
+            failed.append("library section %s wants %d-byte alignment (the loader gives 8)" % (name, align))
+        if kind == "REL":
+            rel_sections += 1
+        if name == ".progbits":
+            progbits_offset = int(m.group(4), 16)
+    if rel_sections > 1:
+        failed.append("the library has %d relocation sections (the loader applies the first)" % rel_sections)
+    if progbits_offset is not None:
+        with open(elf, "rb") as f:
+            image = f.read()
+        for line in run(tools + "/arm-none-eabi-readelf", "-rW", elf).splitlines():
+            part = line.split()
+            # (Against a name of the program -- not the library'"'"'s own
+            # section, which the loader moves by adding.)
+            if len(part) >= 5 and part[2] == "R_ARM_ABS32" and int(part[3], 16) == 0 and \
+                    not part[4].startswith("."):
+                at = progbits_offset + int(part[0], 16)
+                addend = int.from_bytes(image[at:at + 4], "little")
+                if addend != 0:
+                    failed.append("a word of the library points %d bytes into %s (the loader drops it)"
+                                  % (addend, part[4]))
+    # Where its data begins, as it says (Guard.hpp sums what is before).
+    marker = [at for at, size, kind, name in symbols if name == "hlDslData"]
+    data_at = None
+    try:
+        with open(os.path.join(os.path.dirname(elf), "hl.map")) as f:
+            lines = f.read().splitlines()
+        for n, line in enumerate(lines):
+            if line.strip() == "*(.data*)" and n > 0:
+                m = re.search(r"0x([0-9a-f]+)\s+\. = ALIGN", lines[n - 1])
+                if m:
+                    data_at = int(m.group(1), 16)
+    except OSError:
+        pass
+    if not marker or data_at is None or marker[0] != data_at:
+        failed.append("hlDslData is not where the library data begins (%s, %s)"
+                      % ("%x" % marker[0] if marker else "none", "%x" % data_at if data_at is not None else "?"))
 else:
+    # The guarded heap is linked in (build.py: --wrap).
+    if not any(name == "__wrap_malloc" for at, size, kind, name in symbols):
+        failed.append("the program has no guarded heap (__wrap_malloc): see --wrap in build.py")
     # The program: none of the game left in it (GameApi.hpp).
     for at, size, name in functions:
         if bare(name) in GAME_ONLY:

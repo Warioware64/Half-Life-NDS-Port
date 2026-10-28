@@ -63,6 +63,15 @@ arm9 = Arm9Binary(
     # the yas archives on the host and the DS reads them back, so a byte-order
     # disagreement between the two would corrupt them silently.
     cxxflags='-Wall -O2 -std=gnu++26 -D_LITTLE_ENDIAN -include yas/detail/config/endian.hpp',
+    # Every malloc, free and the rest goes through the guarded heap
+    # (source/Guard.hpp), which finds a write past a block or into one given
+    # back, and says whose block it was.
+    # (calloc kept, though nothing calls the allocator's own: the game
+    # library is linked against the program's names, and asks for it by name
+    # -- GameDll's resolver gives it the guarded one.)
+    ldflags=' '.join(['-Wl,--wrap=' + f for f in (
+        'malloc', 'free', 'calloc', 'realloc', 'memalign', 'aligned_alloc', 'posix_memalign')] +
+        ['-Wl,--undefined=calloc']),
 )
 
 arm9.generate_elf()

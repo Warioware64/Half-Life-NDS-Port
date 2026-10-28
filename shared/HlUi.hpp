@@ -421,4 +421,47 @@ namespace hldata
         "common/launch_select2.wav", "common/launch_dnmenu1.wav", "common/wpn_select.wav",
         "items/flashlight1.wav",     "common/wpn_hudon.wav",      "common/wpn_moveselect.wav",
         "common/wpn_hudoff.wav",     "common/wpn_denyselect.wav"};
+
+    /// Blanks a value moved by the stylus rests before its sound is heard
+    /// (a sixth of a second, as the weapon list's rows: HlWeaponList.hpp).
+    inline constexpr std::uint32_t kUiSettle = 10;
+
+    /// A value the stylus moves (a slider), heard as the weapon list's rows
+    /// are: not for each step it passes, but once where it comes to rest --
+    /// and, lifted before that, once then.
+    struct UiSettle
+    {
+        int value = 0;  ///< where it is
+        int heard = 0;  ///< where it was last heard
+        std::uint32_t since = 0; ///< the blank it came to `value`
+
+        /// The stylus down on it, at `now` (heard then, as a press).
+        void start(int now, std::uint32_t blank)
+        {
+            value = heard = now;
+            since = blank;
+        }
+        /// Each blank while it is held, at `now`: true once it has rested
+        /// somewhere new for `settle` blanks.
+        bool step(int now, std::uint32_t blank, std::uint32_t settle = kUiSettle)
+        {
+            if (now != value)
+            {
+                value = now;
+                since = blank;
+            }
+            if (value == heard || blank - since < settle)
+                return false;
+            heard = value;
+            return true;
+        }
+        /// Lifted: true if where it was left has not been heard.
+        bool lift()
+        {
+            if (value == heard)
+                return false;
+            heard = value;
+            return true;
+        }
+    };
 } // namespace hldata

@@ -105,3 +105,5 @@ sdroot-stage/
 
 # Made by tools/dspsim/embed.py from the DSP program
 source/audio/DspProgram.gen.cpp
+# Made by tools/buildid.py
+source/BuildId.gen.cpp

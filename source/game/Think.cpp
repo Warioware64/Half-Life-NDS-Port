@@ -24,6 +24,13 @@ namespace hlrt
         cothread_t mainThread = -1;
         NEA_Task *task = nullptr;
 
+        /// The worker is not used: until 2026-10-29 a test the wrong way
+        /// round kept it from ever starting, so every question has always
+        /// been answered as it is asked -- which is what has been played and
+        /// tested. Switching it on is a change of its own, to be tried on
+        /// the consoles first.
+        constexpr bool kUseWorker = false;
+
         // Where long work stops for the frame: only the worker, and not
         // while a map is being left (then it is finished without stopping).
         void pause()
@@ -57,11 +64,13 @@ namespace hlrt
 
     void Think::start()
     {
-        if (started_)
+        if (started_ || !kUseWorker)
             return;
         // One worker: what it does is all reckoning, nothing from the card.
         // (A quarter of a frame at most, of the time the frame leaves.)
-        if (NEA_ThreadSystemReset(1, 16 * 1024) != 0)
+        // NEA_ThreadSystemReset gives 1 when the pool is up, 0 when not:
+        // nothing is submitted to a pool that is not there.
+        if (NEA_ThreadSystemReset(1, 16 * 1024) == 0)
             return;
         NEA_ThreadSetFrameBudget(64);
         mainThread = cothread_get_current();

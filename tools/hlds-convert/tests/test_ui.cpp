@@ -682,10 +682,33 @@ namespace
             }
         }
     }
+
+    /// A slider slid: heard once where it rests, not at each step; let go
+    /// before it rests, heard then; let go where it was heard, not again.
+    void testSettle()
+    {
+        UiSettle s;
+        std::uint32_t blank = 100;
+        s.start(40, blank);
+        int heard = 0;
+        // Swept from 40 to 80, a step a blank: nothing on the way.
+        for (int v = 41; v <= 80; ++v)
+            heard += s.step(v, ++blank) ? 1 : 0;
+        check(heard == 0, "a slider swept across is not heard at each step");
+        for (std::uint32_t n = 0; n < kUiSettle + 2; ++n)
+            heard += s.step(80, ++blank) ? 1 : 0;
+        check(heard == 1 && !s.lift(), "... heard once where it rests, and not again when let go");
+        for (int v = 79; v >= 60; --v)
+            s.step(v, ++blank);
+        check(s.lift() && !s.lift(), "let go while still moving: heard once, then");
+        s.start(10, ++blank);
+        check(!s.step(10, blank + 50) && !s.lift(), "touched and let go where it was: nothing more");
+    }
 } // namespace
 
 int main()
 {
+    testSettle();
     testFont();
     testCanvas();
     testPlain();

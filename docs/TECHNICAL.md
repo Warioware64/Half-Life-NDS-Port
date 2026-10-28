@@ -667,9 +667,13 @@ Milestone 11, "levels of detail".
   touched -- or the slot pressed and the stylus slid up onto one and
   lifted -- is taken; a touch elsewhere, the slot again or three seconds
   of nothing puts it away. A slot with one weapon takes it at once. It
-  rises out of the pad's bottom edge and stays inside its frame, so the
-  pad's own drawing covers everything it leaves; it is dropped when the
-  menu opens or a map loads. It sounds as the game's menu does
+  rises out of the pad's bottom edge and stays inside its frame, clear of
+  its cut corners, so the pad's own drawing covers everything it leaves; it
+  is dropped when the menu opens or a map loads. As it slides, the pad and
+  it are drawn off the screen and put on it in the next vertical blank
+  (`BottomScreen::present`): never seen half drawn. The top screen's
+  display is drawn the same way (`HudDraw::present`), so numbers that
+  change (health at a charger) do not flicker. It sounds as the game's menu does
   (`cl_dll/ammo.cpp`): wpn_hudon up, wpn_moveselect from one weapon to
   the next, wpn_select for the one taken (the player's own choice only --
   not when the game puts a spent weapon away), wpn_hudoff away with
@@ -1047,7 +1051,42 @@ What it costs and what it took:
 
 `tools/arm9-report.sh --check` holds both to this: no Thumb code and no
 linker stub in the library, nothing of the engine taken by name, and none of
-the game's code left in the program.
+the game's code left in the program. It also holds the library to what the
+loader (libnds `dlfcn.c`) silently gets wrong: no section aligned on more
+than eight bytes (the block is malloc's), one relocation section (only the
+first is applied), no word pointing *into* something of the program (the
+addend is dropped); and `hlDslData` where the library's data begins.
+
+### Guards, and the crash screen
+
+`source/Guard.hpp`. Added 2026-10-29, after a data abort on a DSi turned out,
+with the ELF of that build rebuilt, to be `free()` tripping over a heap
+already broken (an archive file being closed: dlmalloc merging with a free
+neighbour whose links had been zeroed) -- the culprit long gone.
+
+- **The heap.** Every malloc, calloc, realloc, memalign, aligned_alloc,
+  posix_memalign and free -- the program's by `--wrap` (build.py), the
+  library's by the loader's resolver (GameDll) -- goes through a block with a
+  header (its size, the address of the code that asked for it) and four
+  bytes after its end. Freeing checks both; small blocks (up to 4 KB, 32 KB
+  of them in all) are then held a while, filled with a pattern that must
+  still be there when they really go. A write past a block's end, into one
+  given back, a free of something that is not a block or of one twice: the
+  game stops on the crash screen with the block, its size and who asked for
+  it. Every block is checked at each map load (old map gone, new one in)
+  and save. Cost: 24 + 4 bytes a block and the held blocks (the readout's
+  heap is about 40 KB lower).
+- **The stack.** Sixteen words at the bottom of the stack's room in DTCM hold
+  a pattern, looked at every frame.
+- **The library's code** (and constants) is summed once loaded and at each
+  check: a write into it stops the game.
+- **The crash screen** (in place of libnds's): the build's name
+  (`tools/buildid.py`: commit, and `+` the time if the tree was not clean),
+  what happened, pc and lr placed (`main`, `dsl+offset`, `itcm+offset`), the
+  registers, the code addresses found on the stack, and the three checks.
+  `make.sh` keeps each build's ELFs in `build/elf/<name>/` (the last twelve):
+  `arm-none-eabi-addr2line -f -C -e build/elf/<name>/arm9.elf <address>`; an
+  address in the library is `hl.elf` at its offset.
 
 ## Achievements
 
@@ -1081,6 +1120,9 @@ broken things) adds up across all of them. Not in a game between consoles.
     is; the box under the list reads out the one touched
   - the list slides aside (or < >, L/R) for another chapter, and drags up
     and down when it is longer than the room
+  - a slider dragged ticks once where it comes to rest (and on letting go
+    before that), not at every step it passes -- the weapon list's rule
+    (`hldata::UiSettle`)
   - POP-UPS turns the top screen's pop-ups off: achievements are still
     earned and listed (`settings.dat` version 12)
 

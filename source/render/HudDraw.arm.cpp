@@ -115,6 +115,28 @@ namespace hlrt
         ///                              being hurt, any size, from one place
         hldata::Canvas sheet;
         bool sheetMade = false;
+        /// The sheet is drawn here, not in bank F, whose tiles the screen is
+        /// being drawn from: present() puts the rows that have changed into
+        /// the bank, right after the vertical blank begins -- in step with
+        /// the sprites' table (onVblank) and the 3D picture. (Drawn straight
+        /// into the bank, the numbers were rubbed out and drawn again while
+        /// the screen showed them: a flicker each time health went up.)
+        std::uint32_t sheetRam[256 * 128 / 8];
+        std::uint16_t sheetDirty = 0; ///< a bit per row of tiles (eight pixels)
+
+        void touchRows(int y, int h)
+        {
+            if (h <= 0)
+                return;
+            const int first = y < 0 ? 0 : y >> 3, last = (y + h - 1) >> 3;
+            for (int row = first; row <= last && row < 16; ++row)
+                sheetDirty |= static_cast<std::uint16_t>(1u << row);
+        }
+        void fillSheet(int x, int y, int w, int h, int colour)
+        {
+            sheet.fill(x, y, w, h, colour);
+            touchRows(y, h);
+        }
         constexpr int kSheetTile = 512;
         constexpr int tileOf(int x, int y)
         {
@@ -165,6 +187,7 @@ namespace hlrt
         /// over another (a suit's fill over its outline).
         void blit(int x, int y, UiRect from, int base = 0, int skip = 0, int skipTop = 0, bool add = false)
         {
+            touchRows(y + skipTop, from.h - skipTop);
             for (int dy = skipTop; dy < from.h; ++dy)
             {
                 for (int dx = skip; dx < from.w; ++dx)
@@ -188,6 +211,7 @@ namespace hlrt
         void blitTrain(int x, int y, int n)
         {
             const UiRect from = hudTrain(n);
+            touchRows(y, 32);
             for (int dy = 0; dy < 32; ++dy)
             {
                 for (int dx = 0; dx < 32; ++dx)
@@ -531,11 +555,11 @@ namespace hlrt
         REG_BLDALPHA = 16 | (16 << 8);
         if (!sheetMade)
         {
-            sheet.tiles = reinterpret_cast<std::uint32_t *>(0x06404000);
+            sheet.tiles = sheetRam;
             sheet.width = 256;
             sheet.height = 128;
-            sheet.fill(0, 0, 256, 128, 0);
-            sheet.fill(0, 64, 64, 64, 1);
+            fillSheet(0, 0, 256, 128, 0);
+            fillSheet(0, 64, 64, 64, 1);
             blit((32 - kHudCrosshair.w) / 2, 32 + (32 - kHudCrosshair.h) / 2, kHudCrosshair);
             ramp(kBankHud, 1, kOrange);
             ramp(kBankHud, 8, kRed);
@@ -598,8 +622,8 @@ namespace hlrt
             shownClip = clip_;
             shownSpare = spare_;
             shownExtra = extra_;
-            sheet.fill(0, 0, 256, 32, 0);
-            sheet.fill(192, 32, 64, 32, 0);
+            fillSheet(0, 0, 256, 32, 0);
+            fillSheet(192, 32, 64, 32, 0);
             // (Screen y 160 is the sheet's row 0.)
             const int red = health_ < 25 ? 7 : 0;
             blit(6, 170 - 160, kHudCross, red);
@@ -651,7 +675,7 @@ namespace hlrt
             if (lampShown != shownLamp)
             {
                 shownLamp = lampShown;
-                sheet.fill(32, 32, 32, 16, 0);
+                fillSheet(32, 32, 32, 16, 0);
                 blit(32, 32, kHudLampEmpty);
                 const int full = kHudLampFull.w * lampPercent_ / 100;
                 if (full > 0)
@@ -724,11 +748,11 @@ namespace hlrt
         REG_BLDALPHA = 16 | (16 << 8);
         if (!sheetMade)
         {
-            sheet.tiles = reinterpret_cast<std::uint32_t *>(0x06404000);
+            sheet.tiles = sheetRam;
             sheet.width = 256;
             sheet.height = 128;
-            sheet.fill(0, 0, 256, 128, 0);
-            sheet.fill(0, 64, 64, 64, 1);
+            fillSheet(0, 0, 256, 128, 0);
+            fillSheet(0, 64, 64, 64, 1);
             for (int n = 0; n < 4; ++n)
                 blit(kMarkCell[n][0], kMarkCell[n][1], kHud640Pain[n]);
             for (int k = 0; k < HudHurts::kKinds; ++k)
@@ -792,10 +816,10 @@ namespace hlrt
             shownClip = clip_;
             shownSpare = spare_;
             shownExtra = extra_;
-            sheet.fill(0, 0, 256, 32, 0);
+            fillSheet(0, 0, 256, 32, 0);
             constexpr int kTop = 160;
             const int row = hudDs(kHud640NumberY) - kTop;
-            auto bar = [&](int x640) { sheet.fill(hudDs(x640), row, 1, kHud640DigitHeight, 6); };
+            auto bar = [&](int x640) { fillSheet(hudDs(x640), row, 1, kHud640DigitHeight, 6); };
             // Health, red when it is low; and its bar.
             const int red = health_ <= 25 ? 7 : 0;
             blit(hudDs(kHud640CrossX), hudDs(kHud640RowY) - kTop, kHud640Cross, red);
@@ -842,7 +866,7 @@ namespace hlrt
             if (lampShown != shownLamp)
             {
                 shownLamp = lampShown;
-                sheet.fill(kLampCell[0], kLampCell[1], 32, 16, 0);
+                fillSheet(kLampCell[0], kLampCell[1], 32, 16, 0);
                 blit(kLampCell[0], kLampCell[1], kHud640LampEmpty);
                 const int empty = hudLampEmptyColumns(lampPercent_);
                 if (empty < kHud640LampFull.w)
@@ -873,6 +897,22 @@ namespace hlrt
             }
             sprite(30, hudDs(kHud640TrainX), hudDs(kHud640TrainY), 0, 2, kTrainCell[0], kTrainCell[1], kBankHud);
         }
+    }
+
+    void HudDraw::present()
+    {
+        if (sheetDirty == 0 || VRAM_F_CR != (VRAM_ENABLE | VRAM_F_MAIN_SPRITE_0x06404000))
+            return;
+        // (Words: video memory takes no single bytes.)
+        auto *bank = reinterpret_cast<volatile std::uint32_t *>(0x06404000);
+        for (int row = 0; row < 16; ++row)
+        {
+            if (!(sheetDirty & (1u << row)))
+                continue;
+            for (int w = row * 256; w < (row + 1) * 256; ++w)
+                bank[w] = sheetRam[w];
+        }
+        sheetDirty = 0;
     }
 
     void HudDraw::onVblank()

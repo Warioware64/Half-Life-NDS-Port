@@ -66,6 +66,9 @@ namespace hlrt
         /// From the vertical blank interrupt: what draw() said, to the
         /// sprites' table.
         void onVblank();
+        /// Right after the wait for the vertical blank, before anything is
+        /// drawn: the sprites' pictures draw() changed, into video memory.
+        void present();
 
     private:
         void compose(); ///< draw()'s work, into the sprites' copy

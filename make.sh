@@ -34,8 +34,20 @@ cd "${SCRIPT_DIR}"
 # made into a C array the ARM9 links (source/audio/DspProgram.gen.cpp). With
 # no toolchain the array is empty and the game does without the DSP.
 python tools/dspsim/embed.py
+# The build's name (source/BuildId.gen.cpp), shown on the crash screen.
+BUILD_ID="$(python tools/buildid.py)"
 
 python build.py "$@"
+# The ELFs of every build, by its name, for looking up a crash screen's
+# addresses afterwards (arm-none-eabi-addr2line -e build/elf/<name>/arm9.elf);
+# the last twelve kept.
+if [ -f build/arm9/arm9.elf ] && [ -f build/hl/hl.elf ]; then
+    mkdir -p "build/elf/${BUILD_ID}"
+    cp build/arm9/arm9.elf build/hl/hl.elf "build/elf/${BUILD_ID}/"
+    ls -1t build/elf | tail -n +13 | while read -r old; do
+        rm -rf "build/elf/${old:?}"
+    done
+fi
 # What the fast memories hold and who still calls the library's arithmetic,
 # in a line (tools/arm9-report.sh for all of it).
 if [ -f build/arm9/arm9.elf ]; then

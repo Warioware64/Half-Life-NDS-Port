@@ -6,6 +6,7 @@
 #include "Achievements.hpp"
 #include "DebugLog.hpp"
 #include "Global.hpp"
+#include "Guard.hpp"
 #include "HlCommands.hpp"
 #include "Settings.hpp"
 #include "data/LevelFile.hpp"
@@ -217,6 +218,9 @@ namespace
         hlrt::textureCache.destroy();
         hlrt::spriteCache.destroy();
         hlrt::modelCache.destroy();
+        // (All of the map gone: anything that wrote where it should not
+        // while it was played is found now, by its block.)
+        hlrt::guard::check("map left");
         // With no picture kept: the game's loading picture, on the screen
         // and left there while the map is read (video memory is empty just
         // now: there is room). That is the first load, and little else.
@@ -334,6 +338,7 @@ namespace
         hlrt::hudDraw.hideLoading();
         hlrt::frameFreeze.thaw();
         hlrt::screenFade.curtainUp(curtainFrames());
+        hlrt::guard::check("map loaded");
         return LoadResult::Ok;
     }
 
@@ -781,10 +786,11 @@ namespace
 int main(int argc, char *argv[])
 {
 
-    // A crash says where: the address, and the registers (libnds's own
-    // screen, in place of the bare "Data abort" it otherwise shows). A
-    // photograph of it, and the .elf, say which line.
-    defaultExceptionHandler();
+    // A crash says where: the build, the address, the registers, the code
+    // on the stack, and whether the heap, the library and the stack are
+    // whole (Guard.hpp). A photograph of it, and build/elf/<build>/, say
+    // which line.
+    hlrt::guard::install();
     global.Init(argc > 0 ? argv[0] : nullptr);
     // The game library, first: before anything else takes the heap, so that
     // it sits next to the program (GameDll.arm.cpp).
@@ -979,6 +985,11 @@ int main(int argc, char *argv[])
     {
         // (The wait is when the actors' thinking is done: game/Think.cpp.)
         NEA_WaitForVBL(NEA_UPDATE_TASKS);
+        // What was drawn off the screen last frame, put on it while it is
+        // not being shown: the display's numbers, the sliding weapon list.
+        hlrt::hudDraw.present();
+        hlrt::bottomScreen.present();
+        hlrt::guard::frame();
         Global::latchDrawClock();
         // What is to be written to video memory is queued (VramWriter writes
         // it in the vertical blanks), and what is written is drawn.

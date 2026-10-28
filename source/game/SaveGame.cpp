@@ -9,6 +9,7 @@
 #include <cstring>
 
 #include "Global.hpp"
+#include "Guard.hpp"
 #include "audio/Sound.hpp"
 #include "game/Game.hpp"
 
@@ -304,6 +305,7 @@ namespace hlrt::SaveGame
     {
         if (!global.hasFat)
             return false;
+        guard::check("save");
         need();
         finish();
         needRun();
@@ -332,6 +334,7 @@ namespace hlrt::SaveGame
     {
         if (!global.hasFat || writer.busy())
             return false;
+        guard::check("save");
         need();
         needRun();
         // (While it is written, a piece a frame: as write's.)

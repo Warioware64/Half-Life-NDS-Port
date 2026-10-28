@@ -5,6 +5,7 @@
 #include "HlCommands.hpp"
 #include "HlSkill.hpp"
 #include "Achievements.hpp"
+#include "Global.hpp"
 #include "Settings.hpp"
 #include "audio/DspAudio.hpp"
 #include "game/Input.hpp"
@@ -1266,9 +1267,17 @@ namespace hlrt
         value = static_cast<std::uint8_t>(level);
         if (isVolume(id))
             sound.applyVolumes();
-        sound.ui(kUiSoundTick);
         drawSheetList();
         return true;
+    }
+
+    int Menu::sheetSliderLevel(int row)
+    {
+        int count = 0;
+        const Row *rows = settingsRows(settingsChapter_, count);
+        if (row < 0 || row >= count || rows[row].kind != Kind::Slider)
+            return -1;
+        return slid(rows[row].id);
     }
 
     void Menu::sheetAsk(int what, const char *question)
@@ -1550,8 +1559,14 @@ namespace hlrt
                         sheetSelected_ = sheetPressed_;
                         drawSheetDetail();
                     }
-                    if (!sheetSlider(sheetPressed_, sheetX_))
+                    // (The stylus down on it: heard at once, as a press,
+                    // if it moved it. Slid from there, only where it rests:
+                    // sliderSettle_.)
+                    if (sheetSlider(sheetPressed_, sheetX_))
+                        sound.ui(kUiSoundTick);
+                    else
                         drawSheetList();
+                    sliderSettle_.start(sheetSliderLevel(sheetPressed_), Global::vblanks());
                 }
                 else
                 {
@@ -1566,6 +1581,8 @@ namespace hlrt
             if (sheetDrag_ == 3)
             {
                 sheetSlider(sheetPressed_, sheetX_);
+                if (sliderSettle_.step(sheetSliderLevel(sheetPressed_), Global::vblanks()))
+                    sound.ui(kUiSoundTick);
             }
             else
             {
@@ -1604,6 +1621,9 @@ namespace hlrt
         {
             const int was = sheetPressed_;
             const int drag = sheetDrag_;
+            // (A slider let go where it had not come to rest: heard there.)
+            if (drag == 3 && sliderSettle_.lift())
+                sound.ui(kUiSoundTick);
             sheetPressed_ = kSheetNothing;
             sheetDrag_ = 0;
             const bool same = drag == 0 && was != kSheetNothing && was != kSheetList && sheetHit(sheetX_, sheetY_) == was;

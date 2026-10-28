@@ -10,6 +10,8 @@
 #include "HlUi.hpp"
 #include "ui/TouchCanvas.hpp"
 
+#include <cstring>
+
 namespace hlrt
 {
     BottomScreen bottomScreen;
@@ -21,6 +23,23 @@ namespace hlrt
         // The weapons' pictures (ui/weapons.hic), if the card has them.
         std::uint32_t iconWords[(sizeof(IconsHeader) + kWeaponIcons * kIconMaxHeight * iconRowWords(kIconMaxWidth) * 4) / 4];
         IconsView icons;
+
+        /// The touch screen's tiles, as the screen's, for the pad drawn off
+        /// it while the weapon list slides (setWeaponList, present).
+        std::uint32_t padTiles[768 * 8];
+
+        /// The pad's tiles (it is whole tiles: 208 by 132 from 0 or 48, 24)
+        /// copied from `from` to `to`, both laid out as the screen's.
+        void copyPad(std::uint32_t *to, const std::uint32_t *from, bool mirrored)
+        {
+            const TouchRect r = touchLayout(mirrored).pad;
+            const int left = r.x / 8, right = (r.x + r.w + 7) / 8, top = r.y / 8, bottom = (r.y + r.h + 7) / 8;
+            for (int ty = top; ty < bottom; ++ty)
+            {
+                const int at = (ty * 32 + left) * 8;
+                std::memcpy(to + at, from + at, static_cast<std::size_t>(right - left) * 32);
+            }
+        }
 
         // What a control is drawn in: at rest a dim amber line on the
         // screen's own dark, held (or in hand) the full amber on a lit
@@ -286,10 +305,24 @@ namespace hlrt
         if (shown_ != Shown::Pad)
             return;
         // What was under it (it is all inside the pad's frame), then it where
-        // it is now.
+        // it is now -- off the screen, from the pad as it is on it: put on
+        // it whole, in the next vertical blank (present).
+        copyPad(padTiles, touchCanvas.screenTiles(), mirrored_);
+        touchCanvas.offScreen(padTiles);
         drawPad();
         if (list_.open())
             drawWeaponList();
+        touchCanvas.onScreen();
+        padPending_ = true;
+    }
+
+    void BottomScreen::present()
+    {
+        if (!padPending_)
+            return;
+        padPending_ = false;
+        if (shown_ == Shown::Pad)
+            copyPad(touchCanvas.screenTiles(), padTiles, mirrored_);
     }
 
     /// The list of a slot's weapons: each its picture and its name, the one
@@ -347,6 +380,7 @@ namespace hlrt
         Canvas &canvas = touchCanvas.canvas();
         canvas.clear();
         shown_ = Shown::Pad;
+        padPending_ = false; // (drawn on the screen now, all of it)
         mirrored_ = settings.leftHanded;
         drawBar();
         drawPad();
@@ -397,6 +431,7 @@ namespace hlrt
         Canvas &canvas = touchCanvas.canvas();
         canvas.clear();
         shown_ = Shown::Message;
+        padPending_ = false;
         const FontView &title = touchCanvas.font(kFontTitle), &font = touchCanvas.font(kFontMedium);
         drawTextCentred(canvas, title, 128, 84, line1, inkFor(title, kUiOrange));
         // (As much of the second line as the screen is wide.)
@@ -411,6 +446,7 @@ namespace hlrt
         Canvas &canvas = touchCanvas.canvas();
         canvas.clear();
         shown_ = Shown::Nothing;
+        padPending_ = false;
         const FontView &title = touchCanvas.font(kFontTitle), &font = touchCanvas.font(kFontSmall);
         drawTextCentred(canvas, title, 128, 20, "Half-Life DS", inkFor(title, kUiOrange));
         int y = 64;

@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "HlSaveFiles.hpp"
+#include "HlUi.hpp"
 
 namespace hlrt
 {
@@ -121,6 +122,10 @@ namespace hlrt
         void sheetSelect(int row);
         bool sheetAdjust(int row, int step);
         bool sheetSlider(int row, int x);
+        /// The level of the slider in `row` (-1: not a slider).
+        int sheetSliderLevel(int row);
+        /// The slider being slid: heard where it rests (HlUi.hpp).
+        hldata::UiSettle sliderSettle_;
         int sheetHit(int x, int y) const;
         void drawSheet();
         void drawSheetHeader();

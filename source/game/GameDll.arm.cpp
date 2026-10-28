@@ -1,11 +1,13 @@
 #include "game/GameLayout.hpp"
 
+#include <cstring>
 #include <dlfcn.h>
 #include <filesystem.h>
 #include <nds.h>
 
 #include "DebugLog.hpp"
 #include "Global.hpp"
+#include "Guard.hpp"
 #include "audio/Sound.hpp"
 #include "data/LevelFile.hpp"
 #include "data/ModelCache.hpp"
@@ -103,11 +105,36 @@ namespace hlrt
         /// (libnds dlfcn.c: it checks a byte offset against a word one's
         /// limit), and the library sits at 0x021xxxxx, 17 MB from 0x0100xxxx
         /// where ITCM is linked; 1 MB from its last mirror.
-        bool nearItcm(const char *, std::uint32_t *value, std::uint32_t attributes)
+        bool nearItcm(const char *name, std::uint32_t *value, std::uint32_t attributes)
         {
             const bool engines = (attributes & (DSL_SYMBOL_MAIN_BINARY | DSL_SYMBOL_UNRESOLVED)) != 0;
             if (engines && *value >= kItcm && *value < kItcm + kItcmSize)
                 *value = kItcmNear | (*value & (kItcmSize - 1));
+            // The heap, as the program has it: the guarded one (Guard.hpp).
+            // (The library's own malloc would be the allocator's, under
+            // it: a block from one given back to the other.)
+            if (engines && name != nullptr)
+            {
+                struct Wrapped
+                {
+                    const char *name;
+                    void *to;
+                };
+                static const Wrapped kWrapped[] = {
+                    {"malloc", reinterpret_cast<void *>(__wrap_malloc)},
+                    {"calloc", reinterpret_cast<void *>(__wrap_calloc)},
+                    {"realloc", reinterpret_cast<void *>(__wrap_realloc)},
+                    {"free", reinterpret_cast<void *>(__wrap_free)},
+                    {"memalign", reinterpret_cast<void *>(__wrap_memalign)},
+                    {"aligned_alloc", reinterpret_cast<void *>(__wrap_aligned_alloc)},
+                    {"posix_memalign", reinterpret_cast<void *>(__wrap_posix_memalign)},
+                };
+                for (const Wrapped &w : kWrapped)
+                {
+                    if (std::strcmp(name, w.name) == 0)
+                        *value = reinterpret_cast<std::uint32_t>(w.to);
+                }
+            }
             return true;
         }
     } // namespace
@@ -135,6 +162,12 @@ namespace hlrt
             *why = dlerror();
             return false;
         }
+        // Its code and constants, summed (Guard.hpp): from where it was
+        // put to where its data begins.
+        const auto *base = static_cast<const std::uint8_t *>(dlmembase(library));
+        const auto *data = static_cast<const std::uint8_t *>(dlsym(library, "hlDslData"));
+        if (base != nullptr && data != nullptr && data > base)
+            guard::noteLibrary(base, static_cast<std::uint32_t>(data - base), static_cast<std::uint32_t>(data - base));
         const auto api = reinterpret_cast<GetGameApiFn>(dlsym(library, "GetGameAPI"));
         if (api == nullptr || !api(kGameApiVersion, gameLayout(), &hlEngine, &gameApi))
         {

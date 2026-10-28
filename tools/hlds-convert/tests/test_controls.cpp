@@ -274,9 +274,9 @@ namespace
                 each.category = category;
                 each.count = kWeaponListMost;
                 const TouchRect e = weaponListRect(each, at);
-                check(e.x >= at.pad.x + 1 && e.x + e.w <= at.pad.x + at.pad.w - 1 && e.y >= at.pad.y + 1 &&
-                          e.y + e.h <= at.pad.y + at.pad.h - 3,
-                      "every slot's list, at its longest, is inside the pad's frame");
+                check(e.x >= at.pad.x + kWeaponListInset && e.x + e.w <= at.pad.x + at.pad.w - kWeaponListInset &&
+                          e.y >= at.pad.y + 1 && e.y + e.h <= at.pad.y + at.pad.h - 3,
+                      "every slot's list, at its longest, is inside the pad's frame, clear of its cut corners");
             }
             // A weapon touched: taken.
             const int x = r.x + r.w / 2, rowY = r.y + 2 + kWeaponListRow + kWeaponListRow / 2;

@@ -28,6 +28,12 @@
 // cannot move -- the call lands where the library was linked, not where it
 // is. tools/arm9-report.sh --check says if one is there.
 
+// Where the library's data begins: everything before it (its code and its
+// constants) is the same from the moment it is loaded, and is summed then
+// and later (source/Guard.hpp). The first .data of the first file linked:
+// tools/arm9-report.sh --check says if it is not.
+extern "C" __attribute__((visibility("default"), used, section(".data"))) std::uint32_t hlDslData = 0x44415441;
+
 namespace hlrt
 {
     Game &game = *hlEngine.game;

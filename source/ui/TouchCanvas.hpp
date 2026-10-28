@@ -27,6 +27,11 @@ namespace hlrt
         void reset() { created_ = false; }
 
         hldata::Canvas &canvas() { return canvas_; }
+        /// Drawn off the screen, into `tiles` (laid out as the screen's 768),
+        /// until onScreen(); the screen's own tiles, to copy to and from.
+        void offScreen(std::uint32_t *tiles) { canvas_.tiles = tiles; }
+        void onScreen() { canvas_.tiles = screen_; }
+        std::uint32_t *screenTiles() const { return screen_; }
         /// kFontSmall, kFontMedium or kFontTitle -- or the plain letters,
         /// where the card has not got that one.
         const hldata::FontView &font(int which);
@@ -37,6 +42,7 @@ namespace hlrt
         bool created_ = false;
         bool loaded_ = false;
         hldata::Canvas canvas_;
+        std::uint32_t *screen_ = nullptr;
         hldata::FontView fonts_[hldata::kFontCount];
         hldata::FontView plain_;
         void loadFonts();

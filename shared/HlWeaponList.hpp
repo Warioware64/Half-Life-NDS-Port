@@ -26,6 +26,9 @@ namespace hldata
     /// heard for it (a sixth of a second): slid across rows, only the one
     /// it stops on is.
     inline constexpr std::uint32_t kWeaponListSettle = 10;
+    /// How far inside the pad's sides it stays: clear of the pad's corners,
+    /// which are cut six pixels across (BottomScreen::drawPad).
+    inline constexpr int kWeaponListInset = 6;
 
     struct WeaponList
     {
@@ -60,8 +63,10 @@ namespace hldata
         const TouchRect &slot = at.slot[list.category > 0 ? list.category - 1 : 0];
         const int high = list.count * kWeaponListRow + 4;
         int x = slot.x + slot.w / 2 - kWeaponListWidth / 2;
-        x = x < at.pad.x + 2 ? at.pad.x + 2 : x;
-        x = x + kWeaponListWidth > at.pad.x + at.pad.w - 2 ? at.pad.x + at.pad.w - 2 - kWeaponListWidth : x;
+        x = x < at.pad.x + kWeaponListInset ? at.pad.x + kWeaponListInset : x;
+        x = x + kWeaponListWidth > at.pad.x + at.pad.w - kWeaponListInset
+                ? at.pad.x + at.pad.w - kWeaponListInset - kWeaponListWidth
+                : x;
         return TouchRect{static_cast<std::int16_t>(x), static_cast<std::int16_t>(weaponListFloor(at) - high),
                          static_cast<std::int16_t>(kWeaponListWidth), static_cast<std::int16_t>(high)};
     }
