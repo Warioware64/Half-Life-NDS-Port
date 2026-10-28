@@ -72,9 +72,7 @@ namespace
         {
             if (std::FILE *log = std::fopen(global.dataPath("perf.txt").c_str(), "a"))
             {
-                std::fprintf(log, "dsp: ran short %lu, faults %d, block %lu\n",
-                             static_cast<unsigned long>(hlrt::dspAudio.dry()), hlrt::dspAudio.faults(),
-                             static_cast<unsigned long>(hlrt::dspAudio.block()));
+                std::fprintf(log, "dsp: ran short %lu\n", static_cast<unsigned long>(hlrt::dspAudio.dry()));
                 std::fclose(log);
             }
         }

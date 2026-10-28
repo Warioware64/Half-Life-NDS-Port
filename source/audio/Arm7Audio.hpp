@@ -79,6 +79,11 @@ namespace hlrt
         void musicWrote(std::uint32_t blocks);
         bool musicOver() const;
 
+        /// The send to the DSi's DSP (Enhanced): its ring, and how many
+        /// samples have been put into it, all told.
+        const volatile std::int16_t *send() const { return link_ != nullptr ? link_->send : nullptr; }
+        std::uint32_t sendWritten() const { return link_ != nullptr ? link_->sendWrite : 0; }
+
         /// The ARM7's own figures (the debug readout).
         std::uint32_t late() const;
         std::uint32_t loadPercent() const;

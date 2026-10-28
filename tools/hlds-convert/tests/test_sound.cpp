@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <fstream>
 
+#include "HlDspRoom.hpp"
 #include "TestBspBuilder.hpp"
 #include "hlds/SoundCook.hpp"
 
@@ -212,25 +213,18 @@ namespace
         check(!decodeMusicStereo(bad, 0, l, r), "a track file of the wrong length is refused");
     }
 
-    void testRooms()
-    {
-        check(roomEcho(0).level == 0 && roomEcho(99).level == 0, "an ordinary room has no echo");
-        check(roomEcho(25).feedback > roomEcho(1).feedback && roomEcho(25).level > roomEcho(1).level,
-              "a cavern rings longer and louder than a small room");
-        check(roomEcho(15).damp > roomEcho(9).damp, "under water it is dull");
-        for (int type = 1; type <= 28; ++type)
-            check(roomEcho(type).level != 0 && roomEcho(type).feedback < 32000,
-                  "every room type has an echo that dies away");
-    }
-
     void testEcho()
     {
         // The loudest room there is, sent the loudest thing there is, for a
         // second: it must not sit against the stops; and when the sound
         // ends, the echo must die away.
-        const RoomEcho cavern = roomEcho(25);
+        // (The DSP's rooms are HlDspRoom.hpp's; test_dsproom has them all.)
+        std::uint16_t cavern[HL_DSP_ROOM_WORDS];
+        hldata::dspRoomBlock(25, cavern);
         hlDspInit();
-        hlDspCommand(HL_DSP_CMD_ROOM, cavern.feedback, static_cast<std::uint16_t>((cavern.damp << 8) | cavern.level));
+        for (int i = 0; i < HL_DSP_ROOM_WORDS; ++i)
+            hlRoomBlock[i] = cavern[i];
+        hlDspCommand(HL_DSP_CMD_ROOM, 0, 0);
         std::uint32_t seed = 5;
         int pinned = 0, loudest = 0;
         double during = 0, after = 0, late = 0;
@@ -483,7 +477,6 @@ int main()
     testEncode();
     testSentences();
     testStereo();
-    testRooms();
     testEcho();
     testMusicBlocks();
     const char *dir = std::getenv("HLDS_VALVE_DIR");

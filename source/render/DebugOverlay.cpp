@@ -107,17 +107,17 @@ namespace hlrt
             break;
         case 4:
             // ... and the sound: how many of the map's sounds are in memory,
-            // and on a DSi whether its output and DSP are in use ("dsp", with
-            // how often the DSP ran short of music or echo to play, how often
-            // it said its music had gone wrong, and the block of the track it
-            // has been given).
+            // and on a DSi whether its DSP is in use ("dsp", with how often
+            // it ran short of what to echo, and the loudest it was lately
+            // sent -- then the ARM7's figures, as below).
             // (A game between consoles: the radio's account instead.)
             if (netGame.on())
                 netGame.status(line, sizeof(line));
             else if (sound.extended())
-                std::snprintf(line, sizeof(line), "dsp dry %lu flt %d blk %lu in %d",
-                              static_cast<unsigned long>(dspAudio.dry()), dspAudio.faults(),
-                              static_cast<unsigned long>(dspAudio.block()), dspAudio.heard());
+                std::snprintf(line, sizeof(line), "dsp %lu in%5d a7 %lu%% %lu",
+                              static_cast<unsigned long>(dspAudio.dry()), dspAudio.heard(),
+                              static_cast<unsigned long>(arm7Audio.loadPercent()),
+                              static_cast<unsigned long>(arm7Audio.late()));
             else
                 // (... and how many voices each layer has -- the player's,
                 // the world's, the voice, the loops, the menu -- and the

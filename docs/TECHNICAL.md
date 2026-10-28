@@ -294,16 +294,21 @@ Milestone 11, "levels of detail".
   the music, decoded from the game's MP3s and streamed from the card. A map's
   sounds have an allowance of memory (350 KB); the longest are cooked at half
   the rate where a map has more than that.
-- On a DSi the sound has more to it. The output runs at 47.6 kHz. With
-  "DSi SOUND" switched on in the pause menu (it is **off** unless it is, and
-  it is an experiment: tried on a DSi, it was not judged worth taking
-  further, and nothing more is being built on the DSP; off is exactly what
-  a DS does),
-  the DSP
-  plays the music in stereo (cooked as a second file for each track), and
-  adds the echo of the room: the ARM7 captures what the sixteen channels are
-  playing, the ARM9 passes it to the DSP, and the DSP puts out a reverb of it
-  set by the map's own room markers (env_sound). The DSP program is in
+- On a DSi the sound has more to it. SOUND: Quality high makes all of it at
+  47.6 kHz (the ARM7's pipeline above). Room effects: enhanced gives the
+  rooms to the DSi's DSP instead of the ARM7: the ARM7 sends what the
+  sixteen channels play, in one channel at 11.9 kHz, the ARM9 passes it on
+  through the DSP's port (never the DSP's own bus, which jams against the
+  display lists' DMA: tools/hwtest/dsp_bus), and the DSP puts out the room
+  alone, in stereo, a quarter of the speakers to it and three to the
+  ordinary sound (made up for by the ARM7). Its room is richer than the
+  game's: the first reflections at four places back along a line the
+  room's size long, two to each side; the reverb, four lines feeding each
+  other through a Hadamard square, each dulled on the way round, two to
+  each side; and the game's echo, up to 0.4 s off; each room's numbers
+  worked out from the game's own (`shared/HlDspRoom.hpp`) and written in
+  when the player walks into it. The music is the ARM7's either way.
+  The DSP program is in
   `teak/`, and is assembly, all of it: compiled C runs on this chip no
   faster than on the ARM9, and what it is good at -- multiply and add in
   one step, a loop that costs nothing to go round -- a compiler does not
@@ -311,21 +316,16 @@ Milestone 11, "levels of detail".
   (`shared/dsp/hl_dsp.h`, its model, which the host tests run), and
   `tools/dspsim` runs the real program in an emulated DSP and holds every
   pair of samples that comes out against the model's: a quiet scene, and
-  one with everything as loud as it goes. By the same tool, a pair of
-  samples costs 258 steps of the processor where the C program this
-  replaced took 588 (6.3% of the processor against 14.4%, with music and
-  echo both going). A DS is unchanged.
+  one with everything as loud as it goes. By the same tool the room costs
+  the DSP 5.3% of its time.
   The DSP is built not to make a noise when something goes wrong: its
   interrupt only hands finished samples to the speakers (the working out is
-  in its main loop, and a port left short gets the last sample, fading); the
-  music goes to it in blocks, each behind a mark and with the decoders' own
-  state, so that a slip is over within 86 ms; a block out of step is silence
-  and is reported, the track is started again from where it was, and after
-  three such faults (or a DSP that stops answering) the game goes back to
-  the DS's way for the session and says so in `perf.txt`.
-  melonDS (1.1) is no judge of it: it lets the DSP run only when the game
-  touches one of its registers, so music from the DSP comes out there in
-  bursts with silence between.
+  in its main loop, and a port left short gets the last sample, fading); a
+  room's lengths are each held within their line whatever it is sent; and a
+  DSP that stops answering is given up for the session (the game's own
+  rooms then), said in `perf.txt`.
+  melonDS (1.1) is no judge of it: it runs the DSP only when the game
+  touches one of its registers.
 - More to fight: alien slaves zap from a distance and claw up close,
   bullsquids spit, bite and whip, houndeyes run up and let off a blast. Hand
   grenades bounce, and burst after three seconds. Bolts, spit and blasts are

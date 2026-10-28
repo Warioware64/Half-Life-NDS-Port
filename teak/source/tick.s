@@ -11,7 +11,8 @@
     .align 2
 tk_left:    .space 2
 tk_right:   .space 2
-tk_wet:     .space 2
+tk_wetL:    .space 2
+tk_wetR:    .space 2
 tk_have:    .space 2
 tk_word:    .space 2
 tk_next:    .space 2
@@ -226,10 +227,11 @@ BEGIN_ASM_FUNC hlDspTick
     and     0x3, a0
     br      .Ltick_wet, neq
 
-    // A new sample of echo every fourth tick, and a straight line to it
-    // over the four.
+    // A new sample of the room every fourth tick, and a straight line to
+    // it over the four, on each side.
     clr     a0, always
-    mov     a0l, [tk_wet]
+    mov     a0l, [tk_wetL]
+    mov     a0l, [tk_wetR]
     mov     a0l, [hlEchoIn]
     mov     [hlSendRead], a0
     mov     [hlSendWrite], a1
@@ -260,35 +262,53 @@ BEGIN_ASM_FUNC hlDspTick
     call    hlReverb, always
     mov     [hlLevel], a0
     mov     a0l, y0
-    mov     [hlEchoOut], a0
+    mov     [hlEchoOutL], a0
     mpy     y0, a0l, a1
     clr     a1, always
     add     p*, a1
     SHIFTZ  a1, 6
     CLAMP
-    mov     a1l, [tk_wet]
+    mov     a1l, [tk_wetL]
+    mov     [hlLevel], a0
+    mov     a0l, y0
+    mov     [hlEchoOutR], a0
+    mpy     y0, a0l, a1
+    clr     a1, always
+    add     p*, a1
+    SHIFTZ  a1, 6
+    CLAMP
+    mov     a1l, [tk_wetR]
 .Ltick_step:
-    mov     [tk_wet], a1
-    mov     [hlWet], a0
+    mov     [tk_wetL], a1
+    mov     [hlWetL], a0
     sub     a0, a1
     SHIFTZ  a1, 2
-    mov     a1l, [hlWetStep]
+    mov     a1l, [hlWetStepL]
+    mov     [tk_wetR], a1
+    mov     [hlWetR], a0
+    sub     a0, a1
+    SHIFTZ  a1, 2
+    mov     a1l, [hlWetStepR]
 
 .Ltick_wet:
-    mov     [hlWet], a0
-    mov     [hlWetStep], a1
+    mov     [hlWetL], a0
+    mov     [hlWetStepL], a1
     add     a1, a0
-    mov     a0l, [hlWet]
+    mov     a0l, [hlWetL]
+    mov     [hlWetR], a0
+    mov     [hlWetStepR], a1
+    add     a1, a0
+    mov     a0l, [hlWetR]
     mov     [hlTick], a0
     addv    0x1, a0l
     mov     a0l, [hlTick]
 
-    mov     [hlWet], a1
+    mov     [hlWetL], a1
     mov     [tk_left], a0
     add     a0, a1
     CLAMP
     mov     a1l, [hlOutL]
-    mov     [hlWet], a1
+    mov     [hlWetR], a1
     mov     [tk_right], a0
     add     a0, a1
     CLAMP

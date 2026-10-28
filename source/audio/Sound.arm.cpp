@@ -219,17 +219,8 @@ namespace hlrt
 
     void Sound::holdMusic()
     {
-        // Put down where it is, to be taken up again -- by whichever of the
-        // two ways of playing it there then is, so where it is is kept in
+        // Put down where it is, to be taken up again: where it is is kept in
         // milliseconds.
-        if (dspAudio.musicPlaying())
-        {
-            musicHeld_ = true;
-            musicTrack_ = dspAudio.musicTrack();
-            musicHeldMs_ = static_cast<std::uint32_t>(
-                (static_cast<std::uint64_t>(dspAudio.musicPair()) * 1000) / kStereoRate);
-            dspAudio.stopMusic();
-        }
         if (music_ != nullptr)
         {
             // (What has been handed over, less what the stream still has
@@ -258,13 +249,8 @@ namespace hlrt
         musicHeld_ = false;
         const int track = musicTrack_;
         musicTrack_ = -1;
-        // The DSP's way, taken up at the block that holds the moment...
-        if (dspAudio.up() &&
-            dspAudio.startMusic(track, static_cast<std::uint32_t>(
-                                           (static_cast<std::uint64_t>(musicHeldMs_) * kStereoRate) / 1000)))
-            return;
-        // ... or the ARM7's, from the pair of the moment (the track's rate:
-        // what its stereo file says, the DSP's own).
+        // From the pair of the moment (the track's rate: what its stereo
+        // file says).
         musicSkipped_ = static_cast<std::uint32_t>((static_cast<std::uint64_t>(musicHeldMs_) * kStereoRate) / 1000);
         startMusic(track);
     }
@@ -273,14 +259,12 @@ namespace hlrt
     {
         if (on == extended_)
             return extended_;
-        holdMusic();
+        // (The music is the ARM7's either way, and goes on.)
         if (on)
         {
-            // (The capture is the DSP's echo's, then: the pipeline let go of
-            // first, and taken back if the DSP does not start.)
-            arm7Audio.setMode(false, kAudioEffectsOff, settings.outputMode, settings.soundQuality);
-            arm7Audio.sync();
             extended_ = dspAudio.start();
+            if (extended_)
+                dspAudio.room(room_); // (the room the player is in already)
         }
         else
         {
@@ -288,7 +272,6 @@ namespace hlrt
             extended_ = false;
         }
         sendMode();
-        resumeMusic();
         return extended_;
     }
 
@@ -307,20 +290,24 @@ namespace hlrt
 
     void Sound::sendMode()
     {
-        const std::uint8_t effects = extended_ || settings.roomEffects == kRoomOff ? kAudioEffectsOff
-                                                                                    : kAudioEffectsClassic;
+        // (The DSP's rooms take what the pipeline sends them, at a quarter
+        // of 47605 Hz: the pipeline at that rate then.)
+        const std::uint8_t effects = extended_                         ? kAudioEffectsEnhanced
+                                     : settings.roomEffects == kRoomOff ? kAudioEffectsOff
+                                                                       : kAudioEffectsClassic;
+        const std::uint8_t quality = extended_ ? kQualityHigh : settings.soundQuality;
         // A DSi's speakers fed at the pipeline's rate: 47.6 kHz at the high
         // quality (and for the DSP, which is made for it), else 32.7.
         if (NEA_SoundDSiOutputAvailable())
         {
-            const int hz = extended_ || settings.soundQuality == kQualityHigh ? 47 : 32;
+            const int hz = quality == kQualityHigh ? 47 : 32;
             if (hz != dsiHz_)
             {
                 dsiHz_ = hz;
                 NEA_SoundEnableDSiOutput(hz == 47 ? NEA_DSI_SOUND_FREQ_47KHZ : NEA_DSI_SOUND_FREQ_32KHZ);
             }
         }
-        arm7Audio.setMode(!extended_ && held_ == 0, effects, settings.outputMode, settings.soundQuality);
+        arm7Audio.setMode(held_ == 0, effects, settings.outputMode, quality);
         // (The room the player is in, again: a pipeline started afresh has
         // none.)
         arm7Audio.setRoom(room_);
@@ -1158,15 +1145,16 @@ namespace hlrt
         if (type == 0)
             return; // (in none: the last stays, as the game has it)
         type = type < 0 ? 0 : type;
-        if (dspAudio.up())
-        {
-            dspAudio.room(roomEcho(type));
-        }
-        else if (type != room_)
+        // (The DSP's rooms, or the ARM7's: the room kept either way, for
+        // the other to be given if the player changes which.)
+        if (type != room_)
         {
             room_ = type;
-            arm7Audio.setRoom(type);
+            if (!dspAudio.up())
+                arm7Audio.setRoom(type);
         }
+        if (dspAudio.up())
+            dspAudio.room(type);
     }
 
     void Sound::ui(int which, int volume)
@@ -1220,15 +1208,13 @@ namespace hlrt
 
     int Sound::musicTrack() const
     {
-        return dspAudio.musicPlaying() ? dspAudio.musicTrack() : musicTrack_;
+        return musicTrack_;
     }
 
     std::uint32_t Sound::musicMs() const
     {
         if (musicHeld_)
             return musicHeldMs_;
-        if (dspAudio.musicPlaying())
-            return static_cast<std::uint32_t>((static_cast<std::uint64_t>(dspAudio.musicPair()) * 1000) / kStereoRate);
         if (music_ == nullptr)
             return 0;
         const std::uint32_t played = musicPlayed();
@@ -1238,7 +1224,6 @@ namespace hlrt
     void Sound::setMusic(int track, std::uint32_t ms)
     {
         stopMusic();
-        dspAudio.stopMusic();
         musicHeld_ = false;
         musicTrack_ = -1;
         if (track < 0)
@@ -1253,20 +1238,14 @@ namespace hlrt
 
     void Sound::startMusic(int track)
     {
-        if (dspAudio.musicPlaying() && dspAudio.musicTrack() == track)
-            return;
         if (track == musicTrack_ && music_ != nullptr)
             return;
         const std::uint32_t skip = musicSkipped_;
         musicSkipped_ = 0;
         stopMusic();
-        dspAudio.stopMusic();
-        // A DSi's DSP plays it, if the player has asked for the DSP.
-        if (dspAudio.startMusic(track, skip))
-            return;
         if (!up_)
             return;
-        // Otherwise the ARM7, in stereo: the track's stereo file, its blocks
+        // The ARM7 plays it, in stereo: the track's stereo file, its blocks
         // into the ring as they are.
         char name[16];
         musicFileName(track, name, sizeof(name), true);
@@ -1377,14 +1356,16 @@ namespace hlrt
             // (Said in the log, so that it is known to have happened.)
             if (std::FILE *log = std::fopen(global.dataPath("perf.txt").c_str(), "a"))
             {
-                std::fprintf(log, "dsp given up: %d faults, ran short %lu times, %s\n", dspAudio.faults(),
-                             static_cast<unsigned long>(dspAudio.dry()),
+                std::fprintf(log, "dsp given up: ran short %lu times, %s\n", static_cast<unsigned long>(dspAudio.dry()),
                              dspAudio.up() ? "answering" : "not answering");
                 std::fclose(log);
             }
             setDsp(false);
+            // (The game's own rooms, then, until it is asked for again.)
+            if (settings.roomEffects == kRoomEnhanced)
+                settings.roomEffects = kRoomClassic;
         }
-        // What has run its time is over: its voice is maxmod's again.
+        // What has run its time is over: its voice is free again.
         fadeTick();
         const std::uint32_t ended = mixer_.tick(ms, paused_);
         for (int v = 0; v < Mixer::kVoices; ++v)

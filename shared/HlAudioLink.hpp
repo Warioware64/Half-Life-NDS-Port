@@ -111,6 +111,9 @@ namespace hldata
         /// The pipeline's output rings (samples; a power of two), which
         /// channels 1 and 3 play round.
         static constexpr int kOutRing = 512;
+        /// The send to the DSi's DSP (Enhanced): the dry mix in one
+        /// channel, a quarter of 47605 Hz (a power of two).
+        static constexpr int kSendRing = 2048;
 
         // ARM9 writes:
         volatile std::uint32_t commandWrite;
@@ -129,9 +132,12 @@ namespace hldata
         volatile std::uint32_t musicRead; ///< pairs of the track played
         volatile std::uint32_t musicDry;  ///< samples the music ran out (the ARM9 behind)
         volatile std::uint32_t musicOver; ///< 1 once the track has all been played
+        volatile std::uint32_t sendWrite; ///< samples put into `send`, all told
         // ARM7 writes, channels 1 and 3 read:
         alignas(32) std::int16_t outLeft[kOutRing];
         alignas(32) std::int16_t outRight[kOutRing];
+        // ARM7 writes, the ARM9 passes on to the DSP:
+        alignas(32) std::int16_t send[kSendRing];
     };
 
     // ---- the ARM9's side

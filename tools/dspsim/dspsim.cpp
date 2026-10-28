@@ -24,6 +24,8 @@ extern "C"
 #include "hl_dsp.h"
 }
 
+#include "HlDspRoom.hpp"
+
 namespace
 {
     bool loadElf(Teakra::Teakra &t, const char *path)
@@ -226,6 +228,7 @@ int main(int argc, char **argv)
     }
     const uint16_t musicAt = command(HL_DSP_CMD_INFO, HL_DSP_INFO_MUSIC, 0, tick);
     const uint16_t sendAt = command(HL_DSP_CMD_INFO, HL_DSP_INFO_SEND, 0, tick);
+    const uint16_t roomAt = command(HL_DSP_CMD_INFO, HL_DSP_INFO_ROOM, 0, tick);
     std::printf("dspsim: ping answered; music ring at %04X, echo ring at %04X\n", musicAt, sendAt);
 
     // The scene. A hall; a burst of noise to echo in it; then a tune.
@@ -234,8 +237,18 @@ int main(int argc, char **argv)
     // through, which a quiet scene never reaches.)
     const char *scene = std::getenv("DSPSIM_SCENE");
     const bool loudScene = scene != nullptr && std::string(scene) == "loud";
-    const uint16_t feedback = loudScene ? 32600 : 27000;
-    const uint16_t room2 = loudScene ? (uint16_t)((10 << 8) | 255) : (uint16_t)((40 << 8) | 100);
+    // (A large concrete room -- reflections, reverb, and an echo 0.3 s off --
+    // or, loud, the strangest the game has: weirdo 3, a reverb going round
+    // all but whole.)
+    uint16_t roomBlock[HL_DSP_ROOM_WORDS];
+    hldata::dspRoomBlock(loudScene ? 28 : 19, roomBlock);
+    // The room's numbers written where the program said, then taken.
+    auto room = [&](uint16_t &when)
+    {
+        for (int i = 0; i < HL_DSP_ROOM_WORDS; i++)
+            t.DataWrite((uint16_t)(roomAt + i), roomBlock[i], true);
+        command(HL_DSP_CMD_ROOM, 0, 0, when);
+    };
     std::vector<int16_t> burst(600);
     uint32_t seed = 99;
     for (int16_t &s : burst)
@@ -246,7 +259,7 @@ int main(int argc, char **argv)
     const std::vector<uint16_t> music = makeMusic(3, loudScene ? 31000.0 : 9000.0); // three blocks: 3087 words
 
     uint16_t roomTick, sendTick, musicTick;
-    command(HL_DSP_CMD_ROOM, feedback, room2, roomTick);
+    room(roomTick);
     for (size_t i = 0; i < burst.size(); i++)
         t.DataWrite((uint16_t)(sendAt + i), (uint16_t)burst[i], true);
     command(HL_DSP_CMD_SEND_FED, (uint16_t)burst.size(), 0, sendTick);
@@ -284,12 +297,16 @@ int main(int argc, char **argv)
                 seen.push_back({name + (offset ? "+" + std::to_string(offset) : ""),
                                 (int16_t)t.DataRead((uint16_t)(at + offset), true)});
         };
-        for (const char *name : {"hlTick", "hlSendRead", "hlEchoIn", "hlEchoOut", "hlWet", "hlWetStep",
-                                 "hlFeedback", "hlDamp", "hlLevel", "hlCombLow.0", "hlCombLow.1",
-                                 "hlCombLow.2", "hlCombLow.3", "hlLinePos.0", "hlLinePos.4"})
+        for (const char *name : {"hlTick", "hlSendRead", "hlEchoIn", "hlEchoOutL", "hlEchoOutR", "hlWetL",
+                                 "hlWetR", "hlLevel", "hlErPos", "hlDlyPos", "hlDlyLast1"})
             peek(name, 0);
-        for (int offset : {0, 1, 2, 3, 301, 302, 622, 967, 1333, 1334, 1483, 1484})
-            peek("hlDelay", offset);
+        for (int offset : {0, 1, 2, 3})
+        {
+            peek("hlFdnLow", offset);
+            peek("hlFdnPos", offset);
+            peek("hlRvM", offset);
+            peek("hlRvTap", offset);
+        }
         stateTick = seen.empty() ? -1 : (uint16_t)seen[0].value;
     }
     while (heard.size() / 2 < 30000 && cycles < 4000000000ull)
@@ -304,7 +321,11 @@ int main(int argc, char **argv)
     {
         const uint16_t now = (uint16_t)n;
         if (n < 65536 && now == roomTick && n >= roomTick)
-            hlDspCommand(HL_DSP_CMD_ROOM, feedback, room2);
+        {
+            for (int i = 0; i < HL_DSP_ROOM_WORDS; i++)
+                hlRoomBlock[i] = roomBlock[i];
+            hlDspCommand(HL_DSP_CMD_ROOM, 0, 0);
+        }
         if (n < 65536 && now == sendTick)
         {
             for (size_t i = 0; i < burst.size(); i++)
@@ -324,16 +345,23 @@ int main(int argc, char **argv)
                 if (name == "hlTick") return (int16_t)hlTick;
                 if (name == "hlSendRead") return hlSendRead;
                 if (name == "hlEchoIn") return hlEchoIn;
-                if (name == "hlEchoOut") return hlEchoOut;
-                if (name == "hlWet") return hlWet;
-                if (name == "hlWetStep") return hlWetStep;
-                if (name == "hlFeedback") return hlFeedback;
-                if (name == "hlDamp") return hlDamp;
+                if (name == "hlEchoOutL") return hlEchoOutL;
+                if (name == "hlEchoOutR") return hlEchoOutR;
+                if (name == "hlWetL") return hlWetL;
+                if (name == "hlWetR") return hlWetR;
                 if (name == "hlLevel") return hlLevel;
-                if (name.rfind("hlCombLow.", 0) == 0) return hlCombLow[name.back() - '0'];
-                if (name.rfind("hlLinePos.", 0) == 0) return hlLinePos[name.back() - '0'];
-                if (name == "hlDelay") return hlDelay[0];
-                if (name.rfind("hlDelay+", 0) == 0) return hlDelay[std::atoi(name.c_str() + 8)];
+                if (name == "hlErPos") return hlErPos;
+                if (name == "hlDlyPos") return hlDlyPos;
+                if (name == "hlDlyLast1") return hlDlyLast1;
+                const int k = name.back() - '0';
+                if (name.rfind("hlFdnLow+", 0) == 0) return hlFdnLow[k];
+                if (name.rfind("hlFdnPos+", 0) == 0) return hlFdnPos[k];
+                if (name.rfind("hlRvM+", 0) == 0) return hlRvM[k];
+                if (name.rfind("hlRvTap+", 0) == 0) return hlRvTap[k];
+                if (name == "hlFdnLow") return hlFdnLow[0];
+                if (name == "hlFdnPos") return hlFdnPos[0];
+                if (name == "hlRvM") return hlRvM[0];
+                if (name == "hlRvTap") return hlRvTap[0];
                 return 0;
             };
             for (const Seen &one : seen)
@@ -418,7 +446,7 @@ int main(int argc, char **argv)
     {
         const int readAt = symbol("hlOutRead"), writeAt = symbol("hlOutWrite");
         uint16_t ignored;
-        command(HL_DSP_CMD_ROOM, feedback, room2, ignored);
+        room(ignored);
         for (size_t i = 0; i < burst.size(); i++)
             t.DataWrite((uint16_t)(sendAt + i), (uint16_t)burst[i], true);
         command(HL_DSP_CMD_SEND_FED, 0, 0, ignored); // (once round: all of the ring is to echo)

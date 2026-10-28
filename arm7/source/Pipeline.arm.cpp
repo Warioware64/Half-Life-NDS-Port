@@ -165,6 +165,22 @@ namespace hlaudio
         for (std::uint32_t n = 0; n < blocks; ++n, ++block)
         {
             const int from = static_cast<int>((block * kBlock) & (kRing - 1));
+            // The DSi's DSP's rooms (Enhanced): what the console played, in
+            // one channel, a quarter of the rate (47605 Hz then: 11901), sent
+            // on for its reverb -- the speakers have it as it is, and the
+            // DSP's echo of it, mixed by the DSi.
+            if (effects == kAudioEffectsEnhanced)
+            {
+                std::uint32_t at = link.sendWrite;
+                for (int i = 0; i < kBlock; i += 4)
+                {
+                    const std::int32_t sum = capLeft[from + i] + capLeft[from + i + 1] + capLeft[from + i + 2] +
+                                             capLeft[from + i + 3] + capRight[from + i] + capRight[from + i + 1] +
+                                             capRight[from + i + 2] + capRight[from + i + 3];
+                    link.send[at++ & (AudioLink::kSendRing - 1)] = static_cast<std::int16_t>(sum >> 3);
+                }
+                link.sendWrite = at;
+            }
             // The room on what the console played...
             if (effects == kAudioEffectsClassic)
             {
@@ -203,6 +219,16 @@ namespace hlaudio
                 for (int i = 0; i < kBlock; ++i)
                     mixLeft[i] = mixRight[i] = (mixLeft[i] + mixRight[i]) >> 1;
             }
+            // (With the DSP's rooms the DSi gives the ordinary sound three
+            // quarters of the speakers, not all of them: made up here.)
+            if (effects == kAudioEffectsEnhanced)
+            {
+                for (int i = 0; i < kBlock; ++i)
+                {
+                    mixLeft[i] = (mixLeft[i] * 341) >> 8;
+                    mixRight[i] = (mixRight[i] * 341) >> 8;
+                }
+            }
             const int to = static_cast<int>((block * kBlock + kLead) & (kRing - 1));
             for (int i = 0; i < kBlock; ++i)
             {
@@ -229,7 +255,7 @@ namespace hlaudio
             room.init(rate.hz, rate.factor);
             room.setRoom(was);
         }
-        effects = newEffects == kAudioEffectsClassic ? kAudioEffectsClassic : kAudioEffectsOff;
+        effects = newEffects <= kAudioEffectsEnhanced ? newEffects : kAudioEffectsOff;
         output = newOutput < 3 ? newOutput : kAudioOutputSpeakers;
     }
 

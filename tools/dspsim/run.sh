@@ -13,7 +13,7 @@ LIB="$TEAKSIM/build/teakra/src/libteakra.a"
 cd "$ROOT"
 make -s -f Makefile.teak >/dev/null
 mkdir -p build/dspsim
-g++ -O2 -std=c++17 -I"$TEAKRA_DIR/include" -Ishared/dsp -Wno-unused-function \
+g++ -O2 -std=c++17 -I"$TEAKRA_DIR/include" -Ishared/dsp -Ishared -Wno-unused-function \
     -o build/dspsim/dspsim tools/dspsim/dspsim.cpp "$LIB"
 build/dspsim/dspsim build/teak.elf
 # (... and again with everything as loud as it goes.)

@@ -1344,7 +1344,7 @@ namespace hldata
 
     /// A place with a sound of its own: within `radius` units of `origin`,
     /// what is heard echoes as a room of the game's type `type` does
-    /// (HlSound.hpp, roomEcho).
+    /// (HlRoomPresets.hpp).
     struct RoomRecord
     {
         fx origin[3];

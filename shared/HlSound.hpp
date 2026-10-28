@@ -81,47 +81,6 @@ namespace hldata
     };
     static_assert(sizeof(StereoHeader) == 16);
 
-    /// What a room sounds like, as the DSP's echo is set: how much of it
-    /// comes round again (Q15), how much it is dulled on the way (0..255),
-    /// and how loud it is (0..255; 0 is no echo at all).
-    struct RoomEcho
-    {
-        std::uint16_t feedback;
-        std::uint8_t damp;
-        std::uint8_t level;
-    };
-
-    /// The echo of one of the game's 29 room types (an env_sound's
-    /// "roomtype"): they come in families of three sizes, and five kinds of
-    /// room are told apart here.
-    inline RoomEcho roomEcho(int type)
-    {
-        if (type <= 0 || type > 28)
-            return {0, 0, 0}; // "normal": none
-        if (type == 1)
-            return {22000, 70, 60}; // generic: a small room
-        const int size = (type - 2) % 3; // 0 small, 1 medium, 2 large
-        const int family = (type - 2) / 3;
-        switch (family)
-        {
-        case 0: // metal
-        case 1: // tunnel
-            return {static_cast<std::uint16_t>(27500 + size * 1000), 25,
-                    static_cast<std::uint8_t>(90 + size * 15)};
-        case 4: // water
-            return {26000, 200, 120};
-        case 6: // outside
-            return {20000, 120, 40};
-        case 7: // cavern
-        case 8: // weirdo
-            return {static_cast<std::uint16_t>(29000 + size * 800), 35,
-                    static_cast<std::uint8_t>(110 + size * 10)};
-        default: // chamber, bright, concrete
-            return {static_cast<std::uint16_t>(25000 + size * 1200), 45,
-                    static_cast<std::uint8_t>(75 + size * 10)};
-        }
-    }
-
     /// The file a track of the game's music is in, under music/.
     /// `stereo`: the DSi's (.hsd) rather than the DS's (.hsm).
     inline void musicFileName(int track, char *out, std::size_t size, bool stereo = false)
