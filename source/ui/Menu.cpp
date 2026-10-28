@@ -9,6 +9,8 @@
 #include "audio/DspAudio.hpp"
 #include "game/Input.hpp"
 #include "audio/Sound.hpp"
+#include "data/LevelFile.hpp"
+#include "game/SaveGame.hpp"
 #include "net/NetGame.hpp"
 #include "render/BottomScreen.hpp"
 #include "ui/TouchCanvas.hpp"
@@ -88,6 +90,10 @@ namespace hlrt
             kSkillMedium,
             kSkillHard,
             kAchievementsOpen,
+            kPopups,       ///< the achievements' pop-ups (a setting)
+            kGameHalfLife, ///< NEW GAME's: the game itself
+            kGameTraining, ///< ... the Hazard Course
+            kGameUplink,   ///< ... Half-Life: Uplink
         };
         struct Row
         {
@@ -127,57 +133,13 @@ namespace hlrt
                                   {Kind::Button, kSkillMedium, "MEDIUM"},
                                   {Kind::Button, kSkillHard, "DIFFICULT"},
                                   {Kind::Button, kBack, "BACK"}};
-        // The list of saves: its lines are made when it is shown (they say
-        // what is in each), then BACK.
-        Row listRows[kSlotsListed + 1];
-        char listText[kSlotsListed][72];
-        bool listDead[kSlotsListed];
-        char question[40];
-        const Row kOptionRows[] = {{Kind::Button, kGraphics, "GRAPHICS"}, {Kind::Value, kDsp, "DSi sound"},
-                                   {Kind::Slider, kMusic, "Music"},     {Kind::Slider, kEffects, "Effects"},
-                                   {Kind::Slider, kVoices, "Voices"},   {Kind::Slider, kAmbience, "Ambience"},
-                                   {Kind::Button, kControls, "CONTROLS"}, {Kind::Value, kBob, "View bob"},
-                                   {Kind::Value, kReadout, "Debug readout"},
-                                   {Kind::Button, kBack, "BACK"}};
-
-        // How the picture is drawn:
-        // the fog, and how much detail is given up for speed (shared/HlFog.hpp).
-        const Row kGraphicsRows[] = {{Kind::Value, kFog, "Fog"},
-                                     {Kind::Slider, kFogStrength, "Fog strength"},
-                                     {Kind::Slider, kFogDistance, "Fog distance"},
-                                     {Kind::Value, kFogColour, "Fog colour"},
-                                     {Kind::Value, kModelDetail, "Model detail"},
-                                     {Kind::Value, kWorldDetail, "World detail"},
-                                     {Kind::Value, kModelLimit, "Models at once"},
-                                     {Kind::Value, kDrawDistance, "Draw distance"},
-                                     {Kind::Button, kBack, "BACK"}};
-
-        // The buttons: which layout, which hand, and which of the pad and
-        // the stylus turns and which moves (shared/HlControls.hpp). Under
-        // the rows, what each button then does.
-        const Row kControlRows[] = {{Kind::Value, kScheme, "Layout"},
-                                    {Kind::Value, kHand, "Stylus hand"},
-                                    {Kind::Value, kDuck, "Crouch"},
-                                    {Kind::Value, kPadSide, "Pad left/right"},
-                                    {Kind::Value, kPadUp, "Pad up/down"},
-                                    {Kind::Value, kAutoaim, "Autoaim"},
-                                    {Kind::Button, kButtons, "BUTTONS"},
-                                    {Kind::Button, kTouchAim, "TOUCH AIM"},
+        // Which game: the game itself, its Hazard Course, or Uplink (each
+        // only if it is on the card).
+        const Row kNewGameRows[] = {{Kind::Button, kGameHalfLife, "HALF-LIFE"},
+                                    {Kind::Button, kGameTraining, "HAZARD COURSE"},
+                                    {Kind::Button, kGameUplink, "UPLINK"},
                                     {Kind::Button, kBack, "BACK"}};
-        // How the stylus turns the view, and how hard it must be pressed
-        // (where the console can tell).
-        const Row kTouchRows[] = {{Kind::Slider, kAimSpeed, "Aim speed"},
-                                  {Kind::Slider, kPitchSpeed, "Up/down"},
-                                  {Kind::Value, kInvert, "Invert up/down"},
-                                  {Kind::Slider, kFirmness, "Firmness"},
-                                  {Kind::Value, kFirmPress, "Firm press"},
-                                  {Kind::Button, kBack, "BACK"}};
-        // Which button does what: an action a row, on two screens; a row
-        // touched asks for its button.
-        constexpr int kKeysFirst = 7; ///< actions on the first screen
-        Row keyRows[kActionCount + 3];
-        int keyActions[kActionCount + 3];
-        int keyRowCount = 0;
+        char question[40];
         const char *const kFirmName[kFirmActions] = {"off", "fire", "use", "jump", "alt fire"};
 
         // Where the rows are: the first page's are big and few, the
@@ -188,7 +150,6 @@ namespace hlrt
         };
         constexpr Layout kMainLayout = {28, 32, 200, 18, 20};
         constexpr Layout kOptionLayout = {8, 2, 240, 17, 19};
-        constexpr int kTrackLeft = 100, kTrackWidth = 132;
 
         /// What a slider slides, and between what (0..10, but the aim's
         /// speeds: 1..20).
@@ -212,84 +173,23 @@ namespace hlrt
         bool isVolume(Id id) { return id == kMusic || id == kEffects || id == kVoices || id == kAmbience; }
         const Row *rowsOf(int page, int &count)
         {
-            if (page == 15)
+            // (A sheet -- the settings, the saves, the achievements -- has
+            // no rows of these: Menu::drawSheet.)
+            count = 0;
+            switch (page)
             {
-                // (The achievements' page has no rows: Menu::drawAchievements.)
-                count = 0;
-                return kMain;
+            case 0: count = static_cast<int>(sizeof(kMain) / sizeof(kMain[0])); return kMain;
+            case 3: count = static_cast<int>(sizeof(kTitleRows) / sizeof(kTitleRows[0])); return kTitleRows;
+            case 5: count = 2; return kConfirmRows;
+            case 7: count = static_cast<int>(sizeof(kMultiRows) / sizeof(kMultiRows[0])); return kMultiRows;
+            case 8: count = static_cast<int>(sizeof(kHostRows) / sizeof(kHostRows[0])); return kHostRows;
+            case 9: count = foundCount + 1; return foundRows;
+            case 10: count = static_cast<int>(sizeof(kLobbyRows) / sizeof(kLobbyRows[0])); return kLobbyRows;
+            case 11: count = static_cast<int>(sizeof(kNetPauseRows) / sizeof(kNetPauseRows[0])); return kNetPauseRows;
+            case 14: count = static_cast<int>(sizeof(kSkillRows) / sizeof(kSkillRows[0])); return kSkillRows;
+            case 16: count = static_cast<int>(sizeof(kNewGameRows) / sizeof(kNewGameRows[0])); return kNewGameRows;
+            default: return kMain;
             }
-            if (page == 14)
-            {
-                count = static_cast<int>(sizeof(kSkillRows) / sizeof(kSkillRows[0]));
-                return kSkillRows;
-            }
-            if (page == 12)
-            {
-                count = static_cast<int>(sizeof(kTouchRows) / sizeof(kTouchRows[0]));
-                return kTouchRows;
-            }
-            if (page == 13)
-            {
-                count = keyRowCount;
-                return keyRows;
-            }
-            if (page == 0)
-            {
-                count = static_cast<int>(sizeof(kMain) / sizeof(kMain[0]));
-                return kMain;
-            }
-            if (page == 3)
-            {
-                count = static_cast<int>(sizeof(kTitleRows) / sizeof(kTitleRows[0]));
-                return kTitleRows;
-            }
-            if (page == 4)
-            {
-                count = kSlotsListed + 1;
-                return listRows;
-            }
-            if (page == 5)
-            {
-                count = 2;
-                return kConfirmRows;
-            }
-            if (page == 6)
-            {
-                count = static_cast<int>(sizeof(kControlRows) / sizeof(kControlRows[0]));
-                return kControlRows;
-            }
-            if (page == 7)
-            {
-                count = static_cast<int>(sizeof(kMultiRows) / sizeof(kMultiRows[0]));
-                return kMultiRows;
-            }
-            if (page == 8)
-            {
-                count = static_cast<int>(sizeof(kHostRows) / sizeof(kHostRows[0]));
-                return kHostRows;
-            }
-            if (page == 9)
-            {
-                count = foundCount + 1;
-                return foundRows;
-            }
-            if (page == 10)
-            {
-                count = static_cast<int>(sizeof(kLobbyRows) / sizeof(kLobbyRows[0]));
-                return kLobbyRows;
-            }
-            if (page == 11)
-            {
-                count = static_cast<int>(sizeof(kNetPauseRows) / sizeof(kNetPauseRows[0]));
-                return kNetPauseRows;
-            }
-            if (page == 1)
-            {
-                count = static_cast<int>(sizeof(kOptionRows) / sizeof(kOptionRows[0]));
-                return kOptionRows;
-            }
-            count = static_cast<int>(sizeof(kGraphicsRows) / sizeof(kGraphicsRows[0]));
-            return kGraphicsRows;
         }
     } // namespace
 
@@ -308,47 +208,17 @@ namespace hlrt
         draw();
     }
 
-    /// The list, to load from or to save into: a line for each save, saying
-    /// what it is and what is in it.
-    void Menu::showSaves(bool saving)
+    /// Which game: the game, its Hazard Course, Uplink -- each one there
+    /// only if its first map is on the card.
+    void Menu::openNewGame()
     {
-        static const char *const kNames[kSlotsListed] = {"AUTO", "QUICK", "1", "2", "3", "4", "5", "6"};
-        saving_ = saving;
-        const FontView &font = touchCanvas.font(kFontSmall);
-        for (int i = 0; i < kSlotsListed; ++i)
+        static const char *const kFirst[3] = {nullptr, "t0a0", "hldemo1"};
+        for (int i = 1; i < 3; ++i)
         {
-            const SaveSlot none;
-            const SaveSlot &slot = saves_ != nullptr ? saves_->slots[i] : none;
-            // What it is, the chapter (as much of its title as there is
-            // room for), and when: the day and the time if the console's
-            // clock said, else how long had been played.
-            std::string line = std::string(kNames[i]) + "  " + saveLine(slot);
-            if (slot.status == kSaveGood)
-            {
-                const SaveHeading &h = slot.heading;
-                char when[24];
-                if (h.year != 0)
-                    std::snprintf(when, sizeof(when), "  %02u/%02u %02u:%02u", h.day, h.month, h.hour, h.minute);
-                else
-                    std::snprintf(when, sizeof(when), "  %u:%02u", static_cast<unsigned>(h.playSeconds / 3600),
-                                  static_cast<unsigned>(h.playSeconds / 60 % 60));
-                std::string what = h.chapter[0] != 0 ? h.chapter : h.map;
-                const std::string head = std::string(kNames[i]) + "  ";
-                while (what.size() > 3 && textWidth(font, (head + what + when).c_str()) > kOptionLayout.width - 8)
-                    what.pop_back();
-                line = head + what + when;
-            }
-            while (line.size() > 4 && textWidth(font, line.c_str()) > kOptionLayout.width - 8)
-                line.pop_back();
-            std::snprintf(listText[i], sizeof(listText[i]), "%s", line.c_str());
-            // To save into: one of the player's six. To load: one that is
-            // there and whole.
-            listDead[i] = saving ? i < kSlotManual : slot.status != kSaveGood;
-            listRows[i] = Row{Kind::Button, kSlot, listText[i]};
+            hldata::LevelHeader header{};
+            gameThere_[i] = Level::peekHeader(kFirst[i], header);
         }
-        listRows[kSlotsListed] = Row{Kind::Button, kBack, "BACK"};
-        asker_ = page_ == Page::Saves ? asker_ : page_;
-        page_ = Page::Saves;
+        page_ = Page::NewGame;
         draw();
     }
 
@@ -365,7 +235,7 @@ namespace hlrt
     bool Menu::big() const
     {
         return page_ == Page::Main || page_ == Page::Title || page_ == Page::Confirm || page_ == Page::Multiplayer ||
-               page_ == Page::NetPause || page_ == Page::Difficulty;
+               page_ == Page::NetPause || page_ == Page::Difficulty || page_ == Page::NewGame;
     }
 
     /// What of the lobby is on the screen: who is there, what they are
@@ -421,33 +291,6 @@ namespace hlrt
         draw();
     }
 
-    /// The buttons page: screen 0 the first actions, then MORE and BACK;
-    /// screen 1 the rest, RESET and BACK.
-    void Menu::showButtons(int screen)
-    {
-        buttonsScreen_ = screen;
-        capturing_ = -1;
-        keyRowCount = 0;
-        const int first = screen == 0 ? 0 : kKeysFirst, last = screen == 0 ? kKeysFirst : kActionCount;
-        for (int action = first; action < last; ++action)
-        {
-            keyActions[keyRowCount] = action;
-            keyRows[keyRowCount++] = Row{Kind::Value, kKey, actionName(action)};
-        }
-        keyActions[keyRowCount] = -1;
-        keyRows[keyRowCount++] = Row{Kind::Button, screen == 0 ? kMore : kResetKeys,
-                                     screen == 0 ? "MORE" : "RESET TO MODERN"};
-        if (screen == 1)
-        {
-            keyActions[keyRowCount] = -1;
-            keyRows[keyRowCount++] = Row{Kind::Button, kMore, "BACK TO FIRST"};
-        }
-        keyActions[keyRowCount] = -1;
-        keyRows[keyRowCount++] = Row{Kind::Button, kBack, "DONE"};
-        page_ = Page::Buttons;
-        draw();
-    }
-
     void Menu::open()
     {
         bottomScreen.release();
@@ -463,6 +306,11 @@ namespace hlrt
     {
         Canvas &canvas = touchCanvas.canvas();
         canvas.clear();
+        if (sheet())
+        {
+            drawSheet();
+            return;
+        }
         if (big())
         {
             const FontView &title = touchCanvas.font(page_ == Page::Confirm ? kFontMedium : kFontTitle);
@@ -471,7 +319,8 @@ namespace hlrt
                                 ? "PAUSED"
                                 : (page_ == Page::Title       ? "HALF-LIFE"
                                    : page_ == Page::Multiplayer ? "MULTIPLAYER"
-                                   : page_ == Page::Difficulty  ? "NEW GAME"
+                                   : page_ == Page::Difficulty  ? "DIFFICULTY"
+                                   : page_ == Page::NewGame     ? "NEW GAME"
                                                                 : question),
                             inkFor(title, kUiOrange));
         }
@@ -491,43 +340,11 @@ namespace hlrt
             if (page_ != Page::NetJoin)
                 drawPlayers(top + small.height() + 5, false);
         }
-        if (page_ == Page::Achievements)
-            drawAchievements();
         if (page_ == Page::NetPause)
             drawPlayers(kMainLayout.top + rowCount() * kMainLayout.pitch + 6, true);
-        if (page_ == Page::Buttons)
-        {
-            const FontView &small = touchCanvas.font(kFontSmall);
-            const int top = kOptionLayout.top + rowCount() * kOptionLayout.pitch + 6;
-            drawTextCentred(canvas, small, 128, top,
-                            capturing_ >= 0 ? "Press its button (START: cancel)"
-                                            : "Touch an action, then press its button",
-                            inkFor(small, kUiGrey));
-        }
-        if (page_ == Page::TouchAim && !Input::pressureSeen())
-        {
-            const FontView &small = touchCanvas.font(kFontSmall);
-            const int top = kOptionLayout.top + rowCount() * kOptionLayout.pitch + 6;
-            drawTextCentred(canvas, small, 128, top, "This console does not say how hard",
-                            inkFor(small, kUiGrey));
-            drawTextCentred(canvas, small, 128, top + small.height() + 3, "the stylus presses: firmness is unused",
-                            inkFor(small, kUiGrey));
-        }
-        if (page_ == Page::Controls)
-        {
-            // What the buttons do, as they are now set.
-            const FontView &small = touchCanvas.font(kFontSmall);
-            const int top = kOptionLayout.top + rowCount() * kOptionLayout.pitch + 3;
-            const int pitch = small.height() + 1;
-            for (int line = 0; controlsLegend(settings.controls(), line) != nullptr &&
-                               top + line * pitch + small.height() <= 192;
-                 ++line)
-                drawTextCentred(canvas, small, 128, top + line * pitch, controlsLegend(settings.controls(), line),
-                                inkFor(small, kUiGrey));
-        }
     }
 
-    // ------------------------------------------------------- achievements
+    // -------------------------------------------------------------- sheets
 
     namespace
     {
@@ -565,62 +382,108 @@ namespace hlrt
             const int end = drawText(canvas, font, x, y, text, ink, fits);
             return drawText(canvas, font, end, y, "...", ink);
         }
+        /// `text` in the lines of a box from `line` to `last` (of `pitch`),
+        /// a word at a time; on the last, what does not fit is left off and
+        /// said to be.
+        void drawWrapped(Canvas &canvas, const FontView &font, int x, int y, int pitch, int line, int last,
+                         const char *text, const Ink &ink, int width)
+        {
+            for (; line <= last && *text != '\0'; ++line)
+            {
+                if (line == last)
+                {
+                    drawFitted(canvas, font, x, y + line * pitch, text, ink, width);
+                    return;
+                }
+                const int fits = wrapped(font, text, width);
+                drawText(canvas, font, x, y + line * pitch, text, ink, fits);
+                text = skipSpaces(text + fits);
+            }
+        }
 
         // Where things are: the chapter between its arrows along the top;
         // the list, a band of whole rows of tiles (so that what is drawn
         // in it, scrolled or slid, is cut at its edges for nothing); the
-        // box that reads out the row touched; POP-UPS and BACK at the
-        // bottom. Every one of them at least 20 high, for a finger.
-        constexpr int kAchHeadHeight = 22;
-        constexpr int kAchListTop = 24;
-        constexpr int kAchBarTop = 171;
-        constexpr int kAchBarHeight = 20;
-        constexpr int kAchListWidth = 246;
-        constexpr int kAchSlop = 6; ///< how far a touch may wander and still be a touch
-        constexpr int kAchSwipe = 48; ///< how far the list has to be slid to turn to another chapter
+        // box that reads out the row touched; the buttons at the bottom.
+        // Every one of them at least 20 high, for a finger.
+        constexpr int kSheetHeadHeight = 22;
+        constexpr int kSheetListTop = 24;
+        constexpr int kSheetBarTop = 171;
+        constexpr int kSheetBarHeight = 20;
+        constexpr int kSheetListWidth = 246;
+        constexpr int kSheetSlop = 6;   ///< how far a touch may wander and still be a touch
+        constexpr int kSheetSwipe = 48; ///< how far the list has to be slid to turn to another chapter
+        // A slider's track in its row, from the row's left.
+        constexpr int kSheetTrackLeft = 112, kSheetTrackWidth = 124;
         // What a touch can be on, besides a row (its number).
-        constexpr int kAchNothing = -1, kAchLeft = -2, kAchRight = -3, kAchPopups = -4, kAchBack = -5,
-                      kAchList = -6;
-        struct AchBox
+        constexpr int kSheetNothing = -1, kSheetLeft = -2, kSheetRight = -3, kSheetList = -6, kSheetYes = -20,
+                      kSheetNo = -21;
+        constexpr int kSheetBar = -10; ///< ... and the buttons along the bottom: kSheetBar - n
+        struct SheetBox
         {
             int x, y, w, h;
             bool has(int px, int py) const { return px >= x && px < x + w && py >= y && py < y + h; }
         };
-        constexpr AchBox kAchLeftBox = {2, 1, 30, 20}, kAchRightBox = {224, 1, 30, 20};
-        constexpr AchBox kAchPopupsBox = {4, kAchBarTop, 148, kAchBarHeight};
-        constexpr AchBox kAchBackBox = {156, kAchBarTop, 96, kAchBarHeight};
+        constexpr SheetBox kSheetLeftBox = {2, 1, 30, 20}, kSheetRightBox = {224, 1, 30, 20};
+        constexpr SheetBox kSheetYesBox = {148, kSheetBarTop, 50, kSheetBarHeight};
+        constexpr SheetBox kSheetNoBox = {202, kSheetBarTop, 50, kSheetBarHeight};
+        /// The `n`th of `count` buttons along the bottom.
+        SheetBox sheetBarBox(int n, int count)
+        {
+            if (count == 2)
+                return n == 0 ? SheetBox{4, kSheetBarTop, 148, kSheetBarHeight} : SheetBox{156, kSheetBarTop, 96, kSheetBarHeight};
+            return SheetBox{4 + n * 84, kSheetBarTop, 80, kSheetBarHeight};
+        }
+        // What YES does, once asked.
+        constexpr int kAskReset = 1, kAskOverwrite = 2, kAskLoad = 3, kAskDelete = 4;
 
         /// What depends on the letters' height.
-        struct AchGeometry
+        struct SheetGeometry
         {
             int line, row, listHeight, detailTop, detailHeight;
         };
-        AchGeometry achGeometry()
+        SheetGeometry sheetGeometry()
         {
-            AchGeometry g;
+            SheetGeometry g;
             g.line = touchCanvas.font(kFontSmall).height();
             g.row = g.line + 5 > 20 ? g.line + 5 : 20;
             g.detailHeight = 4 * g.line + 4;
-            g.detailTop = kAchBarTop - 2 - g.detailHeight;
-            g.listHeight = (g.detailTop - 2 - kAchListTop) / 8 * 8;
+            g.detailTop = kSheetBarTop - 2 - g.detailHeight;
+            g.listHeight = (g.detailTop - 2 - kSheetListTop) / 8 * 8;
             return g;
         }
+        /// The list's band of the touch screen, as a canvas of its own.
+        Canvas sheetBand(const SheetGeometry &g)
+        {
+            Canvas &screen = touchCanvas.canvas();
+            Canvas band = screen;
+            band.tiles = screen.tiles + (kSheetListTop / 8) * (screen.width / 8) * 8;
+            band.height = g.listHeight;
+            return band;
+        }
+
+        /// A button of a sheet, with its word in the middle of it (grey if
+        /// it does nothing now).
+        void drawSheetButton(const SheetBox &box, const char *label, bool down, bool dead = false)
+        {
+            Canvas &canvas = touchCanvas.canvas();
+            const FontView &medium = touchCanvas.font(kFontMedium), &small = touchCanvas.font(kFontSmall);
+            const FontView &font = textWidth(medium, label) <= box.w - 8 ? medium : small;
+            canvas.button(box.x, box.y, box.w, box.h, down && !dead);
+            drawTextCentred(canvas, font, box.x + box.w / 2, box.y + (box.h - font.height()) / 2, label,
+                            inkFor(font, dead ? kUiGrey : (down ? kUiWhite : kUiOrange)));
+        }
+
+        // --- The achievements.
+
         int achCount(int chapter)
         {
             return hldata::kAchChapterStart[chapter + 1] - hldata::kAchChapterStart[chapter];
         }
         int achOf(int chapter, int n)
         {
-            return hldata::kAchByChapter[hldata::kAchChapterStart[chapter] + n];
-        }
-        int achWrap(int chapter)
-        {
-            return (chapter % hldata::kAchChapterCount + hldata::kAchChapterCount) % hldata::kAchChapterCount;
-        }
-        int achMostScroll(int chapter, const AchGeometry &g)
-        {
-            const int over = achCount(chapter) * g.row - g.listHeight;
-            return over > 0 ? over : 0;
+            const int id = hldata::kAchByChapter[hldata::kAchChapterStart[chapter] + n];
+            return id < hldata::kAchievementCount ? id : 0;
         }
         /// A hidden one says nothing of itself until it is earned.
         const char *achTitle(const hldata::AchievementTracker &tracker, int id)
@@ -641,7 +504,7 @@ namespace hlrt
         /// How wide a row's title may be, beside that.
         int achTitleRoom(const FontView &font, const char *status)
         {
-            return kAchListWidth - 28 - textWidth(font, status);
+            return kSheetListWidth - 28 - textWidth(font, status);
         }
         const char *achText(const hldata::AchievementTracker &tracker, int id)
         {
@@ -668,232 +531,847 @@ namespace hlrt
             }
         }
 
-        /// A button of the page, with its word in the middle of it.
-        void drawAchButton(const AchBox &box, const char *label, bool down)
+        // --- The settings: a category a page, each a list of rows.
+
+        constexpr int kSettingsChapters = 6;
+        const char *const kSettingsChapterNames[kSettingsChapters] = {"SOUND",     "GRAPHICS", "CONTROLS",
+                                                                      "TOUCH AIM", "BUTTONS",  "OTHER"};
+        const Row kSoundRows[] = {{Kind::Value, kDsp, "DSi sound"},    {Kind::Slider, kMusic, "Music"},
+                                  {Kind::Slider, kEffects, "Effects"}, {Kind::Slider, kVoices, "Voices"},
+                                  {Kind::Slider, kAmbience, "Ambience"}};
+        const Row kGraphicsRows[] = {{Kind::Value, kFog, "Fog"},
+                                     {Kind::Slider, kFogStrength, "Fog strength"},
+                                     {Kind::Slider, kFogDistance, "Fog distance"},
+                                     {Kind::Value, kFogColour, "Fog colour"},
+                                     {Kind::Value, kModelDetail, "Model detail"},
+                                     {Kind::Value, kWorldDetail, "World detail"},
+                                     {Kind::Value, kModelLimit, "Models at once"},
+                                     {Kind::Value, kDrawDistance, "Draw distance"}};
+        const Row kControlRows[] = {{Kind::Value, kScheme, "Layout"},          {Kind::Value, kHand, "Stylus hand"},
+                                    {Kind::Value, kDuck, "Crouch"},            {Kind::Value, kPadSide, "Pad left/right"},
+                                    {Kind::Value, kPadUp, "Pad up/down"},      {Kind::Value, kAutoaim, "Autoaim"}};
+        const Row kTouchRows[] = {{Kind::Slider, kAimSpeed, "Aim speed"},
+                                  {Kind::Slider, kPitchSpeed, "Up/down speed"},
+                                  {Kind::Value, kInvert, "Invert up/down"},
+                                  {Kind::Slider, kFirmness, "Firmness"},
+                                  {Kind::Value, kFirmPress, "Firm press"}};
+        const Row kOtherRows[] = {{Kind::Value, kBob, "View bob"},
+                                  {Kind::Value, kReadout, "Debug readout"},
+                                  {Kind::Value, kPopups, "Achievement pop-ups"}};
+        /// Category `chapter`'s rows (BUTTONS: one an action, made here).
+        const Row *settingsRows(int chapter, int &count)
         {
-            Canvas &canvas = touchCanvas.canvas();
-            const FontView &medium = touchCanvas.font(kFontMedium), &small = touchCanvas.font(kFontSmall);
-            const FontView &font = textWidth(medium, label) <= box.w - 8 ? medium : small;
-            canvas.button(box.x, box.y, box.w, box.h, down);
-            drawTextCentred(canvas, font, box.x + box.w / 2, box.y + (box.h - font.height()) / 2, label,
-                            inkFor(font, down ? kUiWhite : kUiOrange));
+            static Row keyRows[kActionCount];
+            switch (chapter)
+            {
+            case 0: count = static_cast<int>(sizeof(kSoundRows) / sizeof(kSoundRows[0])); return kSoundRows;
+            case 1: count = static_cast<int>(sizeof(kGraphicsRows) / sizeof(kGraphicsRows[0])); return kGraphicsRows;
+            case 2: count = static_cast<int>(sizeof(kControlRows) / sizeof(kControlRows[0])); return kControlRows;
+            case 3: count = static_cast<int>(sizeof(kTouchRows) / sizeof(kTouchRows[0])); return kTouchRows;
+            case 4:
+                for (int a = 0; a < kActionCount; ++a)
+                    keyRows[a] = Row{Kind::Value, kKey, actionName(a)};
+                count = kActionCount;
+                return keyRows;
+            default: count = static_cast<int>(sizeof(kOtherRows) / sizeof(kOtherRows[0])); return kOtherRows;
+            }
+        }
+        /// What a setting is now, as its row says it.
+        void settingValue(Id id, int action, char *out, std::size_t size)
+        {
+            switch (id)
+            {
+            case kDsp: std::snprintf(out, size, "%s", !DspAudio::available() ? "not on a DS" : (sound.extended() ? "on" : "off")); break;
+            case kReadout: std::snprintf(out, size, "%s", settings.debugReadout ? "on" : "off"); break;
+            case kBob: std::snprintf(out, size, "%s", settings.viewBob ? "on" : "off"); break;
+            case kAutoaim: std::snprintf(out, size, "%s", settings.autoaim ? "on" : "off"); break;
+            case kPopups: std::snprintf(out, size, "%s", settings.achievementPopups ? "on" : "off"); break;
+            case kFog: std::snprintf(out, size, "%s", kFogTypeName[settings.graphics.fog]); break;
+            case kFogColour: std::snprintf(out, size, "%s", kFogColourName[settings.graphics.fogColour]); break;
+            case kModelDetail: std::snprintf(out, size, "%s", kDetailName[settings.graphics.modelDetail]); break;
+            case kWorldDetail: std::snprintf(out, size, "%s", kDetailName[settings.graphics.worldDetail]); break;
+            case kModelLimit:
+                if (settings.graphics.modelLimit == 0)
+                    std::snprintf(out, size, "auto");
+                else
+                    std::snprintf(out, size, "%d", settings.graphics.modelLimit);
+                break;
+            case kDrawDistance: std::snprintf(out, size, "%s", kDrawDistanceName[settings.graphics.drawDistance]); break;
+            // (Which side of the touch screen its column of buttons is, and
+            // which hand has the pad and the trigger.)
+            case kHand: std::snprintf(out, size, "%s", settings.leftHanded ? "left" : "right"); break;
+            case kScheme:
+                std::snprintf(out, size, "%s",
+                              settings.controlScheme == kControlsModern
+                                  ? "modern"
+                                  : (settings.controlScheme == kControlsCustom ? "custom" : "classic"));
+                break;
+            case kDuck: std::snprintf(out, size, "%s", settings.duckToggle ? "toggle" : "hold"); break;
+            case kInvert: std::snprintf(out, size, "%s", settings.invertPitch ? "on" : "off"); break;
+            case kFirmPress:
+                std::snprintf(out, size, "%s", Input::pressureSeen() ? kFirmName[settings.firmPress % kFirmActions] : "n/a here");
+                break;
+            case kPadSide: std::snprintf(out, size, "%s", settings.padTurns ? "turn" : "sidestep"); break;
+            case kPadUp: std::snprintf(out, size, "%s", settings.padLooks ? "look" : "move"); break;
+            case kKey:
+            {
+                // Its buttons (or the question, while asked).
+                std::uint16_t keys[kActionCount];
+                keysOf(settings.controls(), keys);
+                int n = 0;
+                out[0] = '\0';
+                for (int bit = 0; bit < 12 && n < static_cast<int>(size) - 1; ++bit)
+                {
+                    if (keys[action] & (1u << bit))
+                        n += std::snprintf(out + n, size - static_cast<std::size_t>(n), "%s%s", n > 0 ? "/" : "",
+                                           buttonName(1u << bit));
+                }
+                if (n == 0)
+                    std::snprintf(out, size, "-");
+                break;
+            }
+            default: out[0] = '\0'; break;
+            }
+        }
+        /// What a setting does, for the box under the list.
+        const char *settingHelp(Id id)
+        {
+            switch (id)
+            {
+            case kDsp: return "On a DSi: the music in stereo, and the echo of the rooms, from the DSi's sound processor.";
+            case kMusic: return "How loud the music is.";
+            case kEffects: return "How loud the guns, the blows and the world are.";
+            case kVoices: return "How loud the people and the monsters speak.";
+            case kAmbience: return "How loud the hum and drip of a place is.";
+            case kFog: return "Fog, where the view ends: off, only where the map is too big to draw whole, or always.";
+            case kFogStrength: return "How thick the fog is.";
+            case kFogDistance: return "How near the fog begins.";
+            case kFogColour: return "The colour the far distance fades into.";
+            case kModelDetail: return "How much of the people and monsters is drawn. Lower is faster.";
+            case kWorldDetail: return "How much of the walls is drawn far off. Lower is faster.";
+            case kModelLimit: return "How many people and monsters are drawn at once: auto, or a number.";
+            case kDrawDistance: return "How far the world is drawn. Nearer is faster.";
+            case kScheme: return "Which button does what: classic, modern, or your own (BUTTONS).";
+            case kHand: return "Which hand holds the stylus: the touch screen's buttons go to the other side.";
+            case kDuck: return "Crouch held down, or pressed once to crouch and again to stand.";
+            case kPadSide: return "What the pad's left and right do: step aside, or turn.";
+            case kPadUp: return "What the pad's up and down do: walk, or look up and down.";
+            case kAutoaim: return "The aim bends towards a monster near it, on EASY and MEDIUM, as the game's does.";
+            case kAimSpeed: return "How far the view turns across for a stroke of the stylus.";
+            case kPitchSpeed: return "How far the view turns up and down for a stroke of the stylus.";
+            case kInvert: return "The stylus moved down looks up.";
+            case kFirmness: return "How light a touch of the stylus is ignored.";
+            case kFirmPress: return "What pressing the stylus hard does, where the console can tell.";
+            case kBob: return "The view bobs with a walk and leans into a step aside, as the game's does.";
+            case kReadout: return "Numbers along the top of the touch screen: how fast, where, how much.";
+            case kPopups: return "An achievement earned is shown on the top screen as it is. Off, it is still earned.";
+            case kKey: return "Touch an action, then press its button. START: leave it as it was.";
+            default: return "";
+            }
+        }
+        /// A setting changed by a step (a value to its next or last, a
+        /// slider a notch). True if it changed.
+        bool settingStep(Id id, int step)
+        {
+            auto cycle = [&](std::uint8_t &value, int count)
+            {
+                value = static_cast<std::uint8_t>((value + count + step) % count);
+            };
+            switch (id)
+            {
+            case kDsp:
+                if (!DspAudio::available())
+                    return false;
+                // At once: the music goes on from where it was, by the other
+                // way of playing it.
+                settings.dspAudio = sound.setDsp(!sound.extended());
+                return true;
+            case kReadout: settings.debugReadout = !settings.debugReadout; return true;
+            case kBob: settings.viewBob = !settings.viewBob; return true;
+            case kAutoaim: settings.autoaim = !settings.autoaim; return true;
+            case kPopups: settings.achievementPopups = !settings.achievementPopups; return true;
+            case kFog: cycle(settings.graphics.fog, kFogTypes); return true;
+            case kFogColour: cycle(settings.graphics.fogColour, kFogColours); return true;
+            case kModelDetail: cycle(settings.graphics.modelDetail, kDetailLevels); return true;
+            case kWorldDetail: cycle(settings.graphics.worldDetail, kDetailLevels); return true;
+            case kDrawDistance: cycle(settings.graphics.drawDistance, kDrawDistances); return true;
+            case kModelLimit:
+            {
+                // auto, 4, 6, 8, 10, 12, and round again.
+                static const std::uint8_t kLimits[] = {0, 4, 6, 8, 10, 12};
+                int at = 0;
+                for (int i = 0; i < 6; ++i)
+                    at = kLimits[i] == settings.graphics.modelLimit ? i : at;
+                settings.graphics.modelLimit = kLimits[(at + 6 + step) % 6];
+                return true;
+            }
+            case kHand: settings.leftHanded = !settings.leftHanded; return true;
+            case kScheme:
+            {
+                // (Into CUSTOM with nothing made yet: it starts as the layout
+                // it came from.)
+                const std::uint8_t next = static_cast<std::uint8_t>((settings.controlScheme + kControlsSchemes + step) % kControlsSchemes);
+                bool none = true;
+                for (std::uint16_t key : settings.keys)
+                    none = none && key == 0;
+                if (next == kControlsCustom && none)
+                    settings.makeCustom();
+                settings.controlScheme = next;
+                return true;
+            }
+            case kPadSide: settings.padTurns = !settings.padTurns; return true;
+            case kPadUp: settings.padLooks = !settings.padLooks; return true;
+            case kDuck: settings.duckToggle = !settings.duckToggle; return true;
+            case kInvert: settings.invertPitch = !settings.invertPitch; return true;
+            case kFirmPress:
+                if (!Input::pressureSeen())
+                    return false;
+                cycle(settings.firmPress, kFirmActions);
+                return true;
+            case kMusic:
+            case kEffects:
+            case kVoices:
+            case kAmbience:
+            case kFogStrength:
+            case kFogDistance:
+            case kAimSpeed:
+            case kPitchSpeed:
+            case kFirmness:
+            {
+                std::uint8_t &value = slid(id);
+                const int level = value + step;
+                if (level < slidLeast(id) || level > slidMost(id))
+                    return false;
+                value = static_cast<std::uint8_t>(level);
+                if (isVolume(id))
+                    sound.applyVolumes();
+                return true;
+            }
+            default:
+                return false;
+            }
+        }
+
+        // --- The saves.
+
+        /// What a save is called in the list.
+        void saveName(int slot, char *out, std::size_t size)
+        {
+            if (slot == kSlotAuto)
+                std::snprintf(out, size, "AUTO");
+            else if (slot == kSlotQuick)
+                std::snprintf(out, size, "QUICK");
+            else
+                std::snprintf(out, size, "SAVE %u", static_cast<unsigned>(slot - kSlotManual + 1) % 100u);
+        }
+        /// When it was made: the day and the time if the console's clock
+        /// said, else how long had been played.
+        void saveWhen(const SaveHeading &h, char *out, std::size_t size)
+        {
+            if (h.year != 0)
+                std::snprintf(out, size, "%02u/%02u %02u:%02u", h.day, h.month, h.hour, h.minute);
+            else
+                std::snprintf(out, size, "%u:%02u", static_cast<unsigned>(h.playSeconds / 3600),
+                              static_cast<unsigned>(h.playSeconds / 60 % 60));
         }
     } // namespace
 
-    void Menu::openAchievements()
+    void Menu::openSheet(Page page)
     {
-        page_ = Page::Achievements;
-        achScroll_ = 0;
-        achSelected_ = -1;
-        achSlide_ = achSlideTo_ = 0;
-        achPressed_ = kAchNothing;
-        achDrag_ = 0;
+        page_ = page;
+        sheetScroll_ = 0;
+        sheetSelected_ = -1;
+        sheetSlide_ = sheetSlideTo_ = 0;
+        sheetPressed_ = kSheetNothing;
+        sheetDrag_ = 0;
+        sheetAsking_ = 0;
+        capturing_ = -1;
+        if (page == Page::Saves)
+            listSaves();
         // (The touch that opened it is not one here, nor a button still held.)
-        achHeld_ = keysHeld();
-        achTouching_ = (achHeld_ & KEY_TOUCH) != 0;
+        sheetHeld_ = keysHeld();
+        sheetTouching_ = (sheetHeld_ & KEY_TOUCH) != 0;
         draw();
     }
 
-    void Menu::drawAchievements()
+    /// The saves the sheet lists: to load from, all but the arrival; to
+    /// save into, the player's own (after NEW SAVE). The most recent first.
+    void Menu::listSaves()
     {
-        drawAchHeader();
-        drawAchList();
-        drawAchDetail();
-        drawAchBar();
+        savesListed_.clear();
+        if (saves_ != nullptr)
+            saveListed(*saves_, !saving_, savesListed_);
     }
 
-    /// The chapter, how many of its achievements are earned, and the arrows
-    /// either side.
-    void Menu::drawAchHeader()
+    int &Menu::sheetChapter()
+    {
+        static int none = 0;
+        none = 0;
+        return page_ == Page::Achievements ? achChapter_ : (page_ == Page::Settings ? settingsChapter_ : none);
+    }
+
+    int Menu::sheetChapters() const
+    {
+        return page_ == Page::Achievements ? hldata::kAchChapterCount : (page_ == Page::Settings ? kSettingsChapters : 1);
+    }
+
+    int Menu::sheetCount(int chapter) const
+    {
+        if (page_ == Page::Achievements)
+            return achCount(chapter);
+        if (page_ == Page::Settings)
+        {
+            int count = 0;
+            settingsRows(chapter, count);
+            return count;
+        }
+        return static_cast<int>(savesListed_.size()) + (saving_ ? 1 : 0);
+    }
+
+    void Menu::drawSheet()
+    {
+        drawSheetHeader();
+        drawSheetList();
+        drawSheetDetail();
+        drawSheetBar();
+    }
+
+    /// The chapter between its arrows (a sheet of one: its name alone).
+    void Menu::drawSheetHeader()
     {
         Canvas &canvas = touchCanvas.canvas();
         const FontView &small = touchCanvas.font(kFontSmall);
-        const hldata::AchievementTracker &tracker = achievements.tracker;
-        canvas.fill(0, 0, 256, kAchListTop, kUiBack);
-        drawAchButton(kAchLeftBox, "<", achPressed_ == kAchLeft);
-        drawAchButton(kAchRightBox, ">", achPressed_ == kAchRight);
-        // The chapter's name between the arrows, as much of it as there is
-        // room for (how many are earned in it is in the box below).
-        (void)tracker;
-        const char *name = hldata::kAchChapterNames[achChapter_];
-        const int left = kAchLeftBox.x + kAchLeftBox.w + 4, room = kAchRightBox.x - 4 - left;
+        canvas.fill(0, 0, 256, kSheetListTop, kUiBack);
+        const bool arrows = sheetChapters() > 1;
+        if (arrows)
+        {
+            drawSheetButton(kSheetLeftBox, "<", sheetPressed_ == kSheetLeft);
+            drawSheetButton(kSheetRightBox, ">", sheetPressed_ == kSheetRight);
+        }
+        const int chapter = sheetChapter();
+        const char *name = page_ == Page::Achievements ? hldata::kAchChapterNames[chapter]
+                           : page_ == Page::Settings   ? kSettingsChapterNames[chapter]
+                           : saving_                   ? "SAVE GAME"
+                                                       : "LOAD GAME";
+        const int left = arrows ? kSheetLeftBox.x + kSheetLeftBox.w + 4 : 4;
+        const int room = (arrows ? kSheetRightBox.x - 4 : 252) - left;
         const int wide = textWidth(small, name);
         const int x = wide <= room ? left + (room - wide) / 2 : left;
-        drawFitted(canvas, small, x, (kAchHeadHeight - small.height()) / 2 + 1, name, inkFor(small, kUiOrange), room);
+        drawFitted(canvas, small, x, (kSheetHeadHeight - small.height()) / 2 + 1, name, inkFor(small, kUiOrange), room);
     }
 
     /// The list: the chapter's rows where the stylus has put them, and,
     /// while it is slid aside, the next or the last chapter's coming in.
-    void Menu::drawAchList()
+    void Menu::drawSheetList()
     {
-        const AchGeometry g = achGeometry();
-        Canvas &screen = touchCanvas.canvas();
-        Canvas band = screen;
-        band.tiles = screen.tiles + (kAchListTop / 8) * (screen.width / 8) * 8;
-        band.height = g.listHeight;
+        const SheetGeometry g = sheetGeometry();
+        Canvas band = sheetBand(g);
         band.fill(0, 0, 256, g.listHeight, kUiBack);
-        drawAchRows(achChapter_, achSlide_, achScroll_);
-        if (achSlide_ < 0)
-            drawAchRows(achWrap(achChapter_ + 1), achSlide_ + 256, 0);
-        else if (achSlide_ > 0)
-            drawAchRows(achWrap(achChapter_ - 1), achSlide_ - 256, 0);
+        const int chapter = sheetChapter(), chapters = sheetChapters();
+        drawSheetRows(chapter, sheetSlide_, sheetScroll_);
+        if (sheetSlide_ < 0)
+            drawSheetRows((chapter + 1) % chapters, sheetSlide_ + 256, 0);
+        else if (sheetSlide_ > 0)
+            drawSheetRows((chapter + chapters - 1) % chapters, sheetSlide_ - 256, 0);
         // How far down, when there is more than shows.
-        const int most = achMostScroll(achChapter_, g);
-        if (most > 0 && achSlide_ == 0)
+        const int whole = sheetCount(chapter) * g.row;
+        if (whole > g.listHeight && sheetSlide_ == 0)
         {
-            const int whole = achCount(achChapter_) * g.row;
+            const int most = whole - g.listHeight;
             const int tall = g.listHeight * g.listHeight / whole;
-            band.fill(251, achScroll_ * (g.listHeight - tall) / most, 3, tall, kUiGrey + 1);
+            band.fill(251, sheetScroll_ * (g.listHeight - tall) / most, 3, tall, kUiGrey + 1);
         }
     }
 
     /// `chapter`'s rows, `x` across and scrolled `scroll` down.
-    void Menu::drawAchRows(int chapter, int x, int scroll)
+    void Menu::drawSheetRows(int chapter, int x, int scroll)
     {
-        const AchGeometry g = achGeometry();
-        Canvas &screen = touchCanvas.canvas();
-        Canvas band = screen;
-        band.tiles = screen.tiles + (kAchListTop / 8) * (screen.width / 8) * 8;
-        band.height = g.listHeight;
+        const SheetGeometry g = sheetGeometry();
+        Canvas band = sheetBand(g);
         const FontView &small = touchCanvas.font(kFontSmall);
-        const hldata::AchievementTracker &tracker = achievements.tracker;
-        const bool current = chapter == achChapter_ && x == achSlide_;
-        for (int n = 0; n < achCount(chapter); ++n)
+        const bool current = chapter == sheetChapter() && x == sheetSlide_;
+        int settingCount = 0;
+        const Row *rows = page_ == Page::Settings ? settingsRows(chapter, settingCount) : nullptr;
+        for (int n = 0; n < sheetCount(chapter); ++n)
         {
             const int y = n * g.row - scroll;
             if (y + g.row <= 0 || y >= g.listHeight)
                 continue;
-            const int id = achOf(chapter, n);
-            const bool got = tracker.has(id);
-            const bool chosen = current && n == achSelected_;
-            band.button(x + 2, y + 1, kAchListWidth, g.row - 2, chosen || (current && n == achPressed_ && achDrag_ == 0));
+            const bool chosen = current && n == sheetSelected_;
+            const bool pressed = current && n == sheetPressed_ && sheetDrag_ == 0;
+            band.button(x + 2, y + 1, kSheetListWidth, g.row - 2, chosen || pressed);
             if (chosen)
-                band.frame(x + 2, y + 1, kAchListWidth, g.row - 2, kUiOrange + 2);
-            drawTrophy(band, x + 6, y + (g.row - 12) / 2, got);
-            char status[16];
-            achStatus(tracker, id, status, sizeof(status));
-            const int statusWide = textWidth(small, status);
+                band.frame(x + 2, y + 1, kSheetListWidth, g.row - 2, kUiOrange + 2);
             const int textY = y + (g.row - g.line) / 2;
-            const char *title = achTitle(tracker, id);
-            drawFitted(band, small, x + 22, textY, title, inkFor(small, got ? kUiWhite : kUiGrey),
-                       achTitleRoom(small, status));
-            drawText(band, small, x + kAchListWidth - 2 - statusWide, textY, status,
-                     inkFor(small, got ? kUiOrange : kUiWhite));
+            if (page_ == Page::Achievements)
+            {
+                const hldata::AchievementTracker &tracker = achievements.tracker;
+                const int id = achOf(chapter, n);
+                const bool got = tracker.has(id);
+                drawTrophy(band, x + 6, y + (g.row - 12) / 2, got);
+                char status[16];
+                achStatus(tracker, id, status, sizeof(status));
+                drawFitted(band, small, x + 22, textY, achTitle(tracker, id), inkFor(small, got ? kUiWhite : kUiGrey),
+                           achTitleRoom(small, status));
+                drawText(band, small, x + kSheetListWidth - 2 - textWidth(small, status), textY, status,
+                         inkFor(small, got ? kUiOrange : kUiWhite));
+            }
+            else if (page_ == Page::Settings)
+            {
+                const Row &item = rows[n];
+                const bool dead = (item.id == kDsp && !DspAudio::available()) ||
+                                  (item.id == kFirmPress && !Input::pressureSeen());
+                drawText(band, small, x + 8, textY, item.label, inkFor(small, dead ? kUiGrey : kUiWhite));
+                if (item.kind == Kind::Slider)
+                {
+                    // The track, how far along, and the knob.
+                    const int least = slidLeast(item.id), most = slidMost(item.id);
+                    const int left = x + kSheetTrackLeft, middle = y + g.row / 2;
+                    const int knob = left + kSheetTrackWidth * (slid(item.id) - least) / (most - least);
+                    band.fill(left, middle - 3, kSheetTrackWidth, 6, kUiTrack);
+                    band.frame(left - 1, middle - 4, kSheetTrackWidth + 2, 8, kUiEdge);
+                    band.fill(left, middle - 3, knob - left, 6, kUiOrange + (chosen ? 2 : 1));
+                    band.fill(knob - 3, y + 3, 7, g.row - 6, chosen ? kUiWhite + 2 : kUiWhite + 1);
+                    band.frame(knob - 3, y + 3, 7, g.row - 6, kUiShadow);
+                }
+                else
+                {
+                    char value[40];
+                    if (item.id == kKey && capturing_ == n)
+                        std::snprintf(value, sizeof(value), "press a button");
+                    else
+                        settingValue(item.id, n, value, sizeof(value));
+                    const int room = kSheetListWidth - 16 - textWidth(small, item.label);
+                    const int wide = textWidth(small, value) < room ? textWidth(small, value) : room;
+                    drawFitted(band, small, x + kSheetListWidth - 4 - wide, textY, value,
+                               inkFor(small, dead ? kUiGrey : kUiOrange), room);
+                }
+            }
+            else
+            {
+                // NEW SAVE; or a save, its name, its chapter and when.
+                const int k = n - (saving_ ? 1 : 0);
+                if (k < 0)
+                {
+                    const bool full = saves_ == nullptr || saveFreeManual(*saves_) < 0;
+                    drawText(band, small, x + 8, textY, "NEW SAVE", inkFor(small, full ? kUiGrey : kUiOrange));
+                    continue;
+                }
+                const int slot = savesListed_[k];
+                const SaveSlot &save = saves_->slots[slot];
+                const bool good = save.status == kSaveGood;
+                char name[16], when[24];
+                saveName(slot, name, sizeof(name));
+                if (good)
+                    saveWhen(save.heading, when, sizeof(when));
+                else
+                    std::snprintf(when, sizeof(when), "%s", save.status == kSaveBad ? "damaged" : "other version");
+                const int end = drawText(band, small, x + 8, textY, name, inkFor(small, good ? kUiOrange : kUiGrey));
+                const int whenWide = textWidth(small, when);
+                const char *chapter = save.heading.chapter[0] != 0 ? save.heading.chapter : save.heading.map;
+                if (good)
+                    drawFitted(band, small, end + 8, textY, chapter, inkFor(small, kUiWhite),
+                               x + kSheetListWidth - 10 - whenWide - (end + 8));
+                drawText(band, small, x + kSheetListWidth - 4 - whenWide, textY, when, inkFor(small, kUiGrey));
+            }
         }
     }
 
-    /// The box under the list: what the row touched asks for, in full; or,
-    /// with none touched, how many are earned and how to find the rest.
-    void Menu::drawAchDetail()
+    /// The box under the list: the row touched, read out in full; or, with
+    /// none, what the page is.
+    void Menu::drawSheetDetail()
     {
-        const AchGeometry g = achGeometry();
+        const SheetGeometry g = sheetGeometry();
         Canvas &canvas = touchCanvas.canvas();
         const FontView &small = touchCanvas.font(kFontSmall);
-        const hldata::AchievementTracker &tracker = achievements.tracker;
         canvas.fill(0, g.detailTop - 1, 256, g.detailHeight + 2, kUiBack);
         canvas.frame(2, g.detailTop, 252, g.detailHeight, kUiEdge);
-        constexpr int kLines = 4, kWidth = 244;
-        const char *rest = nullptr;
-        Ink ink = inkFor(small, kUiGrey);
-        int first = 1;
-        // The first line: the one touched, its whole title -- if its row had
-        // to cut it short; else what it asks has all four lines -- or, with
-        // none touched, how many are earned here and in all.
-        if (achSelected_ >= 0 && achSelected_ < achCount(achChapter_))
+        constexpr int kLast = 3, kWidth = 244;
+        const int x = 7, y = g.detailTop + 2;
+        const int chapter = sheetChapter();
+        const bool chosen = sheetSelected_ >= 0 && sheetSelected_ < sheetCount(chapter);
+        if (page_ == Page::Achievements)
         {
-            const int id = achOf(achChapter_, achSelected_);
-            const bool got = tracker.has(id);
-            const char *title = achTitle(tracker, id);
-            char status[16];
-            achStatus(tracker, id, status, sizeof(status));
-            if (textWidth(small, title) > achTitleRoom(small, status))
-                drawFitted(canvas, small, 7, g.detailTop + 2, title, inkFor(small, got ? kUiOrange : kUiWhite), kWidth);
-            else
-                first = 0;
-            rest = achText(tracker, id);
-            ink = inkFor(small, got ? kUiWhite : kUiGrey);
-        }
-        else
-        {
-            int here = 0;
-            for (int n = 0; n < achCount(achChapter_); ++n)
-                here += tracker.has(achOf(achChapter_, n)) ? 1 : 0;
-            char earned[48];
-            std::snprintf(earned, sizeof(earned), "This chapter: %d of %d - in all: %d of %d", here,
-                          achCount(achChapter_), tracker.earned(), static_cast<int>(hldata::kAchievementCount));
-            drawFitted(canvas, small, 7, g.detailTop + 2, earned, inkFor(small, kUiOrange), kWidth);
-            rest = "Touch one to read it. Slide the list, or touch < >, for another chapter.";
-        }
-        // Then the rest, a word at a time; on the last line, what does not
-        // fit is left off and said to be.
-        for (int line = first; line < kLines && *rest != '\0'; ++line)
-        {
-            const int y = g.detailTop + 2 + line * g.line;
-            if (line == kLines - 1)
+            const hldata::AchievementTracker &tracker = achievements.tracker;
+            if (chosen)
             {
-                drawFitted(canvas, small, 7, y, rest, ink, kWidth);
-                break;
+                // Its whole title -- if its row had to cut it short; else what
+                // it asks has all four lines.
+                const int id = achOf(chapter, sheetSelected_);
+                const bool got = tracker.has(id);
+                const char *title = achTitle(tracker, id);
+                char status[16];
+                achStatus(tracker, id, status, sizeof(status));
+                int first = 0;
+                if (textWidth(small, title) > achTitleRoom(small, status))
+                {
+                    drawFitted(canvas, small, x, y, title, inkFor(small, got ? kUiOrange : kUiWhite), kWidth);
+                    first = 1;
+                }
+                drawWrapped(canvas, small, x, y, g.line, first, kLast, achText(tracker, id),
+                            inkFor(small, got ? kUiWhite : kUiGrey), kWidth);
+                return;
             }
-            const int fits = wrapped(small, rest, kWidth);
-            drawText(canvas, small, 7, y, rest, ink, fits);
-            rest = skipSpaces(rest + fits);
+            int here = 0;
+            for (int n = 0; n < achCount(chapter); ++n)
+                here += tracker.has(achOf(chapter, n)) ? 1 : 0;
+            char earned[48];
+            std::snprintf(earned, sizeof(earned), "This chapter: %d of %d - in all: %d of %d", here, achCount(chapter),
+                          tracker.earned(), static_cast<int>(hldata::kAchievementCount));
+            drawFitted(canvas, small, x, y, earned, inkFor(small, kUiOrange), kWidth);
+            drawWrapped(canvas, small, x, y, g.line, 1, kLast,
+                        "Touch one to read it. Slide the list, or touch < >, for another chapter.",
+                        inkFor(small, kUiGrey), kWidth);
+            return;
         }
+        if (page_ == Page::Settings)
+        {
+            if (capturing_ >= 0)
+            {
+                drawWrapped(canvas, small, x, y, g.line, 0, kLast, "Press its button now. START: leave it as it was.",
+                            inkFor(small, kUiOrange), kWidth);
+                return;
+            }
+            if (!chosen)
+            {
+                drawWrapped(canvas, small, x, y, g.line, 0, kLast,
+                            "Touch a setting to change it, or to read what it does; drag a slider. Slide the list, or "
+                            "touch < >, for the other settings. RESET: this page's as they were at first.",
+                            inkFor(small, kUiGrey), kWidth);
+                return;
+            }
+            int count = 0;
+            const Row &item = settingsRows(chapter, count)[sheetSelected_];
+            const char *help = item.id == kFirmPress && !Input::pressureSeen()
+                                   ? "This console does not say how hard the stylus presses: not used here."
+                                   : settingHelp(item.id);
+            drawWrapped(canvas, small, x, y, g.line, 0, item.id == kScheme ? 1 : kLast, help, inkFor(small, kUiWhite), kWidth);
+            // (The layout: what the buttons then do, as much as there is room for.)
+            if (item.id == kScheme)
+            {
+                for (int line = 0; line + 2 <= kLast && controlsLegend(settings.controls(), line) != nullptr; ++line)
+                    drawFitted(canvas, small, x, y + (line + 2) * g.line, controlsLegend(settings.controls(), line),
+                               inkFor(small, kUiGrey), kWidth);
+            }
+            return;
+        }
+        // The saves.
+        if (!chosen)
+        {
+            drawWrapped(canvas, small, x, y, g.line, 0, kLast,
+                        saving_ ? "Touch NEW SAVE, or a save to put this game in its place."
+                                : (savesListed_.empty() ? "There are no saves yet." : "Touch a save, then LOAD."),
+                        inkFor(small, kUiGrey), kWidth);
+            return;
+        }
+        const int k = sheetSelected_ - (saving_ ? 1 : 0);
+        if (k < 0)
+        {
+            const bool full = saves_ == nullptr || saveFreeManual(*saves_) < 0;
+            drawWrapped(canvas, small, x, y, g.line, 0, kLast,
+                        full ? "99 saves: there is no room for another. Put it in the place of one, or delete one."
+                             : "A new save of the game as it is now, kept beside the others.",
+                        inkFor(small, full ? kUiOrange : kUiWhite), kWidth);
+            return;
+        }
+        const int slot = savesListed_[k];
+        const SaveSlot &save = saves_->slots[slot];
+        if (save.status != kSaveGood)
+        {
+            drawWrapped(canvas, small, x, y, g.line, 0, kLast, saveLine(save).c_str(), inkFor(small, kUiGrey), kWidth);
+            return;
+        }
+        const SaveHeading &h = save.heading;
+        char line[64], when[24];
+        drawFitted(canvas, small, x, y, h.chapter[0] != 0 ? h.chapter : h.map, inkFor(small, kUiOrange), kWidth);
+        std::snprintf(line, sizeof(line), "%s - health %d", h.map, static_cast<int>(h.health));
+        drawFitted(canvas, small, x, y + g.line, line, inkFor(small, kUiWhite), kWidth);
+        if (h.year != 0)
+        {
+            std::snprintf(when, sizeof(when), "%02u/%02u/%04u %02u:%02u", h.day, h.month, h.year, h.hour, h.minute);
+            drawFitted(canvas, small, x, y + 2 * g.line, when, inkFor(small, kUiGrey), kWidth);
+        }
+        std::snprintf(line, sizeof(line), "played %u:%02u", static_cast<unsigned>(h.playSeconds / 3600),
+                      static_cast<unsigned>(h.playSeconds / 60 % 60));
+        drawFitted(canvas, small, x, y + (h.year != 0 ? 3 : 2) * g.line, line, inkFor(small, kUiGrey), kWidth);
     }
 
-    void Menu::drawAchBar()
+    /// The buttons along the bottom; or, while something is asked, the
+    /// question and YES, NO.
+    void Menu::drawSheetBar()
     {
-        touchCanvas.canvas().fill(0, kAchBarTop, 256, 192 - kAchBarTop, kUiBack);
-        drawAchButton(kAchPopupsBox, settings.achievementPopups ? "POP-UPS: ON" : "POP-UPS: OFF",
-                      achPressed_ == kAchPopups);
-        drawAchButton(kAchBackBox, "BACK", achPressed_ == kAchBack);
+        Canvas &canvas = touchCanvas.canvas();
+        canvas.fill(0, kSheetBarTop, 256, 192 - kSheetBarTop, kUiBack);
+        if (sheetAsking_ != 0)
+        {
+            const FontView &small = touchCanvas.font(kFontSmall);
+            drawFitted(canvas, small, 6, kSheetBarTop + (kSheetBarHeight - small.height()) / 2, sheetQuestion_,
+                       inkFor(small, kUiOrange), kSheetYesBox.x - 10);
+            drawSheetButton(kSheetYesBox, "YES", sheetPressed_ == kSheetYes);
+            drawSheetButton(kSheetNoBox, "NO", sheetPressed_ == kSheetNo);
+            return;
+        }
+        if (page_ == Page::Achievements)
+        {
+            drawSheetButton(sheetBarBox(0, 2), settings.achievementPopups ? "POP-UPS: ON" : "POP-UPS: OFF",
+                            sheetPressed_ == kSheetBar);
+            drawSheetButton(sheetBarBox(1, 2), "BACK", sheetPressed_ == kSheetBar - 1);
+            return;
+        }
+        if (page_ == Page::Settings)
+        {
+            drawSheetButton(sheetBarBox(0, 2), "RESET", sheetPressed_ == kSheetBar);
+            drawSheetButton(sheetBarBox(1, 2), "BACK", sheetPressed_ == kSheetBar - 1);
+            return;
+        }
+        // The saves: SAVE or LOAD the one touched; DELETE it, if it is the
+        // player's; BACK.
+        const int k = sheetSelected_ - (saving_ ? 1 : 0);
+        const int slot = sheetSelected_ >= 0 && k >= 0 && k < static_cast<int>(savesListed_.size()) ? savesListed_[k] : -1;
+        const bool newSave = saving_ && sheetSelected_ == 0;
+        const bool can = newSave ? saves_ != nullptr && saveFreeManual(*saves_) >= 0
+                                 : slot >= 0 && (saving_ || saves_->slots[slot].status == kSaveGood);
+        drawSheetButton(sheetBarBox(0, 3), saving_ ? "SAVE" : "LOAD", sheetPressed_ == kSheetBar, !can);
+        drawSheetButton(sheetBarBox(1, 3), "DELETE", sheetPressed_ == kSheetBar - 1, slot < kSlotManual);
+        drawSheetButton(sheetBarBox(2, 3), "BACK", sheetPressed_ == kSheetBar - 2);
     }
 
-    int Menu::achHit(int x, int y) const
+    int Menu::sheetHit(int x, int y) const
     {
-        if (kAchLeftBox.has(x, y))
-            return kAchLeft;
-        if (kAchRightBox.has(x, y))
-            return kAchRight;
-        if (kAchPopupsBox.has(x, y))
-            return kAchPopups;
-        if (kAchBackBox.has(x, y))
-            return kAchBack;
-        const AchGeometry g = achGeometry();
-        if (y < kAchListTop || y >= kAchListTop + g.listHeight)
-            return kAchNothing;
-        const int n = (y - kAchListTop + achScroll_) / g.row;
-        return n < achCount(achChapter_) && x >= 2 && x < 2 + kAchListWidth ? n : kAchList;
+        if (sheetAsking_ != 0)
+            return kSheetYesBox.has(x, y) ? kSheetYes : (kSheetNoBox.has(x, y) ? kSheetNo : kSheetNothing);
+        if (sheetChapters() > 1)
+        {
+            if (kSheetLeftBox.has(x, y))
+                return kSheetLeft;
+            if (kSheetRightBox.has(x, y))
+                return kSheetRight;
+        }
+        const int buttons = page_ == Page::Saves ? 3 : 2;
+        for (int b = 0; b < buttons; ++b)
+        {
+            if (sheetBarBox(b, buttons).has(x, y))
+                return kSheetBar - b;
+        }
+        const SheetGeometry g = sheetGeometry();
+        if (y < kSheetListTop || y >= kSheetListTop + g.listHeight)
+            return kSheetNothing;
+        const int n = (y - kSheetListTop + sheetScroll_) / g.row;
+        int chapter = const_cast<Menu *>(this)->sheetChapter();
+        return n < sheetCount(chapter) && x >= 2 && x < 2 + kSheetListWidth ? n : kSheetList;
     }
 
     /// The next chapter (1) or the last (-1), slid in.
-    void Menu::achTurn(int step)
+    void Menu::sheetTurn(int step)
     {
+        if (sheetChapters() < 2)
+            return;
         sound.ui(kUiSoundPress);
-        achSlideTo_ = step > 0 ? -256 : 256;
+        sheetSlideTo_ = step > 0 ? -256 : 256;
     }
 
     /// Row `row` read out (-1: none), and kept in sight.
-    void Menu::achSelect(int row)
+    void Menu::sheetSelect(int row)
     {
-        const AchGeometry g = achGeometry();
-        achSelected_ = row;
+        const SheetGeometry g = sheetGeometry();
+        sheetSelected_ = row;
         if (row >= 0)
         {
-            if (row * g.row < achScroll_)
-                achScroll_ = row * g.row;
-            if ((row + 1) * g.row > achScroll_ + g.listHeight)
-                achScroll_ = (row + 1) * g.row - g.listHeight;
+            if (row * g.row < sheetScroll_)
+                sheetScroll_ = row * g.row;
+            if ((row + 1) * g.row > sheetScroll_ + g.listHeight)
+                sheetScroll_ = (row + 1) * g.row - g.listHeight;
         }
-        const int most = achMostScroll(achChapter_, g);
-        achScroll_ = achScroll_ < 0 ? 0 : (achScroll_ > most ? most : achScroll_);
-        drawAchList();
-        drawAchDetail();
+        const int over = sheetCount(sheetChapter()) * g.row - g.listHeight;
+        const int most = over > 0 ? over : 0;
+        sheetScroll_ = sheetScroll_ < 0 ? 0 : (sheetScroll_ > most ? most : sheetScroll_);
+        drawSheetList();
+        drawSheetDetail();
+        drawSheetBar();
     }
 
-    Menu::Action Menu::achLeave()
+    /// A setting's row stepped: its value to the next (or the last), its
+    /// slider a notch. True if it changed.
+    bool Menu::sheetAdjust(int row, int step)
+    {
+        if (page_ != Page::Settings || row < 0)
+            return false;
+        int count = 0;
+        const Row *rows = settingsRows(settingsChapter_, count);
+        if (row >= count)
+            return false;
+        if (rows[row].id == kKey)
+        {
+            // Asked for: the next button pressed is this action's.
+            capturing_ = row;
+            captureHeld_ = keysHeld() & 0xFFFu;
+            drawSheetList();
+            drawSheetDetail();
+            return true;
+        }
+        if (!settingStep(rows[row].id, step))
+            return false;
+        sound.ui(rows[row].kind == Kind::Slider ? kUiSoundTick : kUiSoundPress);
+        drawSheetList();
+        drawSheetDetail();
+        return true;
+    }
+
+    /// A slider of a setting's row put where the stylus is (`x` on the
+    /// screen). True if it moved.
+    bool Menu::sheetSlider(int row, int x)
+    {
+        int count = 0;
+        const Row *rows = settingsRows(settingsChapter_, count);
+        if (row < 0 || row >= count || rows[row].kind != Kind::Slider)
+            return false;
+        const Id id = rows[row].id;
+        const int least = slidLeast(id), most = slidMost(id);
+        const int left = 2 + kSheetTrackLeft;
+        int level = ((x - left) * (most - least) + kSheetTrackWidth / 2) / kSheetTrackWidth + least;
+        level = x < left ? least : (level > most ? most : level);
+        std::uint8_t &value = slid(id);
+        if (value == level)
+            return false;
+        value = static_cast<std::uint8_t>(level);
+        if (isVolume(id))
+            sound.applyVolumes();
+        sound.ui(kUiSoundTick);
+        drawSheetList();
+        return true;
+    }
+
+    void Menu::sheetAsk(int what, const char *question)
+    {
+        sheetAsking_ = what;
+        std::snprintf(sheetQuestion_, sizeof(sheetQuestion_), "%s", question);
+        drawSheetBar();
+    }
+
+    /// YES to what was asked.
+    Menu::Action Menu::sheetYes()
+    {
+        const int what = sheetAsking_;
+        sheetAsking_ = 0;
+        switch (what)
+        {
+        case kAskReset:
+        {
+            // This page's settings as they were at first.
+            settings.reset(settingsChapter_);
+            if (settingsChapter_ == 0)
+            {
+                if (sound.extended())
+                    sound.setDsp(false);
+                sound.applyVolumes();
+            }
+            capturing_ = -1;
+            settings.save();
+            drawSheet();
+            return Action::None;
+        }
+        case kAskOverwrite:
+            return Action::SaveTo;
+        case kAskLoad:
+            return Action::Load;
+        case kAskDelete:
+            SaveGame::remove(slot_);
+            listSaves();
+            sheetSelected_ = -1;
+            drawSheet();
+            return Action::None;
+        default:
+            drawSheetBar();
+            return Action::None;
+        }
+    }
+
+    /// A row touched a second time (or SAVE, LOAD): done.
+    Menu::Action Menu::sheetAct(int row)
+    {
+        if (page_ == Page::Settings)
+        {
+            sheetAdjust(row, 1);
+            return Action::None;
+        }
+        if (page_ != Page::Saves || row < 0)
+            return Action::None;
+        const int k = row - (saving_ ? 1 : 0);
+        if (k < 0)
+        {
+            // NEW SAVE: in the first place there is room in.
+            const int free = saves_ != nullptr ? saveFreeManual(*saves_) : -1;
+            if (free < 0)
+                return Action::None;
+            slot_ = free;
+            return Action::SaveTo;
+        }
+        if (k >= static_cast<int>(savesListed_.size()))
+            return Action::None;
+        slot_ = savesListed_[k];
+        char name[16], question[40];
+        saveName(slot_, name, sizeof(name));
+        if (saving_)
+        {
+            std::snprintf(question, sizeof(question), "OVERWRITE %s?", name);
+            sheetAsk(kAskOverwrite, question);
+            return Action::None;
+        }
+        if (saves_->slots[slot_].status != kSaveGood)
+            return Action::None;
+        if (title_)
+            return Action::Load;
+        sheetAsk(kAskLoad, "LOAD? UNSAVED IS LOST");
+        return Action::None;
+    }
+
+    Menu::Action Menu::sheetBarPress(int button)
+    {
+        if (page_ == Page::Achievements)
+        {
+            if (button == 0)
+            {
+                settings.achievementPopups = !settings.achievementPopups;
+                drawSheetBar();
+                return Action::None;
+            }
+            return sheetLeave();
+        }
+        if (page_ == Page::Settings)
+        {
+            if (button == 0)
+            {
+                char question[40];
+                std::snprintf(question, sizeof(question), "RESET %s?", kSettingsChapterNames[settingsChapter_]);
+                sheetAsk(kAskReset, question);
+                return Action::None;
+            }
+            return sheetLeave();
+        }
+        if (button == 0)
+            return sheetAct(sheetSelected_);
+        if (button == 1)
+        {
+            const int k = sheetSelected_ - (saving_ ? 1 : 0);
+            if (sheetSelected_ < 0 || k < 0 || k >= static_cast<int>(savesListed_.size()) ||
+                savesListed_[k] < kSlotManual)
+                return Action::None;
+            slot_ = savesListed_[k];
+            char name[16], question[40];
+            saveName(slot_, name, sizeof(name));
+            std::snprintf(question, sizeof(question), "DELETE %s?", name);
+            sheetAsk(kAskDelete, question);
+            return Action::None;
+        }
+        return sheetLeave();
+    }
+
+    Menu::Action Menu::sheetLeave()
     {
         sound.ui(kUiSoundPress);
-        page_ = title_ ? Page::Title : (netGame.playing() ? Page::NetPause : Page::Main);
+        capturing_ = -1;
+        sheetAsking_ = 0;
+        page_ = page_ == Page::Saves ? asker_ : (title_ ? Page::Title : (netGame.playing() ? Page::NetPause : Page::Main));
         settings.save();
         active_ = -1;
         touching_ = (keysHeld() & KEY_TOUCH) != 0;
@@ -901,54 +1379,110 @@ namespace hlrt
         return Action::None;
     }
 
-    Menu::Action Menu::achievementsFrame()
+    Menu::Action Menu::sheetFrame()
     {
-        const AchGeometry g = achGeometry();
+        const SheetGeometry g = sheetGeometry();
         const std::uint32_t held = keysHeld();
-        const std::uint32_t pressed = held & ~achHeld_;
-        achHeld_ = held;
+        const std::uint32_t pressed = held & ~sheetHeld_;
+        sheetHeld_ = held;
 
-        // The buttons: L and R (or left and right) another chapter; up and
-        // down the row read out; B back.
-        if (achDrag_ == 0 && achSlide_ == 0 && achSlideTo_ == 0 && !achTouching_)
+        // A button being asked for (BUTTONS): the next one pressed, START
+        // to leave it as it was.
+        if (capturing_ >= 0)
         {
-            if (pressed & (KEY_R | KEY_RIGHT))
-                achTurn(1);
-            else if (pressed & (KEY_L | KEY_LEFT))
-                achTurn(-1);
+            const std::uint32_t fresh = (held & 0xFFFu) & ~captureHeld_;
+            captureHeld_ = held & 0xFFFu;
+            if (fresh & KEY_START)
+            {
+                capturing_ = -1;
+                drawSheetList();
+                drawSheetDetail();
+            }
+            else if (fresh & kAssignable)
+            {
+                std::uint32_t button = 1;
+                while (!(fresh & kAssignable & button))
+                    button <<= 1;
+                settings.makeCustom();
+                assignKey(settings.keys, capturing_, button);
+                capturing_ = -1;
+                sound.ui(kUiSoundTick);
+                drawSheetList();
+                drawSheetDetail();
+            }
+            sheetTouching_ = (held & KEY_TOUCH) != 0;
+            return Action::None;
+        }
+
+        // The buttons: L and R another chapter (left and right too, where
+        // they change nothing else); up and down the row read out; A to do
+        // it; B back (or NO).
+        if (sheetDrag_ == 0 && sheetSlide_ == 0 && sheetSlideTo_ == 0 && !sheetTouching_)
+        {
+            const bool setting = page_ == Page::Settings && sheetSelected_ >= 0;
+            if (sheetAsking_ != 0)
+            {
+                if (pressed & KEY_A)
+                    return sheetYes();
+                if (pressed & KEY_B)
+                {
+                    sheetAsking_ = 0;
+                    drawSheetBar();
+                }
+            }
+            else if (pressed & KEY_R)
+                sheetTurn(1);
+            else if (pressed & KEY_L)
+                sheetTurn(-1);
+            else if (pressed & (KEY_RIGHT | KEY_LEFT))
+            {
+                const int step = (pressed & KEY_RIGHT) ? 1 : -1;
+                if (!(setting && sheetAdjust(sheetSelected_, step)))
+                    sheetTurn(step);
+            }
             else if (pressed & (KEY_UP | KEY_DOWN))
             {
-                const int last = achCount(achChapter_) - 1;
-                int row = achSelected_ < 0 ? 0 : achSelected_ + ((pressed & KEY_DOWN) ? 1 : -1);
-                row = row < 0 ? 0 : (row > last ? last : row);
-                sound.ui(kUiSoundTick);
-                achSelect(row);
+                const int last = sheetCount(sheetChapter()) - 1;
+                if (last >= 0)
+                {
+                    int row = sheetSelected_ < 0 ? 0 : sheetSelected_ + ((pressed & KEY_DOWN) ? 1 : -1);
+                    row = row < 0 ? 0 : (row > last ? last : row);
+                    sound.ui(kUiSoundTick);
+                    sheetSelect(row);
+                }
+            }
+            else if (pressed & KEY_A)
+            {
+                if (sheetSelected_ >= 0)
+                    return sheetAct(sheetSelected_);
             }
             else if (pressed & KEY_B)
             {
-                return achLeave();
+                return sheetLeave();
             }
         }
 
         // A slide let go of (or asked for) finishes by itself: quickly,
         // then slowing; past the edge, the next chapter is the one shown.
-        if (achDrag_ != 2 && achSlide_ != achSlideTo_)
+        if (sheetDrag_ != 2 && sheetSlide_ != sheetSlideTo_)
         {
-            const int left = achSlideTo_ - achSlide_;
+            const int left = sheetSlideTo_ - sheetSlide_;
             int step = left / 3;
             if (step > -8 && step < 8)
                 step = left > 0 ? (left < 8 ? left : 8) : (left > -8 ? left : -8);
-            achSlide_ += step;
-            if (achSlide_ == achSlideTo_ && achSlideTo_ != 0)
+            sheetSlide_ += step;
+            if (sheetSlide_ == sheetSlideTo_ && sheetSlideTo_ != 0)
             {
-                achChapter_ = achWrap(achChapter_ + (achSlideTo_ < 0 ? 1 : -1));
-                achSlide_ = achSlideTo_ = 0;
-                achScroll_ = 0;
-                achSelected_ = -1;
-                drawAchHeader();
-                drawAchDetail();
+                const int chapters = sheetChapters();
+                int &chapter = sheetChapter();
+                chapter = (chapter + (sheetSlideTo_ < 0 ? 1 : chapters - 1)) % chapters;
+                sheetSlide_ = sheetSlideTo_ = 0;
+                sheetScroll_ = 0;
+                sheetSelected_ = -1;
+                drawSheetHeader();
+                drawSheetDetail();
             }
-            drawAchList();
+            drawSheetList();
         }
 
         // The stylus.
@@ -957,108 +1491,173 @@ namespace hlrt
         {
             touchPosition touch;
             touchRead(&touch);
-            achX_ = touch.px;
-            achY_ = touch.py;
+            sheetX_ = touch.px;
+            sheetY_ = touch.py;
+            Input::notePressure(touch.z1, touch.z2);
         }
-        if (down && !achTouching_)
+        if (down && !sheetTouching_)
         {
             // (While a slide is going on, a touch only waits for it.)
-            achPressed_ = achSlide_ == achSlideTo_ ? achHit(achX_, achY_) : kAchNothing;
-            achDownX_ = achX_;
-            achDownY_ = achY_;
-            achScrollAt_ = achScroll_;
-            achDrag_ = 0;
-            if (achPressed_ == kAchLeft || achPressed_ == kAchRight)
-                drawAchHeader();
-            else if (achPressed_ == kAchPopups || achPressed_ == kAchBack)
-                drawAchBar();
-            else if (achPressed_ >= 0)
-                drawAchList();
+            sheetPressed_ = sheetSlide_ == sheetSlideTo_ ? sheetHit(sheetX_, sheetY_) : kSheetNothing;
+            sheetDownX_ = sheetX_;
+            sheetDownY_ = sheetY_;
+            sheetScrollAt_ = sheetScroll_;
+            sheetDrag_ = 0;
+            if (sheetPressed_ == kSheetLeft || sheetPressed_ == kSheetRight)
+                drawSheetHeader();
+            else if (sheetPressed_ <= kSheetBar || sheetPressed_ == kSheetYes || sheetPressed_ == kSheetNo)
+                drawSheetBar();
+            else if (sheetPressed_ >= 0)
+            {
+                // A slider touched on its track: it follows the stylus.
+                int count = 0;
+                const Row *rows = page_ == Page::Settings ? settingsRows(settingsChapter_, count) : nullptr;
+                if (rows != nullptr && sheetPressed_ < count && rows[sheetPressed_].kind == Kind::Slider &&
+                    sheetX_ >= 2 + kSheetTrackLeft - 6)
+                {
+                    sheetDrag_ = 3;
+                    if (sheetSelected_ != sheetPressed_)
+                    {
+                        sheetSelected_ = sheetPressed_;
+                        drawSheetDetail();
+                    }
+                    if (!sheetSlider(sheetPressed_, sheetX_))
+                        drawSheetList();
+                }
+                else
+                {
+                    drawSheetList();
+                }
+            }
         }
-        else if (down && achTouching_)
+        else if (down && sheetTouching_)
         {
-            const int dx = achX_ - achDownX_, dy = achY_ - achDownY_;
+            const int dx = sheetX_ - sheetDownX_, dy = sheetY_ - sheetDownY_;
             const int ax = dx < 0 ? -dx : dx, ay = dy < 0 ? -dy : dy;
-            if (achDrag_ == 0 && (achPressed_ >= 0 || achPressed_ == kAchList) && (ax > kAchSlop || ay > kAchSlop))
+            if (sheetDrag_ == 3)
             {
-                // Moved: no longer a touch of a row, but the list moving.
-                achDrag_ = ax > ay ? 2 : 1;
-                drawAchList();
+                sheetSlider(sheetPressed_, sheetX_);
             }
-            if (achDrag_ == 1)
+            else
             {
-                const int most = achMostScroll(achChapter_, g);
-                int scroll = achScrollAt_ - dy;
-                scroll = scroll < 0 ? 0 : (scroll > most ? most : scroll);
-                if (scroll != achScroll_)
+                if (sheetDrag_ == 0 && (sheetPressed_ >= 0 || sheetPressed_ == kSheetList) &&
+                    (ax > kSheetSlop || ay > kSheetSlop))
                 {
-                    achScroll_ = scroll;
-                    drawAchList();
+                    // Moved: no longer a touch of a row, but the list moving
+                    // (across only where there is another chapter).
+                    sheetDrag_ = ax > ay && sheetChapters() > 1 ? 2 : 1;
+                    drawSheetList();
                 }
-            }
-            else if (achDrag_ == 2)
-            {
-                const int slide = dx < -256 ? -256 : (dx > 256 ? 256 : dx);
-                if (slide != achSlide_)
+                if (sheetDrag_ == 1)
                 {
-                    achSlide_ = slide;
-                    drawAchList();
+                    const int over = sheetCount(sheetChapter()) * g.row - g.listHeight;
+                    const int most = over > 0 ? over : 0;
+                    int scroll = sheetScrollAt_ - dy;
+                    scroll = scroll < 0 ? 0 : (scroll > most ? most : scroll);
+                    if (scroll != sheetScroll_)
+                    {
+                        sheetScroll_ = scroll;
+                        drawSheetList();
+                    }
+                }
+                else if (sheetDrag_ == 2)
+                {
+                    const int slide = dx < -256 ? -256 : (dx > 256 ? 256 : dx);
+                    if (slide != sheetSlide_)
+                    {
+                        sheetSlide_ = slide;
+                        drawSheetList();
+                    }
                 }
             }
         }
-        else if (!down && achTouching_)
+        else if (!down && sheetTouching_)
         {
-            const int was = achPressed_;
-            const int drag = achDrag_;
-            achPressed_ = kAchNothing;
-            achDrag_ = 0;
-            const bool same = drag == 0 && was != kAchNothing && was != kAchList && achHit(achX_, achY_) == was;
+            const int was = sheetPressed_;
+            const int drag = sheetDrag_;
+            sheetPressed_ = kSheetNothing;
+            sheetDrag_ = 0;
+            const bool same = drag == 0 && was != kSheetNothing && was != kSheetList && sheetHit(sheetX_, sheetY_) == was;
+            Action action = Action::None;
             if (drag == 2)
             {
                 // Slid far enough (a fifth of the way, a flick): the rest of
                 // the way; else back.
-                achSlideTo_ = achSlide_ < -kAchSwipe ? -256 : (achSlide_ > kAchSwipe ? 256 : 0);
-                if (achSlideTo_ != 0)
+                sheetSlideTo_ = sheetSlide_ < -kSheetSwipe ? -256 : (sheetSlide_ > kSheetSwipe ? 256 : 0);
+                if (sheetSlideTo_ != 0)
                     sound.ui(kUiSoundTick);
             }
-            else if (same && was == kAchLeft)
+            else if (drag == 3)
             {
-                achTurn(-1);
-                drawAchHeader();
+                drawSheetList();
             }
-            else if (same && was == kAchRight)
+            else if (same && was == kSheetLeft)
             {
-                achTurn(1);
-                drawAchHeader();
+                sheetTurn(-1);
+                drawSheetHeader();
             }
-            else if (same && was == kAchPopups)
+            else if (same && was == kSheetRight)
+            {
+                sheetTurn(1);
+                drawSheetHeader();
+            }
+            else if (same && was == kSheetYes)
             {
                 sound.ui(kUiSoundPress);
-                settings.achievementPopups = !settings.achievementPopups;
-                drawAchBar();
+                action = sheetYes();
             }
-            else if (same && was == kAchBack)
+            else if (same && was == kSheetNo)
             {
-                achTouching_ = false;
-                return achLeave();
+                sound.ui(kUiSoundPress);
+                sheetAsking_ = 0;
+                drawSheetBar();
+            }
+            else if (same && was <= kSheetBar)
+            {
+                sound.ui(kUiSoundPress);
+                if (kSheetBar - was == (page_ == Page::Saves ? 2 : 1))
+                {
+                    sheetTouching_ = false;
+                    return sheetLeave();
+                }
+                action = sheetBarPress(kSheetBar - was);
+                drawSheetBar();
             }
             else if (same && was >= 0)
             {
+                // A row: read out; touched again (a setting: at once), done.
                 sound.ui(kUiSoundPress);
-                achSelect(was);
+                const bool again = was == sheetSelected_;
+                if (sheetAsking_ != 0)
+                {
+                    sheetAsking_ = 0;
+                    drawSheetBar();
+                }
+                if (page_ == Page::Settings)
+                {
+                    if (!again)
+                        sheetSelect(was);
+                    sheetAdjust(was, 1);
+                }
+                else if (again && page_ == Page::Saves)
+                    action = sheetAct(was);
+                else
+                    sheetSelect(was);
             }
             else
             {
                 // (Let go somewhere else: nothing, and nothing pressed.)
-                if (was == kAchLeft || was == kAchRight)
-                    drawAchHeader();
-                else if (was == kAchPopups || was == kAchBack)
-                    drawAchBar();
+                if (was == kSheetLeft || was == kSheetRight)
+                    drawSheetHeader();
+                else if (was <= kSheetBar || was == kSheetYes || was == kSheetNo)
+                    drawSheetBar();
                 else
-                    drawAchList();
+                    drawSheetList();
             }
+            sheetTouching_ = down;
+            return action;
         }
-        achTouching_ = down;
+        sheetTouching_ = down;
         return Action::None;
     }
 
@@ -1075,65 +1674,13 @@ namespace hlrt
         // (A DS has no DSP to switch: the row is there, and says so. A save
         // that cannot be loaded, or is not the player's to write, likewise;
         // and CONTINUE with nothing to continue.)
-        const bool dead = (item.id == kDsp && !DspAudio::available()) || (item.id == kSlot && listDead[row]) ||
-                          (item.id == kContinue && (saves_ == nullptr || saveMostRecent(*saves_) < 0)) ||
-                          (item.id == kCommand && title_) || (item.id == kMultiplayer && netGame.maps().empty());
-        if (item.kind == Kind::Slider)
-        {
-            canvas.fill(at.x, y, at.width, at.height, kUiBack);
-            drawText(canvas, font, at.x + 4, textY, item.label, inkFor(font, kUiWhite));
-            const int least = slidLeast(item.id), most = slidMost(item.id);
-            const int level = slid(item.id) - least;
-            const int knob = kTrackLeft + (kTrackWidth * level) / (most - least);
-            canvas.fill(kTrackLeft, y + at.height / 2 - 3, kTrackWidth, 6, kUiTrack);
-            canvas.frame(kTrackLeft - 1, y + at.height / 2 - 4, kTrackWidth + 2, 8, kUiEdge);
-            canvas.fill(kTrackLeft, y + at.height / 2 - 3, knob - kTrackLeft, 6, kUiOrange + (down ? 2 : 1));
-            canvas.fill(knob - 3, y + 2, 7, at.height - 4, down ? kUiWhite + 2 : kUiWhite + 1);
-            canvas.frame(knob - 3, y + 2, 7, at.height - 4, kUiShadow);
-            return;
-        }
+        const bool dead = (item.id == kContinue && (saves_ == nullptr || saveMostRecent(*saves_) < 0)) ||
+                          (item.id == kCommand && title_) || (item.id == kMultiplayer && netGame.maps().empty()) ||
+                          (item.id == kGameHalfLife && !gameThere_[0]) || (item.id == kGameTraining && !gameThere_[1]) ||
+                          (item.id == kGameUplink && !gameThere_[2]);
         char text[48];
         switch (item.id)
         {
-        case kDsp:
-            std::snprintf(text, sizeof(text), "%s: %s", item.label,
-                          dead ? "not on a DS" : (sound.extended() ? "on" : "off"));
-            break;
-        case kReadout:
-            std::snprintf(text, sizeof(text), "%s: %s", item.label, settings.debugReadout ? "on" : "off");
-            break;
-        case kBob:
-            std::snprintf(text, sizeof(text), "%s: %s", item.label, settings.viewBob ? "on" : "off");
-            break;
-        case kAutoaim:
-            std::snprintf(text, sizeof(text), "%s: %s", item.label, settings.autoaim ? "on" : "off");
-            break;
-        case kFog:
-            std::snprintf(text, sizeof(text), "%s: %s", item.label, kFogTypeName[settings.graphics.fog]);
-            break;
-        case kFogColour:
-            std::snprintf(text, sizeof(text), "%s: %s", item.label, kFogColourName[settings.graphics.fogColour]);
-            break;
-        case kModelDetail:
-            std::snprintf(text, sizeof(text), "%s: %s", item.label, kDetailName[settings.graphics.modelDetail]);
-            break;
-        case kWorldDetail:
-            std::snprintf(text, sizeof(text), "%s: %s", item.label, kDetailName[settings.graphics.worldDetail]);
-            break;
-        case kModelLimit:
-            if (settings.graphics.modelLimit == 0)
-                std::snprintf(text, sizeof(text), "%s: auto", item.label);
-            else
-                std::snprintf(text, sizeof(text), "%s: %d", item.label, settings.graphics.modelLimit);
-            break;
-        case kDrawDistance:
-            std::snprintf(text, sizeof(text), "%s: %s", item.label, kDrawDistanceName[settings.graphics.drawDistance]);
-            break;
-        case kHand:
-            // (Which side of the touch screen its column of buttons is,
-            // and which hand has the pad and the trigger.)
-            std::snprintf(text, sizeof(text), "%s: %s", item.label, settings.leftHanded ? "left" : "right");
-            break;
         case kNetMap:
             std::snprintf(text, sizeof(text), "%s: %s", item.label,
                           netGame.maps().empty() ? "none" : netGame.maps()[netMap_ % netGame.maps().size()].c_str());
@@ -1156,52 +1703,6 @@ namespace hlrt
             std::snprintf(text, sizeof(text), "%s: %s", item.label, kNames[(skill_ - 1) % 3]);
             break;
         }
-        case kScheme:
-            std::snprintf(text, sizeof(text), "%s: %s", item.label,
-                          settings.controlScheme == kControlsModern
-                              ? "modern"
-                              : (settings.controlScheme == kControlsCustom ? "custom" : "classic"));
-            break;
-        case kDuck:
-            std::snprintf(text, sizeof(text), "%s: %s", item.label, settings.duckToggle ? "toggle" : "hold");
-            break;
-        case kInvert:
-            std::snprintf(text, sizeof(text), "%s: %s", item.label, settings.invertPitch ? "on" : "off");
-            break;
-        case kFirmPress:
-            std::snprintf(text, sizeof(text), "%s: %s", item.label,
-                          Input::pressureSeen() ? kFirmName[settings.firmPress % kFirmActions] : "n/a here");
-            break;
-        case kKey:
-        {
-            // The action, and its buttons (or the question, while asked).
-            const int action = keyActions[row];
-            if (capturing_ == action)
-            {
-                std::snprintf(text, sizeof(text), "%s: press a button", actionName(action));
-                break;
-            }
-            std::uint16_t keys[kActionCount];
-            keysOf(settings.controls(), keys);
-            char names[24] = "";
-            int n = 0;
-            for (int bit = 0; bit < 12; ++bit)
-            {
-                if (keys[action] & (1u << bit))
-                    n += std::snprintf(names + n, sizeof(names) - static_cast<std::size_t>(n), "%s%s",
-                                       n > 0 ? "/" : "", buttonName(1u << bit));
-                if (n >= static_cast<int>(sizeof(names)) - 1)
-                    break;
-            }
-            std::snprintf(text, sizeof(text), "%s: %s", actionName(action), n > 0 ? names : "-");
-            break;
-        }
-        case kPadSide:
-            std::snprintf(text, sizeof(text), "%s: %s", item.label, settings.padTurns ? "turn" : "sidestep");
-            break;
-        case kPadUp:
-            std::snprintf(text, sizeof(text), "%s: %s", item.label, settings.padLooks ? "look" : "move");
-            break;
         default:
             std::snprintf(text, sizeof(text), "%s", item.label);
             break;
@@ -1220,24 +1721,6 @@ namespace hlrt
         return row < rowCount() && (y - at.top) % at.pitch < at.height ? row : -1;
     }
 
-    /// The slider of `row` put where the stylus is. True if that moved it.
-    bool Menu::slide(int row, int x)
-    {
-        int count = 0;
-        const Row &item = rowsOf(static_cast<int>(page_), count)[row];
-        const int least = slidLeast(item.id), most = slidMost(item.id);
-        int level = ((x - kTrackLeft) * (most - least) + kTrackWidth / 2) / kTrackWidth + least;
-        level = x < kTrackLeft ? least : (level > most ? most : level);
-        std::uint8_t &value = slid(item.id);
-        if (value == level)
-            return false;
-        value = static_cast<std::uint8_t>(level);
-        if (isVolume(item.id))
-            sound.applyVolumes();
-        sound.ui(kUiSoundTick);
-        return true;
-    }
-
     Menu::Action Menu::fire(int row)
     {
         int count = 0;
@@ -1249,18 +1732,39 @@ namespace hlrt
         case kSave:    return Action::Save;
         case kCommand: return Action::Command;
         case kNewGame:
-            // (From the title there is nothing to lose: straight to how hard
-            // it is to be. No save is touched either way: a new game only
-            // begins.)
+            // (From the title there is nothing to lose: straight to which
+            // game. No save is touched either way: a new game only begins.)
             asker_ = page_;
             if (title_)
             {
-                page_ = Page::Difficulty;
-                draw();
+                openNewGame();
                 break;
             }
             ask(Action::NewGame, "NEW GAME?");
             break;
+        case kGameHalfLife:
+        case kGameTraining:
+        case kGameUplink:
+        {
+            const int which = item.id - kGameHalfLife;
+            if (!gameThere_[which])
+            {
+                drawRow(row, false);
+                break;
+            }
+            static const char *const kMaps[3] = {"", "t0a0", "hldemo1"};
+            map_ = kMaps[which];
+            // (The Hazard Course is the same at any difficulty: begun at
+            // once.)
+            if (item.id == kGameTraining)
+            {
+                skill_ = hldata::kSkillMedium;
+                return Action::NewGame;
+            }
+            page_ = Page::Difficulty;
+            draw();
+            break;
+        }
         case kSkillEasy:
         case kSkillMedium:
         case kSkillHard:
@@ -1274,59 +1778,33 @@ namespace hlrt
             }
             break;
         case kSaveGame:
-            showSaves(true);
-            break;
         case kLoadGame:
-            showSaves(false);
-            break;
-        case kSlot:
-            if (listDead[row])
-            {
-                drawRow(row, false);
-                break;
-            }
-            slot_ = row;
-            if (saving_)
-            {
-                // One with a save in it is asked about first.
-                if (saves_ != nullptr && saves_->slots[row].status != kSaveNone)
-                    ask(Action::SaveTo, "OVERWRITE?");
-                else
-                    return Action::SaveTo;
-            }
-            else if (title_)
-            {
-                return Action::Load;
-            }
-            else
-            {
-                ask(Action::Load, "LOAD? UNSAVED IS LOST");
-            }
+            saving_ = item.id == kSaveGame;
+            asker_ = page_;
+            openSheet(Page::Saves);
             break;
         case kYes:
         {
             const Action action = asked_;
             asked_ = Action::None;
-            // (A new game: yes, and then how hard.)
+            // (A new game: yes, and then which.)
             if (action == Action::NewGame)
             {
-                page_ = Page::Difficulty;
-                draw();
+                openNewGame();
                 break;
             }
             return action;
         }
         case kNo:
-            page_ = asker_ == Page::Saves || asked_ == Action::SaveTo || asked_ == Action::Load ? Page::Saves : asker_;
+            page_ = asker_;
             asked_ = Action::None;
             draw();
             break;
         case kOptions:
-            page_ = Page::Options;
-            draw();
+            openSheet(Page::Settings);
             break;
         case kAchievementsOpen:
-            openAchievements();
+            openSheet(Page::Achievements);
             break;
         case kBack:
             // Out of a lobby: out of the game, and the radio silent.
@@ -1337,17 +1815,10 @@ namespace hlrt
                 draw();
                 break;
             }
-            // (From the graphics, back to the options they are among; from
-            // the list, to where it was asked for.)
-            capturing_ = -1;
-            page_ = page_ == Page::TouchAim || page_ == Page::Buttons
-                        ? Page::Controls
-                        : page_ == Page::Graphics || page_ == Page::Controls
-                        ? Page::Options
-                        : (page_ == Page::Saves || page_ == Page::Difficulty
-                               ? asker_
-                               : (title_ ? Page::Title : (netGame.playing() ? Page::NetPause : Page::Main)));
-            settings.save();
+            // (From how hard, back to which game; from which game, to where
+            // it was asked for.)
+            page_ = page_ == Page::Difficulty ? Page::NewGame
+                                              : (title_ ? Page::Title : (netGame.playing() ? Page::NetPause : Page::Main));
             draw();
             break;
         case kMultiplayer:
@@ -1418,130 +1889,6 @@ namespace hlrt
             break;
         case kLeave:
             return Action::Leave;
-        case kGraphics:
-            page_ = Page::Graphics;
-            draw();
-            break;
-        case kFog:
-            settings.graphics.fog = static_cast<std::uint8_t>((settings.graphics.fog + 1) % kFogTypes);
-            drawRow(row, false);
-            break;
-        case kFogColour:
-            settings.graphics.fogColour = static_cast<std::uint8_t>((settings.graphics.fogColour + 1) % kFogColours);
-            drawRow(row, false);
-            break;
-        case kModelDetail:
-            settings.graphics.modelDetail = static_cast<std::uint8_t>((settings.graphics.modelDetail + 1) % kDetailLevels);
-            drawRow(row, false);
-            break;
-        case kWorldDetail:
-            settings.graphics.worldDetail = static_cast<std::uint8_t>((settings.graphics.worldDetail + 1) % kDetailLevels);
-            drawRow(row, false);
-            break;
-        case kModelLimit:
-            // auto, 4, 6, 8, 10, 12, and round again.
-            settings.graphics.modelLimit = settings.graphics.modelLimit == 0
-                                               ? 4
-                                               : (settings.graphics.modelLimit >= 12 ? 0 : settings.graphics.modelLimit + 2);
-            drawRow(row, false);
-            break;
-        case kDrawDistance:
-            settings.graphics.drawDistance = static_cast<std::uint8_t>((settings.graphics.drawDistance + 1) % kDrawDistances);
-            drawRow(row, false);
-            break;
-        case kDsp:
-            if (DspAudio::available())
-            {
-                // At once: the music goes on from where it was, by the
-                // other way of playing it.
-                settings.dspAudio = sound.setDsp(!sound.extended());
-                settings.save();
-            }
-            drawRow(row, false);
-            break;
-        case kReadout:
-            settings.debugReadout = !settings.debugReadout;
-            drawRow(row, false);
-            break;
-        case kBob:
-            settings.viewBob = !settings.viewBob;
-            drawRow(row, false);
-            break;
-        case kAutoaim:
-            settings.autoaim = !settings.autoaim;
-            drawRow(row, false);
-            break;
-        case kControls:
-            page_ = Page::Controls;
-            draw();
-            break;
-        // (The whole page again: the lines under the rows say what the
-        // buttons now do.)
-        case kHand:
-            settings.leftHanded = !settings.leftHanded;
-            draw();
-            break;
-        case kScheme:
-        {
-            // (Into CUSTOM with nothing made yet: it starts as the layout
-            // it came from.)
-            const std::uint8_t next = static_cast<std::uint8_t>((settings.controlScheme + 1) % kControlsSchemes);
-            bool none = true;
-            for (std::uint16_t key : settings.keys)
-                none = none && key == 0;
-            if (next == kControlsCustom && none)
-                settings.makeCustom();
-            settings.controlScheme = next;
-            draw();
-            break;
-        }
-        case kPadSide:
-            settings.padTurns = !settings.padTurns;
-            draw();
-            break;
-        case kPadUp:
-            settings.padLooks = !settings.padLooks;
-            draw();
-            break;
-        case kDuck:
-            settings.duckToggle = !settings.duckToggle;
-            draw();
-            break;
-        case kButtons:
-            showButtons(0);
-            break;
-        case kTouchAim:
-            page_ = Page::TouchAim;
-            draw();
-            break;
-        case kInvert:
-            settings.invertPitch = !settings.invertPitch;
-            drawRow(row, false);
-            break;
-        case kFirmPress:
-            if (Input::pressureSeen())
-                settings.firmPress = static_cast<std::uint8_t>((settings.firmPress + 1) % kFirmActions);
-            drawRow(row, false);
-            break;
-        case kKey:
-        {
-            // Asked for: the next button pressed is this action's.
-            capturing_ = keyActions[row];
-            captureHeld_ = keysHeld() & 0xFFFu;
-            draw();
-            break;
-        }
-        case kMore:
-            showButtons(buttonsScreen_ ^ 1);
-            break;
-        case kResetKeys:
-            // Back to the layout the custom one was made from: modern.
-            capturing_ = -1;
-            settings.controlScheme = kControlsModern;
-            for (std::uint16_t &key : settings.keys)
-                key = 0;
-            draw();
-            break;
         default:
             break;
         }
@@ -1550,8 +1897,8 @@ namespace hlrt
 
     Menu::Action Menu::frame()
     {
-        if (page_ == Page::Achievements)
-            return achievementsFrame();
+        if (sheet())
+            return sheetFrame();
         // A game between consoles: the lobby changes without being touched.
         if (page_ == Page::NetJoin)
         {
@@ -1582,29 +1929,6 @@ namespace hlrt
             else if (netSignature() != netShown_ && active_ < 0)
                 draw();
         }
-        // A button asked for: the next one pressed (START never minds).
-        if (capturing_ >= 0)
-        {
-            const std::uint32_t held = keysHeld() & 0xFFFu;
-            const std::uint32_t pressed = held & ~captureHeld_;
-            captureHeld_ = held;
-            if (pressed & KEY_START)
-            {
-                capturing_ = -1;
-                draw();
-            }
-            else if (pressed & kAssignable)
-            {
-                std::uint32_t button = 1;
-                while (!(pressed & kAssignable & button))
-                    button <<= 1;
-                settings.makeCustom();
-                assignKey(settings.keys, capturing_, button);
-                capturing_ = -1;
-                sound.ui(kUiSoundTick);
-                draw();
-            }
-        }
         const bool down = (keysHeld() & KEY_TOUCH) != 0;
         if (down)
         {
@@ -1614,23 +1938,11 @@ namespace hlrt
             lastY_ = touch.py;
             Input::notePressure(touch.z1, touch.z2);
         }
-        int rowTotal = 0;
-        const Row *rows = rowsOf(static_cast<int>(page_), rowTotal);
-        const bool sliding = active_ >= 0 && active_ < rowTotal && rows[active_].kind == Kind::Slider;
         Action action = Action::None;
         if (down && !touching_)
         {
             active_ = rowAt(lastX_, lastY_);
             if (active_ >= 0)
-            {
-                if (rows[active_].kind == Kind::Slider)
-                    slide(active_, lastX_);
-                drawRow(active_, true);
-            }
-        }
-        else if (down && sliding)
-        {
-            if (slide(active_, lastX_))
                 drawRow(active_, true);
         }
         else if (!down && touching_ && active_ >= 0)
@@ -1639,9 +1951,7 @@ namespace hlrt
             // pressed.
             const int row = active_;
             active_ = -1;
-            if (sliding)
-                drawRow(row, false);
-            else if (rowAt(lastX_, lastY_) == row)
+            if (rowAt(lastX_, lastY_) == row)
                 action = fire(row);
             else
                 drawRow(row, false);

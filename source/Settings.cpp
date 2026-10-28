@@ -43,6 +43,51 @@ void Settings::load()
     }
 }
 
+void Settings::reset(int category)
+{
+    const Settings first;
+    switch (category)
+    {
+    case 0:
+        dspAudio = first.dspAudio;
+        for (int i = 0; i < 4; ++i)
+            volume[i] = first.volume[i];
+        break;
+    case 1:
+        graphics = first.graphics;
+        break;
+    case 2:
+        // (The layouts; the buttons of one's own are BUTTONS'.)
+        if (controlScheme != hldata::kControlsCustom)
+            controlScheme = first.controlScheme;
+        leftHanded = first.leftHanded;
+        duckToggle = first.duckToggle;
+        padTurns = first.padTurns;
+        padLooks = first.padLooks;
+        autoaim = first.autoaim;
+        break;
+    case 3:
+        aimSpeed = first.aimSpeed;
+        pitchSpeed = first.pitchSpeed;
+        invertPitch = first.invertPitch;
+        firmness = first.firmness;
+        firmPress = first.firmPress;
+        break;
+    case 4:
+        // No buttons of one's own: the layout they were made from goes too.
+        for (int a = 0; a < hldata::kActionCount; ++a)
+            keys[a] = first.keys[a];
+        if (controlScheme == hldata::kControlsCustom)
+            controlScheme = first.controlScheme;
+        break;
+    default:
+        viewBob = first.viewBob;
+        debugReadout = first.debugReadout;
+        achievementPopups = first.achievementPopups;
+        break;
+    }
+}
+
 bool Settings::save() const
 {
     if (!global.hasFat)

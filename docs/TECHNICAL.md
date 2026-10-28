@@ -208,10 +208,15 @@ Milestone 11, "levels of detail".
   (`trigger_push`) may start switched off and be switched on by whatever
   targets it. Still missing: the wheels that are HELD (`momentary_rot_button`,
   `momentary_door`: nineteen, in eight maps).
-- Saving, as the game has it. **Eight saves**: AUTOSAVE, which the game
-  writes itself at a map's own save points and on arriving in a map; QUICK,
-  the pause menu's one-touch save; and six that are the player's to choose
-  and overwrite. A save holds **the whole of the map** it was made in --
+- Saving, as the game has it: AUTOSAVE, which the game writes itself at a
+  map's own save points and on arriving in a map; QUICK, the pause menu's
+  one-touch save; and **as many of the player's own as they make**, up to
+  99 (`save1.sav` ... `save99.sav`: the six slots there used to be are the
+  first six), each made new or put in another's place, and each deletable.
+  The index beside them (`index.dat`, 'HLS2') holds only the saves there
+  are; one from before (the nine slots of 'HLSI') is made again from the
+  files, which the console lists with `opendir` rather than asking for a
+  hundred names. A save holds **the whole of the map** it was made in --
   every door, lift, train and trigger as it was, every actor where it
   stood and what it was doing, who came into the map with the player,
   what was in flight, the marks on the walls -- so loading goes on from
@@ -220,7 +225,9 @@ Milestone 11, "levels of detail".
   (the list, each line with how long was played, the map, the day and
   time by the console's clock, and the chapter -- which the converter
   works out for every map from the game's own: each chapter is named by
-  the map that opens it), NEW GAME (which touches none of the player's saves), OPTIONS.
+  the map that opens it), NEW GAME (which touches none of the player's
+  saves: HALF-LIFE, the HAZARD COURSE or UPLINK, as the game's menu offers
+  them -- each only if its first map is on the card -- then how hard), OPTIONS.
   A write is said on the screen (SAVED, AUTOSAVED, or that the card would
   not take it) and is safe against the console being switched off in the
   middle of it: the new file takes the old one's place only when it is
@@ -585,16 +592,24 @@ Milestone 11, "levels of detail".
   sound a quarter of a second for ten of menu); the menu's clicks are
   heard meanwhile. The music, on a DS, is a maxmod stream fed from the
   card.
-- The pause menu: RESUME, QUICK SAVE, SAVE GAME (the list, to pick one of
-  the six -- one with a save in it asks first), LOAD GAME (the list of all
-  eight; asks first), NEW GAME (asks first), OPTIONS, COMMAND;
-  and under OPTIONS the rendering mode, the DSi's sound, a volume slider
-  each for the music, the effects, the voices and the ambience, which
-  side the touch screen's buttons are, and the
-  debug readout (off unless switched on; it is drawn along the top of the
-  touch screen in every rendering mode). Buttons act when the stylus is
-  lifted from them; sliders follow it. The command line has a keyboard of
-  the port's own.
+- The pause menu: RESUME, QUICK SAVE, SAVE GAME, LOAD GAME, NEW GAME (asks
+  first), OPTIONS, ACHIEVEMENTS, COMMAND. Buttons act when the stylus is
+  lifted from them. The command line has a keyboard of the port's own.
+- OPTIONS, the saves and the achievements are **sheets** (`Menu::sheetFrame`,
+  `source/ui/Menu.cpp`): a page at a time between < > (OPTIONS: SOUND,
+  GRAPHICS, CONTROLS, TOUCH AIM, BUTTONS, OTHER), its rows to touch in a
+  list that is slid aside for the next page (or L/R) and dragged up and
+  down when it is longer than the room, a box that reads out the row
+  touched (what a setting does; a save's chapter, map, health, date and
+  play time), and buttons along the bottom that ask "...? YES NO" there.
+  - A setting's row changes it when touched (left and right on the pad
+    too); a slider follows the stylus on its track. BUTTONS: touch an
+    action, then press its button. RESET puts the page shown back as it
+    was at first (`Settings::reset`).
+  - The saves, newest first: NEW SAVE at the top when saving (none past
+    99), a save touched twice (or SAVE, LOAD) to use it -- one put in
+    another's place, or loaded in the middle of a game, asks first --
+    and DELETE for the player's own.
 - The touch screen is laid out as the DS's better first-person games lay
   theirs out (Dementium II is the model), in the suit's amber on dark: a
   bar along the top with MENU, USE in the middle and RELOAD (faint when

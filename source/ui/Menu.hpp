@@ -8,7 +8,9 @@
 // What changes a setting is done here; what changes the game (resume, save,
 // a new game, a command) is handed back to whoever runs the game.
 
+#include <cstdint>
 #include <string>
+#include <vector>
 
 #include "HlSaveFiles.hpp"
 
@@ -22,7 +24,7 @@ namespace hlrt
             None,
             Resume,
             Save,     ///< the quick one
-            SaveTo,   ///< ... into slot() -- one of the player's six
+            SaveTo,   ///< ... into slot() -- one of the player's
             Load,     ///< the save in slot()
             Continue, ///< the most recent save (the title's)
             NewGame,
@@ -42,6 +44,9 @@ namespace hlrt
         int slot() const { return slot_; }
         /// How hard a new game (Action::NewGame) is to be: kSkillEasy..Hard.
         int skill() const { return skill_; }
+        /// Which map a new game begins in: "" for the game's own start (the
+        /// manifest's), or the Hazard Course's or Uplink's first.
+        const std::string &map() const { return map_; }
         /// Once a frame while it is open (after the keys have been scanned).
         Action frame();
         /// What a console line said, and whether it closes the console.
@@ -61,58 +66,81 @@ namespace hlrt
         void console(ConsoleRun run);
 
     private:
+        // (The numbers are rowsOf's, in Menu.cpp.)
         enum class Page
         {
-            Main,
-            Options,
-            Graphics,
-            Title,
-            Saves,   ///< the list: to load from, or to save into
-            Confirm, ///< "overwrite?", "load?", "new game?"
-            Controls, ///< the layout of the buttons
-            Multiplayer, ///< host a game between consoles, or join one
-            NetHost,     ///< the host's lobby: which map, what limits, who is there
-            NetJoin,     ///< the games found
-            NetLobby,    ///< a client waiting for the host to start
-            NetPause,    ///< the pause menu of a game between consoles (which goes on)
-            TouchAim,    ///< how the stylus turns the view, and how hard it must press
-            Buttons,     ///< which button does what (a custom layout)
-            Difficulty,  ///< a new game's: EASY, MEDIUM, DIFFICULT
-            Achievements, ///< those earned and those not, a chapter at a time (its own page)
+            Main = 0,
+            Settings = 1,     ///< OPTIONS: a sheet, a category at a time
+            Title = 3,
+            Saves = 4,        ///< a sheet: the saves, to load from or to save into
+            Confirm = 5,      ///< "new game?"
+            Multiplayer = 7,  ///< host a game between consoles, or join one
+            NetHost = 8,      ///< the host's lobby: which map, what limits, who is there
+            NetJoin = 9,      ///< the games found
+            NetLobby = 10,    ///< a client waiting for the host to start
+            NetPause = 11,    ///< the pause menu of a game between consoles (which goes on)
+            Difficulty = 14,  ///< a new game's: EASY, MEDIUM, DIFFICULT
+            Achievements = 15, ///< a sheet: those earned and those not, a chapter at a time
+            NewGame = 16,     ///< which game: Half-Life, the Hazard Course, Uplink
         };
-        // The achievements' page: drawn and touched apart from the rows
-        // (Menu.cpp). A chapter at a time, its achievements as rows to
-        // touch; the list slid aside for another chapter, dragged up and
-        // down when it is longer than there is room for.
-        int achChapter_ = 0;   ///< the chapter shown (kept while the console is on)
-        int achScroll_ = 0;    ///< how far down its list is scrolled, in pixels
-        int achSelected_ = -1; ///< the row read out in the box under the list; -1: none
-        int achSlide_ = 0;     ///< how far across the list is slid, in pixels
-        int achSlideTo_ = 0;   ///< ... where it is going by itself: 0 back; -256, 256 the next, the last chapter
-        int achPressed_ = -1;  ///< what the stylus went down on (a row, or kAch* in Menu.cpp)
-        int achDrag_ = 0;      ///< 0 a touch; 1 scrolling; 2 sliding
-        int achDownX_ = 0, achDownY_ = 0, achX_ = 0, achY_ = 0, achScrollAt_ = 0;
-        bool achTouching_ = false;
-        std::uint32_t achHeld_ = 0; ///< the buttons held a frame ago (so that only a press counts)
-        void openAchievements();
-        Action achievementsFrame();
-        Action achLeave();
-        void achTurn(int step);
-        void achSelect(int row);
-        int achHit(int x, int y) const;
-        void drawAchievements();
-        void drawAchHeader();
-        void drawAchList();
-        void drawAchRows(int chapter, int x, int scroll);
-        void drawAchDetail();
-        void drawAchBar();
-        /// The buttons page: which of its two screens; and the action whose
-        /// button is being asked for (-1: none), with what was held when it
-        /// was asked (so that only a new press counts).
-        int buttonsScreen_ = 0;
+
+        // A sheet: a page of its own, drawn and touched apart from the rows
+        // (Menu.cpp) -- a chapter at a time between arrows, its rows to
+        // touch in a list that is slid aside for another chapter and
+        // dragged up and down when it is longer than there is room for, a
+        // box that reads out the row touched, and buttons along the bottom
+        // (which ask "...? YES NO" there when something is to be made sure
+        // of). The achievements, the settings and the saves are sheets.
+        bool sheet() const
+        {
+            return page_ == Page::Achievements || page_ == Page::Settings || page_ == Page::Saves;
+        }
+        int achChapter_ = 0, settingsChapter_ = 0; ///< the chapter each was last on (kept while the console is on)
+        int sheetScroll_ = 0;    ///< how far down the list is scrolled, in pixels
+        int sheetSelected_ = -1; ///< the row read out in the box; -1: none
+        int sheetSlide_ = 0;     ///< how far across the list is slid, in pixels
+        int sheetSlideTo_ = 0;   ///< ... where it is going by itself: 0 back; -256, 256 the next, the last chapter
+        int sheetPressed_ = -1;  ///< what the stylus went down on (a row, or kSheet* in Menu.cpp)
+        int sheetDrag_ = 0;      ///< 0 a touch; 1 scrolling; 2 sliding; 3 a slider moved
+        int sheetDownX_ = 0, sheetDownY_ = 0, sheetX_ = 0, sheetY_ = 0, sheetScrollAt_ = 0;
+        bool sheetTouching_ = false;
+        std::uint32_t sheetHeld_ = 0; ///< the buttons held a frame ago (so that only a press counts)
+        int sheetAsking_ = 0;         ///< what YES does (kAsk* in Menu.cpp); 0: nothing asked
+        char sheetQuestion_[40] = {};
+        void openSheet(Page page);
+        int &sheetChapter();
+        int sheetChapters() const;
+        int sheetCount(int chapter) const;
+        Action sheetFrame();
+        Action sheetLeave();
+        Action sheetAct(int row);
+        Action sheetBarPress(int button);
+        Action sheetYes();
+        void sheetAsk(int what, const char *question);
+        void sheetTurn(int step);
+        void sheetSelect(int row);
+        bool sheetAdjust(int row, int step);
+        bool sheetSlider(int row, int x);
+        int sheetHit(int x, int y) const;
+        void drawSheet();
+        void drawSheetHeader();
+        void drawSheetList();
+        void drawSheetRows(int chapter, int x, int scroll);
+        void drawSheetDetail();
+        void drawSheetBar();
+
+        /// A button of the BUTTONS category being asked for (-1: none), with
+        /// what was held when it was asked (so that only a new press counts).
         int capturing_ = -1;
         std::uint32_t captureHeld_ = 0;
-        void showButtons(int screen);
+        /// The saves the sheet lists, as it lists them (kSlot*), and whether
+        /// it lists them to save into (with NEW SAVE first).
+        std::vector<int> savesListed_;
+        void listSaves();
+        /// Which game NEW GAME begins: the game's own start (""), or the
+        /// Hazard Course's, or Uplink's; and which of those are on the card.
+        std::string map_;
+        bool gameThere_[3] = {true, true, true};
         const hldata::SaveIndex *saves_ = nullptr;
         bool title_ = false;   ///< it is the title's menu, not the pause's
         bool saving_ = false;  ///< the list is shown to save into
@@ -120,8 +148,8 @@ namespace hlrt
         int skill_ = 2; ///< (kSkillMedium)
         Action asked_ = Action::None; ///< what "yes" on the confirm page does
         Page asker_ = Page::Main;     ///< ... and where "no" goes back to
-        void showSaves(bool saving);
         void ask(Action action, const char *question);
+        void openNewGame();
         Page page_ = Page::Main;
         // A game between consoles: what the host has chosen, and what was
         // last drawn of who is there (to draw again when it changes).
@@ -140,7 +168,6 @@ namespace hlrt
         int rowAt(int x, int y) const;
         int rowCount() const;
         Action fire(int row);
-        bool slide(int row, int x);
     };
 
     extern Menu menu;

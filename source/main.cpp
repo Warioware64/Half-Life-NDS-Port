@@ -910,23 +910,29 @@ int main(int argc, char *argv[])
         settings.save();
         return true;
     };
-    auto newGame = [&]()
+    // A new game: `chosen` on NEW GAME (its map and how hard, the menu's);
+    // else the one the console starts with (the card's test start, if it
+    // has one).
+    auto newGame = [&](bool chosen)
     {
+        const bool test = debugging && !chosen;
         hlrt::game.resetProgress();
         // How hard it is: the first thing the new game knows, before its
         // first map's monsters are made.
-        hlrt::game.globals.set(hldata::kGlobalSkill,
-                               static_cast<std::uint8_t>(debugging ? debugSkill : hlrt::menu.skill()));
+        hlrt::game.globals.set(hldata::kGlobalSkill, static_cast<std::uint8_t>(test ? debugSkill : hlrt::menu.skill()));
         hlrt::SaveGame::newRun(Global::vblanks() * 2654435761u + 1u);
         leavingAbandoned = true;
         // (A new game is played straight: the COMMAND line's cheats are off.)
         hlrt::game.cheats = hldata::Cheats();
         hlrt::game.crosshair = true;
-        if (loadLevel(startMap, nullptr, error) != LoadResult::Ok)
-            haltWith("Cannot start:", error.c_str(), startMap.c_str());
+        // Where: the game's own start, or the Hazard Course's, or Uplink's
+        // (NEW GAME's choice).
+        const std::string first = chosen && !hlrt::menu.map().empty() ? hlrt::menu.map() : startMap;
+        if (loadLevel(first, nullptr, error) != LoadResult::Ok)
+            haltWith("Cannot start:", error.c_str(), first.c_str());
         // (Somewhere to come back to from the first: the game's own save,
         // not one of the player's.)
-        if (!debugging)
+        if (!test)
         {
             saveNow(hldata::kSlotAuto, true);
             saveNow(hldata::kSlotArrival, true);
@@ -937,8 +943,10 @@ int main(int argc, char *argv[])
     // which goes straight there.
     if (!debugging)
         hlrt::hudDraw.playIntro();
-    if (debugging || !titleScreen())
-        newGame();
+    if (debugging)
+        newGame(false);
+    else if (!titleScreen())
+        newGame(true);
 
 #ifdef HLDS_PROFILE
     // (A build that measures also checks the hardware's arithmetic.)
@@ -964,7 +972,7 @@ int main(int argc, char *argv[])
         hlrt::sound.setPaused(false);
         hlrt::screenFade.curtainDown();
         if (!titleScreen())
-            newGame();
+            newGame(true);
         lastVblank = lastPass = Global::vblanks();
     };
 
@@ -1064,8 +1072,8 @@ int main(int argc, char *argv[])
                     }
                     if (item == Menu::Action::Save || item == Menu::Action::SaveTo)
                     {
-                        // The quick one, or the one of the player's six
-                        // that was picked.
+                        // The quick one, or the player's own that was
+                        // picked (a new one, or one put in another's place).
                         hlrt::bottomScreen.showPad();
                         saveNow(item == Menu::Action::Save ? hldata::kSlotQuick : hlrt::menu.slot());
                         logPerformance();
@@ -1093,14 +1101,7 @@ int main(int argc, char *argv[])
                         // game's own, which are this game's from here.)
                         paused = false;
                         hlrt::sound.setPaused(false);
-                        hlrt::game.resetProgress();
-                        hlrt::game.globals.set(hldata::kGlobalSkill, static_cast<std::uint8_t>(hlrt::menu.skill()));
-                        hlrt::SaveGame::newRun(Global::vblanks() * 2654435761u + 1u);
-                        leavingAbandoned = true;
-                        if (loadLevel(startMap, nullptr, error) != LoadResult::Ok)
-                            haltWith("Cannot start:", error.c_str(), startMap.c_str());
-                        saveNow(hldata::kSlotAuto, true);
-                        saveNow(hldata::kSlotArrival, true);
+                        newGame(true);
                         deathLoop = hldata::DeathLoop();
                         lastVblank = Global::vblanks();
                     }

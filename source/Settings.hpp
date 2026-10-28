@@ -72,6 +72,10 @@ public:
     void load();
     /// Write settings.dat. False if the card cannot be written.
     bool save() const;
+    /// One of OPTIONS' categories (0 SOUND, 1 GRAPHICS, 2 CONTROLS, 3 TOUCH
+    /// AIM, 4 BUTTONS, 5 OTHER) as it is at first. (Not saved, nor the
+    /// sound told: the caller's.)
+    void reset(int category);
 };
 
 extern Settings settings;

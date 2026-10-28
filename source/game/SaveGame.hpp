@@ -20,6 +20,9 @@ namespace hlrt::SaveGame
     /// Write it. False if the card would not take it: the save that was
     /// there is then there still.
     bool write(const hldata::SaveData &save, int slot, const hldata::SaveHeading &heading);
+    /// One of the player's saves gone from the card and the list. False if
+    /// it is not theirs or would not go.
+    bool remove(int slot);
 
     /// The same, a step at a time (hldata::SaveWriter): begun now, with the
     /// game as it is now, and then step() once a frame until it says Done or

@@ -2,6 +2,7 @@
 
 #include "game/SaveGame.hpp"
 
+#include <dirent.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -151,6 +152,26 @@ namespace hlrt::SaveGame
                 close();
                 return ::rename(path(from).c_str(), path(to).c_str()) == 0;
             }
+            /// The files in the saves' folder (one look at the folder, not a
+            /// hundred files asked for one by one).
+            bool list(std::vector<std::string> &names) override
+            {
+                close();
+                names.clear();
+                std::string dir = global.savesDir();
+                if (!dir.empty() && dir.back() == '/')
+                    dir.pop_back();
+                DIR *folder = opendir(dir.c_str());
+                if (folder == nullptr)
+                    return true; // (no folder: no saves)
+                while (const dirent *entry = readdir(folder))
+                {
+                    if (entry->d_type != DT_DIR)
+                        names.emplace_back(entry->d_name);
+                }
+                closedir(folder);
+                return true;
+            }
         };
         FatCard card;
         hldata::SaveIndex list;
@@ -289,6 +310,15 @@ namespace hlrt::SaveGame
         // map, only named: the folder changes only at a way out or a load,
         // and either makes that one again.)
         return hldata::saveSlotWrite(card, list, slot, save, heading, &run, slot == hldata::kSlotArrival);
+    }
+
+    bool remove(int slot)
+    {
+        if (!global.hasFat)
+            return false;
+        need();
+        finish();
+        return hldata::saveSlotDelete(card, list, slot);
     }
 
     bool begin(const hldata::SaveData &save, int slot, const hldata::SaveHeading &heading)

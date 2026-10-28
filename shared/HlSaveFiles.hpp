@@ -3,15 +3,16 @@
 // The saves on the card: which files there are, how one is written so that
 // switching off half-way loses nothing, and the list of them.
 //
-// Nine files. One is the game's own (AUTOSAVE: written at a map's autosave
-// points and on arriving in a map), one is QUICK (the menu's SAVE), six are
-// the player's to choose and overwrite, and one more, never shown, is the
-// state on coming into the map (what someone who dies again and again is
-// taken back to). Each begins with a heading (HlSave.hpp) that says what it
-// is, and an index beside them holds the nine headings, so that showing the
-// list opens one file and not nine: opening a file on a card is the slow
-// part. The index is only a copy -- it is made again from the files if it is
-// not there or cannot be believed.
+// One is the game's own (AUTOSAVE: written at a map's autosave points and on
+// arriving in a map), one is QUICK (the menu's SAVE), one more, never shown,
+// is the state on coming into the map (what someone who dies again and again
+// is taken back to) -- and the player's own, as many as they make, up to 99
+// (save1.sav, save2.sav, ...: the six of the slots there used to be are the
+// first six of these). Each begins with a heading (HlSave.hpp) that says what
+// it is, and an index beside them holds the headings of those there are, so
+// that showing the list opens one file and not a hundred: opening a file on a
+// card is the slow part. The index is only a copy -- it is made again from
+// the files if it is not there or cannot be believed.
 //
 // A save is written to a file of another name beside the old one, and takes
 // its place only when it is whole. Whatever is found half-way at the next
@@ -26,25 +27,52 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "HlSave.hpp"
 
 namespace hldata
 {
+    // Which save is which: a number for each (a slot), fixed by its file.
     inline constexpr int kSlotAuto = 0;
     inline constexpr int kSlotQuick = 1;
-    inline constexpr int kSlotManual = 2;  ///< ... and the five after it
-    inline constexpr int kSlotManuals = 6;
-    inline constexpr int kSlotsListed = 8; ///< what the player is shown
-    inline constexpr int kSlotArrival = 8;
-    inline constexpr int kSlotCount = 9;
+    inline constexpr int kSlotArrival = 2;
+    inline constexpr int kSlotManual = 3;   ///< the player's first (save1.sav) ...
+    inline constexpr int kSlotManuals = 99; ///< ... and how many of them there may be
+    inline constexpr int kSlotCount = kSlotManual + kSlotManuals;
 
     inline const char *saveSlotFile(int slot)
     {
-        static const char *const kNames[kSlotCount] = {"auto.sav",  "quick.sav", "save1.sav", "save2.sav", "save3.sav",
-                                                       "save4.sav", "save5.sav", "save6.sav", "arrival.sav"};
-        return slot >= 0 && slot < kSlotCount ? kNames[slot] : "";
+        static char manual[kSlotManuals][12];
+        if (slot == kSlotAuto)
+            return "auto.sav";
+        if (slot == kSlotQuick)
+            return "quick.sav";
+        if (slot == kSlotArrival)
+            return "arrival.sav";
+        if (slot < kSlotManual || slot >= kSlotCount)
+            return "";
+        char *name = manual[slot - kSlotManual];
+        if (name[0] == 0)
+            std::snprintf(name, sizeof(manual[0]), "save%d.sav", slot - kSlotManual + 1);
+        return name;
+    }
+    /// The slot a file is (-1: none of them).
+    inline int saveSlotOfFile(const char *name)
+    {
+        if (std::strcmp(name, "auto.sav") == 0)
+            return kSlotAuto;
+        if (std::strcmp(name, "quick.sav") == 0)
+            return kSlotQuick;
+        if (std::strcmp(name, "arrival.sav") == 0)
+            return kSlotArrival;
+        int n = 0;
+        char tail[8] = {};
+        if (std::sscanf(name, "save%d%7s", &n, tail) == 2 && std::strcmp(tail, ".sav") == 0 && n >= 1 &&
+            n <= kSlotManuals && std::strcmp(name, saveSlotFile(kSlotManual + n - 1)) == 0)
+            return kSlotManual + n - 1;
+        return -1;
     }
     inline constexpr const char *kSaveIndexFile = "index.dat";
     inline std::uint8_t saveSlotKind(int slot)
@@ -99,6 +127,13 @@ namespace hldata
             (void)name;
             return true;
         }
+        /// The names of the files there are, if the card can say (false: it
+        /// cannot, and each one is asked for by name instead).
+        virtual bool list(std::vector<std::string> &names)
+        {
+            (void)names;
+            return false;
+        }
     };
 
     struct SaveSlot
@@ -117,24 +152,51 @@ namespace hldata
 
     namespace detail
     {
-        inline constexpr char kIndexMagic[4] = {'H', 'L', 'S', 'I'};
-        struct IndexFile
+        // The index: a heading, then one entry for each save there is (the
+        // slots that have nothing are not in it). ('HLSI', the nine slots of
+        // before, is not read: it is made again from the files.)
+        inline constexpr char kIndexMagic[4] = {'H', 'L', 'S', '2'};
+        struct IndexHead
         {
             char magic[4];
             std::uint16_t version;
             std::uint16_t levelVersion;
             std::uint32_t nextSerial;
-            std::uint32_t crc; ///< of the slots
-            struct
-            {
-                std::uint32_t status;
-                SaveHeading heading;
-            } slots[kSlotCount];
+            std::uint32_t count;
+            std::uint32_t crc; ///< of the entries
+        };
+        struct IndexEntry
+        {
+            std::uint16_t slot;
+            std::uint16_t unused;
+            std::uint32_t status;
+            SaveHeading heading;
         };
 
         inline std::string freshName(int slot)
         {
             return std::string(saveSlotFile(slot)) + ".new";
+        }
+
+        /// Which slots have a file, and which a file left half-written, if
+        /// the card can list itself; false if it cannot.
+        inline bool slotsOnCard(SaveCard &card, std::vector<bool> &has, std::vector<bool> &fresh)
+        {
+            std::vector<std::string> names;
+            if (!card.list(names))
+                return false;
+            has.assign(kSlotCount, false);
+            fresh.assign(kSlotCount, false);
+            for (std::string &name : names)
+            {
+                const bool isFresh = name.size() > 4 && name.compare(name.size() - 4, 4, ".new") == 0;
+                if (isFresh)
+                    name.resize(name.size() - 4);
+                const int slot = saveSlotOfFile(name.c_str());
+                if (slot >= 0)
+                    (isFresh ? fresh : has)[slot] = true;
+            }
+            return true;
         }
 
         inline void noteHeader(const std::vector<std::uint8_t> &bytes, SaveSlot &slot)
@@ -263,27 +325,45 @@ namespace hldata
 
     inline bool saveIndexWrite(SaveCard &card, const SaveIndex &index)
     {
-        detail::IndexFile file{};
-        std::memcpy(file.magic, detail::kIndexMagic, sizeof(file.magic));
-        file.version = kSaveVersion;
-        file.levelVersion = kLevelVersion;
-        file.nextSerial = index.nextSerial;
+        // (On the heap, not the stack: a hundred entries are ten kilobytes.)
+        std::vector<detail::IndexEntry> entries;
         for (int i = 0; i < kSlotCount; ++i)
         {
-            file.slots[i].status = static_cast<std::uint32_t>(index.slots[i].status);
-            file.slots[i].heading = index.slots[i].heading;
+            if (index.slots[i].status == kSaveNone)
+                continue;
+            detail::IndexEntry entry{};
+            entry.slot = static_cast<std::uint16_t>(i);
+            entry.status = static_cast<std::uint32_t>(index.slots[i].status);
+            entry.heading = index.slots[i].heading;
+            entries.push_back(entry);
         }
-        file.crc = crc32(reinterpret_cast<const std::uint8_t *>(file.slots), sizeof(file.slots));
-        return card.write(kSaveIndexFile, reinterpret_cast<const std::uint8_t *>(&file), sizeof(file));
+        detail::IndexHead head{};
+        std::memcpy(head.magic, detail::kIndexMagic, sizeof(head.magic));
+        head.version = kSaveVersion;
+        head.levelVersion = kLevelVersion;
+        head.nextSerial = index.nextSerial;
+        head.count = static_cast<std::uint32_t>(entries.size());
+        const std::size_t entryBytes = entries.size() * sizeof(detail::IndexEntry);
+        head.crc = crc32(reinterpret_cast<const std::uint8_t *>(entries.data()), static_cast<std::uint32_t>(entryBytes));
+        std::vector<std::uint8_t> bytes(sizeof(head) + entryBytes);
+        std::memcpy(bytes.data(), &head, sizeof(head));
+        if (entryBytes != 0)
+            std::memcpy(bytes.data() + sizeof(head), entries.data(), entryBytes);
+        return card.write(kSaveIndexFile, bytes.data(), bytes.size());
     }
 
     /// The list made again from the files themselves (each put right
-    /// first), and written.
+    /// first), and written. (Only the files there are, if the card can say
+    /// which.)
     inline void saveIndexRebuild(SaveCard &card, SaveIndex &index)
     {
         index = SaveIndex();
+        std::vector<bool> has, fresh;
+        const bool listed = detail::slotsOnCard(card, has, fresh);
         for (int i = 0; i < kSlotCount; ++i)
         {
+            if (listed && !has[i] && !fresh[i])
+                continue;
             index.slots[i] = saveRecover(card, i);
             if (index.slots[i].status == kSaveGood && index.slots[i].heading.serial >= index.nextSerial)
                 index.nextSerial = index.slots[i].heading.serial + 1;
@@ -298,39 +378,60 @@ namespace hldata
     inline void saveIndexLoad(SaveCard &card, SaveIndex &index, bool recover = true)
     {
         std::vector<std::uint8_t> bytes;
-        detail::IndexFile file;
-        bool good = card.read(kSaveIndexFile, bytes, sizeof(file) + 1) && bytes.size() == sizeof(file);
+        detail::IndexHead head{};
+        constexpr std::size_t kMost = sizeof(detail::IndexHead) + kSlotCount * sizeof(detail::IndexEntry);
+        bool good = card.read(kSaveIndexFile, bytes, kMost + 1) && bytes.size() >= sizeof(head);
         if (good)
         {
-            std::memcpy(&file, bytes.data(), sizeof(file));
-            good = std::memcmp(file.magic, detail::kIndexMagic, sizeof(file.magic)) == 0 && file.version == kSaveVersion &&
-                   file.levelVersion == kLevelVersion &&
-                   file.crc == crc32(reinterpret_cast<const std::uint8_t *>(file.slots), sizeof(file.slots));
+            std::memcpy(&head, bytes.data(), sizeof(head));
+            const std::size_t entryBytes = static_cast<std::size_t>(head.count) * sizeof(detail::IndexEntry);
+            good = std::memcmp(head.magic, detail::kIndexMagic, sizeof(head.magic)) == 0 && head.version == kSaveVersion &&
+                   head.levelVersion == kLevelVersion && head.count <= static_cast<std::uint32_t>(kSlotCount) &&
+                   bytes.size() == sizeof(head) + entryBytes &&
+                   head.crc == crc32(bytes.data() + sizeof(head), static_cast<std::uint32_t>(entryBytes));
         }
         // (A new file left beside a save means the index is behind.)
-        for (int i = 0; good && recover && i < kSlotCount; ++i)
+        if (good && recover)
         {
-            std::vector<std::uint8_t> probe;
-            if (card.read(detail::freshName(i).c_str(), probe, 1))
-                good = false;
+            std::vector<bool> has, fresh;
+            if (detail::slotsOnCard(card, has, fresh))
+            {
+                for (int i = 0; good && i < kSlotCount; ++i)
+                    good = !fresh[i];
+            }
+            else
+            {
+                for (int i = 0; good && i < kSlotCount; ++i)
+                {
+                    std::vector<std::uint8_t> probe;
+                    if (card.read(detail::freshName(i).c_str(), probe, 1))
+                        good = false;
+                }
+            }
         }
         if (!good)
         {
             saveIndexRebuild(card, index);
             return;
         }
-        index.nextSerial = file.nextSerial;
-        for (int i = 0; i < kSlotCount; ++i)
+        index = SaveIndex();
+        index.nextSerial = head.nextSerial;
+        for (std::uint32_t e = 0; e < head.count; ++e)
         {
-            index.slots[i].status = static_cast<int>(file.slots[i].status);
-            index.slots[i].heading = file.slots[i].heading;
-            index.slots[i].heading.map[sizeof(index.slots[i].heading.map) - 1] = 0;
-            index.slots[i].heading.chapter[sizeof(index.slots[i].heading.chapter) - 1] = 0;
-            if (index.slots[i].status == kSaveOther)
+            detail::IndexEntry entry;
+            std::memcpy(&entry, bytes.data() + sizeof(head) + e * sizeof(entry), sizeof(entry));
+            if (entry.slot >= kSlotCount)
+                continue;
+            SaveSlot &slot = index.slots[entry.slot];
+            slot.status = static_cast<int>(entry.status);
+            slot.heading = entry.heading;
+            slot.heading.map[sizeof(slot.heading.map) - 1] = 0;
+            slot.heading.chapter[sizeof(slot.heading.chapter) - 1] = 0;
+            if (slot.status == kSaveOther)
             {
-                std::vector<std::uint8_t> head;
-                if (card.read(saveSlotFile(i), head, kSaveHeadBytes))
-                    detail::noteHeader(head, index.slots[i]);
+                std::vector<std::uint8_t> headBytes;
+                if (card.read(saveSlotFile(entry.slot), headBytes, kSaveHeadBytes))
+                    detail::noteHeader(headBytes, slot);
             }
         }
     }
@@ -618,17 +719,75 @@ namespace hldata
     }
 
     /// The most recent save that can be loaded: of those shown, or with
-    /// `arrival` of all nine. -1: none.
+    /// `arrival` of all of them. -1: none.
     inline int saveMostRecent(const SaveIndex &index, bool arrival = false)
     {
         int best = -1;
-        for (int i = 0; i < (arrival ? kSlotCount : kSlotsListed); ++i)
+        for (int i = 0; i < kSlotCount; ++i)
         {
+            if (i == kSlotArrival && !arrival)
+                continue;
             if (index.slots[i].status == kSaveGood &&
                 (best < 0 || index.slots[i].heading.serial > index.slots[best].heading.serial))
                 best = i;
         }
         return best;
+    }
+
+    /// The saves the player is shown, the most recent first (those that
+    /// cannot be read after the rest): to load from, every one but the
+    /// arrival; to save into, only their own.
+    inline void saveListed(const SaveIndex &index, bool loading, std::vector<int> &out)
+    {
+        out.clear();
+        for (int i = 0; i < kSlotCount; ++i)
+        {
+            if (i == kSlotArrival || index.slots[i].status == kSaveNone || (!loading && i < kSlotManual))
+                continue;
+            out.push_back(i);
+        }
+        auto later = [&](int a, int b)
+        {
+            const bool goodA = index.slots[a].status == kSaveGood, goodB = index.slots[b].status == kSaveGood;
+            if (goodA != goodB)
+                return goodA;
+            return index.slots[a].heading.serial != index.slots[b].heading.serial
+                       ? index.slots[a].heading.serial > index.slots[b].heading.serial
+                       : a < b;
+        };
+        for (std::size_t i = 1; i < out.size(); ++i)
+        {
+            for (std::size_t k = i; k > 0 && later(out[k], out[k - 1]); --k)
+                std::swap(out[k], out[k - 1]);
+        }
+    }
+
+    /// Where a new save of the player's goes: the first of theirs with
+    /// nothing in it. -1: all 99 are taken.
+    inline int saveFreeManual(const SaveIndex &index)
+    {
+        for (int i = kSlotManual; i < kSlotCount; ++i)
+        {
+            if (index.slots[i].status == kSaveNone)
+                return i;
+        }
+        return -1;
+    }
+
+    /// One of the player's saves gone: its file (and any left half-written)
+    /// off the card, and out of the list. False if it is not theirs, or its
+    /// file would not go.
+    inline bool saveSlotDelete(SaveCard &card, SaveIndex &index, int slot)
+    {
+        if (slot < kSlotManual || slot >= kSlotCount)
+            return false;
+        std::vector<std::uint8_t> probe;
+        card.remove(detail::freshName(slot).c_str());
+        if (card.read(saveSlotFile(slot), probe, 1) && !card.remove(saveSlotFile(slot)))
+            return false;
+        index.slots[slot] = SaveSlot();
+        saveIndexWrite(card, index);
+        return true;
     }
 
     /// A line for the list: how long was played, the map, when (if the

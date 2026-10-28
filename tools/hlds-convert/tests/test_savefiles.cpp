@@ -1,6 +1,8 @@
-// The saves on the card (shared/HlSaveFiles.hpp): nine files and a list of
-// them; a save written so that being cut off at any point loses nothing; the
-// list made again when it cannot be believed; the most recent found.
+// The saves on the card (shared/HlSaveFiles.hpp): the game's three and as
+// many of the player's as they make (up to 99), and a list of them; a save
+// written so that being cut off at any point loses nothing; the list made
+// again when it cannot be believed (from a listing of the folder, where the
+// card has one); the most recent found; one of the player's deleted.
 // Against a "card" in memory that can be told to fail at any step.
 
 #include <cstdio>
@@ -81,6 +83,20 @@ namespace
         }
     };
 
+    /// ... and one that can list itself, as the console's can.
+    struct ListingCard : MemoryCard
+    {
+        int listed = 0;
+        bool list(std::vector<std::string> &names) override
+        {
+            ++listed;
+            names.clear();
+            for (const auto &file : files)
+                names.push_back(file.first);
+            return true;
+        }
+    };
+
     SaveData game(const char *map, int health)
     {
         SaveData data;
@@ -97,10 +113,106 @@ namespace
         h.playSeconds = seconds;
         return h;
     }
+    /// The player's saves, as many as they make: their files, the list
+    /// newest first, the hundredth refused, one deleted, the list read
+    /// back from the index and made again from a listing.
+    void testMany()
+    {
+        check(std::string(saveSlotFile(kSlotManual)) == "save1.sav" &&
+                  std::string(saveSlotFile(kSlotManual + 5)) == "save6.sav" &&
+                  std::string(saveSlotFile(kSlotCount - 1)) == "save99.sav" && saveSlotFile(kSlotCount)[0] == 0,
+              "the player's saves are save1.sav to save99.sav (the six of before among them)");
+        check(saveSlotOfFile("save12.sav") == kSlotManual + 11 && saveSlotOfFile("arrival.sav") == kSlotArrival &&
+                  saveSlotOfFile("save0.sav") < 0 && saveSlotOfFile("save100.sav") < 0 &&
+                  saveSlotOfFile("save01.sav") < 0 && saveSlotOfFile("index.dat") < 0,
+              "a file's name says which save it is, and nothing else is one");
+
+        ListingCard card;
+        SaveIndex index;
+        saveIndexLoad(card, index);
+        int made = 0;
+        for (int n = 0; n < kSlotManuals; ++n)
+        {
+            const int slot = saveFreeManual(index);
+            char map[8];
+            std::snprintf(map, sizeof(map), "m%d", n);
+            if (slot >= 0 && saveSlotWrite(card, index, slot, game(map, 50), heading(map, "CHAPTER", 60 + n)))
+                ++made;
+        }
+        check(made == kSlotManuals && saveFreeManual(index) < 0, "99 saves of the player's, and no room for a hundredth");
+        std::vector<int> listed;
+        saveListed(index, false, listed);
+        check(listed.size() == static_cast<std::size_t>(kSlotManuals) && listed.front() == kSlotCount - 1 &&
+                  listed.back() == kSlotManual,
+              "listed the most recent first");
+        check(saveMostRecent(index) == kSlotCount - 1, "... the most recent is the last made");
+
+        // One deleted: gone from the card and the list, and its place is
+        // the next one's.
+        check(saveSlotDelete(card, index, kSlotManual + 40) && card.files.count("save41.sav") == 0 &&
+                  index.slots[kSlotManual + 40].status == kSaveNone && saveFreeManual(index) == kSlotManual + 40,
+              "a save deleted: its file gone, and the first free place is its");
+        check(!saveSlotDelete(card, index, kSlotAuto) && card.files.count("auto.sav") == 0,
+              "the game's own saves are not the player's to delete");
+        saveListed(index, true, listed);
+        check(listed.size() == static_cast<std::size_t>(kSlotManuals - 1), "... and it is not in the list");
+
+        // The index read back, as it is; and made again from a listing.
+        SaveIndex again;
+        saveIndexLoad(card, again);
+        bool same = again.nextSerial == index.nextSerial;
+        for (int i = 0; i < kSlotCount; ++i)
+            same = same && again.slots[i].status == index.slots[i].status &&
+                   again.slots[i].heading.serial == index.slots[i].heading.serial;
+        check(same, "the list is read back from the index as it was");
+        card.files.erase(kSaveIndexFile);
+        SaveIndex rebuilt;
+        card.listed = 0;
+        saveIndexLoad(card, rebuilt);
+        same = card.listed > 0;
+        for (int i = 0; i < kSlotCount; ++i)
+            same = same && rebuilt.slots[i].status == index.slots[i].status;
+        check(same && saveMostRecent(rebuilt) == kSlotCount - 1, "... and made again from the files, listed");
+
+        // A save cut off half-way in a high place: put right at the next start.
+        SaveIndex during = index;
+        card.budget = 1;
+        saveSlotWrite(card, during, kSlotManual + 40, game("late", 20), heading("late", "CHAPTER", 9999));
+        card.budget = -1;
+        SaveIndex after;
+        saveIndexLoad(card, after);
+        check(card.files.count("save41.sav.new") == 0, "a half-written save41 is put right at the next start");
+    }
+
+    /// A card from before: the old index (the nine slots of 'HLSI'), the
+    /// player's save1.sav and save6.sav, the arrival. All found, in their
+    /// places.
+    void testOldCard()
+    {
+        MemoryCard old;
+        SaveIndex was;
+        saveIndexLoad(old, was);
+        check(saveSlotWrite(old, was, kSlotManual, game("c1a1", 80), heading("c1a1", "UNFORESEEN", 100)) &&
+                  saveSlotWrite(old, was, kSlotManual + 5, game("c1a2", 70), heading("c1a2", "OFFICE", 200)) &&
+                  saveSlotWrite(old, was, kSlotArrival, game("c1a2", 70), heading("c1a2", "OFFICE", 200)),
+              "an old card's saves");
+        std::vector<std::uint8_t> oldIndex(880, 0);
+        std::memcpy(oldIndex.data(), "HLSI", 4);
+        old.files[kSaveIndexFile] = oldIndex;
+        SaveIndex now;
+        saveIndexLoad(old, now);
+        check(now.slots[kSlotManual].status == kSaveGood && now.slots[kSlotManual + 5].status == kSaveGood &&
+                  now.slots[kSlotArrival].status == kSaveGood && std::string(now.slots[kSlotManual + 5].heading.map) == "c1a2",
+              "an old card's index is made again, and its saves are where they were");
+        check(saveMostRecent(now) == kSlotManual + 5 && saveMostRecent(now, true) == kSlotArrival,
+              "... the most recent known (the arrival only when asked for)");
+    }
 } // namespace
 
 int main()
 {
+    testMany();
+    testOldCard();
     // An empty card: an empty list, nothing most recent.
     {
         MemoryCard card;
