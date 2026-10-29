@@ -18,6 +18,7 @@
 
 #include "HlGuest.hpp"
 #include "HlLevel.hpp"
+#include "HlLevelReader.hpp"
 #include "HlLz77Stream.hpp"
 #include "HlModel.hpp"
 #include "TestBspBuilder.hpp"
@@ -421,6 +422,54 @@ namespace
                 }
             }
             check(clean, "nothing of a DSi's, no word of the suit's, nothing twice");
+            // The guest's level: the host's, index for index, without the
+            // large hull.
+            {
+                Bytes level;
+                for (const NpacMember &member : own)
+                {
+                    if (member.path.rfind("level.", 0) == 0)
+                        level.insert(level.end(), member.data.begin(), member.data.end());
+                }
+                Bytes host;
+                std::string why;
+                readFile(fs::path(stage) / "maps" / (maps[m] + ".hlm"), host, why);
+                hldata::LevelView guest, theirs;
+                const bool open = guest.open(level.data(), static_cast<std::uint32_t>(level.size())) ==
+                                      hldata::LevelError::Ok &&
+                                  theirs.open(host.data(), static_cast<std::uint32_t>(host.size())) == hldata::LevelError::Ok;
+                check(open, "the guest's level opens with the console's reader");
+                if (open)
+                {
+                    check(guest.actorCount == theirs.actorCount && guest.logicCount == theirs.logicCount &&
+                              guest.brushCount == theirs.brushCount && guest.entityCount == theirs.entityCount &&
+                              guest.nameCount == theirs.nameCount && guest.soundCount == theirs.soundCount &&
+                              guest.modelRefCount == theirs.modelRefCount && guest.modelCount == theirs.modelCount,
+                          "... with every record the host's has, where it has it");
+                    check(guest.models[0].clipLarge == hldata::kContentsEmpty && guest.clipNodeCount < theirs.clipNodeCount,
+                          "... and without the large hull's nodes");
+                    std::printf("test_npac: %s's guest level: %zu KB (the host's %zu)\n", maps[m].c_str(),
+                                level.size() / 1024, host.size() / 1024);
+                    // Its sounds come in the order the console asks for them.
+                    std::uint32_t last = 0;
+                    bool ordered = true;
+                    for (const NpacMember &member : own)
+                    {
+                        if (member.path.rfind("snd/", 0) != 0)
+                            continue;
+                        for (std::uint32_t i = 0; i < guest.soundCount; ++i)
+                        {
+                            if (member.path == std::string("snd/") + guest.sounds[i].name + ".hsn")
+                            {
+                                ordered = ordered && i >= last;
+                                last = i;
+                                break;
+                            }
+                        }
+                    }
+                    check(ordered, "... and its sounds come in the level's order");
+                }
+            }
             // Every model's skin is there with it.
             bool skinned = true;
             for (const std::vector<NpacMember> *part : {&base, &own})
@@ -439,32 +488,36 @@ namespace
                 }
             }
             check(skinned, "every model's skin is sent with it");
-            // And all that the card's archive has for a DS is there.
+            // And of what the card's archive has, all a match needs is there:
+            // every texture and sprite, every model but the guns' and the
+            // player's (which a guest has as its own, lighter) -- the sounds
+            // being only those a match plays there.
             PackReport cardReport;
             check(packMap(stage, card, maps[m], false, cardReport, error), "the card archive is made too");
             std::vector<NpacMember> whole;
-            read(card / "maps" / (maps[m] + ".npac"), whole);
+            {
+                Bytes archive;
+                std::string why;
+                check(readFile(card / "maps" / (maps[m] + ".npac"), archive, why) && readNpac(archive, whole, why) &&
+                          !whole.empty(),
+                      "the card's archive reads back");
+            }
             int lost = 0;
             for (const NpacMember &member : whole)
             {
-                const bool dsi = member.path.find(".dsi.") != std::string::npos;
-                const bool skin = member.path.rfind("mdl/", 0) == 0 &&
-                                  member.path.compare(member.path.size() - 4, 4, ".htx") == 0;
-                if (!dsi && !skin && member.path.rfind("snd/fvox_", 0) != 0 && sent.count(member.path) == 0)
+                const bool needed = member.path.rfind("tex/", 0) == 0 || member.path.rfind("spr/", 0) == 0 ||
+                                    member.path.rfind("level.", 0) == 0 ||
+                                    (member.path.rfind("mdl/", 0) == 0 && member.path.rfind("mdl/v_", 0) != 0 &&
+                                     member.path.rfind("mdl/player", 0) != 0 &&
+                                     member.path.find(".dsi.") == std::string::npos &&
+                                     member.path.compare(member.path.size() - 4, 4, ".hmd") == 0);
+                if (needed && sent.count(member.path) == 0)
                 {
-                    // (A DSi's copy of a sound is named by its rate: a DS
-                    // reads the lowest.)
-                    bool twin = false;
-                    if (member.path.rfind("snd/", 0) == 0)
-                    {
-                        const std::string stem = member.path.substr(0, member.path.find('.'));
-                        for (const std::string &path : sent)
-                            twin = twin || path.rfind(stem + ".", 0) == 0;
-                    }
-                    lost += twin ? 0 : 1;
+                    ++lost;
+                    std::printf("test_npac: %s lacks %s\n", maps[m].c_str(), member.path.c_str());
                 }
             }
-            check(lost == 0, "the air archive and the base hold all a DS reads of the map");
+            check(lost == 0, "the guest has every texture, sprite and model a match shows");
             std::printf("test_npac: %s by air: %zu KB of its own, %zu KB with the base\n", maps[m].c_str(),
                         report.maps[m].bytes / 1024, (report.maps[m].bytes + report.baseBytes) / 1024);
         }

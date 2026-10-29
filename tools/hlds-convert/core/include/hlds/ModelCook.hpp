@@ -68,6 +68,17 @@ namespace hlds
         std::vector<hldata::ModelAttachment> attachments;
         /// The skin, before it is encoded: empty for a model with no textures.
         RgbaImage atlas;
+        /// The same skin as 256 colours, for a model a player's colours are
+        /// laid over (one with a "DM_Base" texture): that texture's own
+        /// colours, at their own places -- the runs a player's colours go
+        /// over among them -- and the rest of the skin in the nearest of the
+        /// others. Empty for any other model.
+        struct IndexedSkin
+        {
+            int width = 0, height = 0;
+            std::vector<std::uint8_t> texels; ///< width * height, a byte each
+            std::array<std::uint8_t, 768> palette{}; ///< RGB, as the skin is lit
+        } indexed;
         /// Each level's error, as the header has it (ModelHeader::levelError).
         std::uint8_t levelError[hldata::kModelLevels] = {0, hldata::kModelNoLevel, hldata::kModelNoLevel,
                                                          hldata::kModelNoLevel};
@@ -107,6 +118,19 @@ namespace hlds
     /// so only the largest of those counts.
     inline constexpr int kMapSkinTexels = 208 * 1024;
 
+    /// How closely a model is cooked: as the console's own (the defaults), or
+    /// lighter, for a console sent it with no card (a guest: its weapons,
+    /// held up to the eye, never need the thinner levels for distance, and
+    /// the hand moves quickly enough that a looser key is not seen).
+    struct ModelLean
+    {
+        bool oneLevel = false;   ///< only the finest level of detail
+        double turnOff = 0.75;   ///< how far a key may turn a bone off a frame, degrees
+        double placeOff = 0.25;  ///< ... and move it, units
+    };
+    /// A guest's weapons.
+    inline constexpr ModelLean kGuestLean = {true, 1.5, 0.5};
+
     /// Cook `mdl` with the sequences named in `clipNames` (labels, any case).
     /// Its skin is at most `skinTexels` texels (a power of two each way; the
     /// smallest is 32 x 32).
@@ -117,7 +141,7 @@ namespace hlds
 
     bool cookModel(const MdlFile &mdl, const std::vector<std::string> &clipNames, CookedModel &out,
                    ModelCookReport &report, std::string &error, int skinTexels = kModelSkinTexels,
-                   bool full = false);
+                   bool full = false, const ModelLean &lean = ModelLean());
 
     /// Serialize, then open the result with the DS's reader: fails rather
     /// than return a file the console would refuse.

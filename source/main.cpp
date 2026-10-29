@@ -857,6 +857,10 @@ int main(int argc, char *argv[])
     hlrt::topText.loadTitle();
     hlrt::guest::dropCommon();
 #endif
+#ifdef HLDS_CHILD_VRAMSOUND
+    // (A test of video memory given to the ARM7 holding a sound: Sound.hpp.)
+    hlrt::sound.vramTest(10);
+#endif
     std::string error;
     hlrt::menu.setSaves(&hlrt::SaveGame::index());
     // The title: go on with the last save, load another, begin -- or a game

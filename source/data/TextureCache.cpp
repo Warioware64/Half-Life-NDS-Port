@@ -2,6 +2,7 @@
 #include "data/TextureStream.hpp"
 
 #include <cstdio>
+#include <cstring>
 #include <cstdlib>
 #include <string>
 
@@ -16,6 +17,8 @@
 namespace hlrt
 {
     TextureCache textureCache;
+    std::uint16_t TextureCache::remapBase_[256];
+    bool TextureCache::remapReady_ = false;
 
     void TextureCache::destroy()
     {
@@ -302,7 +305,19 @@ namespace hlrt
                                                ((b / header.paletteColours) << 10));
         }
         bool ok = material != nullptr && palette != nullptr;
-        if (ok && a3i5)
+        if (ok && (header.flags & hldata::kTexturePal256))
+        {
+            ok = NEA_MaterialTexLoad(material, NEA_PAL256, header.width, header.height, flags, data) == 1 &&
+                 NEA_PaletteLoad(palette, paletteData, 256, NEA_PAL256) == 1;
+            // (Its palette as it came, for the players' own to be made from:
+            // the skin is read once.)
+            if (ok && (header.flags & hldata::kTextureRemapRuns))
+            {
+                std::memcpy(remapBase_, paletteData, sizeof(remapBase_));
+                remapReady_ = true;
+            }
+        }
+        else if (ok && a3i5)
         {
             ok = NEA_MaterialTexLoad(material, NEA_A3PAL32, header.width, header.height, flags,
                                      data) == 1 &&

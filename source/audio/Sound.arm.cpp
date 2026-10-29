@@ -1157,6 +1157,36 @@ namespace hlrt
             dspAudio.room(type);
     }
 
+#ifdef HLDS_CHILD_VRAMSOUND
+    void Sound::vramTest(int rounds)
+    {
+        const Clip &plain = ui_[0];
+        if (plain.data == nullptr)
+            return;
+        // Into bank D while it is the ARM9's (LCD, at 0x06860000), in words:
+        // video memory takes no byte written to it.
+        vramSetBankD(VRAM_D_LCD);
+        auto *to = reinterpret_cast<volatile std::uint32_t *>(0x06860000);
+        const auto *from = reinterpret_cast<const std::uint32_t *>(plain.data);
+        for (std::uint32_t i = 0; i < (plain.bytes + 3) / 4; ++i)
+            to[i] = from[i];
+        // ... then the ARM7's, at its 0x06020000: an address only it reads.
+        vramSetBankD(VRAM_D_ARM7_0x06020000);
+        Clip inVram = plain;
+        inVram.data = reinterpret_cast<std::uint8_t *>(0x06020000);
+        inVram.shared = true;
+        for (int round = 0; round < rounds; ++round)
+        {
+            start(SoundLayer::Ui, round % 2 == 0 ? inVram : plain, 127, 64, false);
+            for (int blank = 0; blank < 60; ++blank)
+            {
+                swiWaitForVBlank();
+                frame();
+            }
+        }
+    }
+#endif
+
     void Sound::ui(int which, int volume)
     {
         if (which < 0 || which >= kUiSoundCount || ui_[which].data == nullptr)

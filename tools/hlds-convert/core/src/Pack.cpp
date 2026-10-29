@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <functional>
 #include <map>
 #include <set>
 
@@ -292,6 +293,137 @@ namespace hlds
 
     namespace
     {
+        /// The level a console sent the map for a game between consoles is
+        /// given: the host's own, index for index -- every record where it was,
+        /// for what they say to each other names records by number -- with
+        /// only what it has no use for taken out:
+        ///  - the hull of something large (a bullsquid's: the world's hull
+        ///    2), which only the monsters walk by, where nothing else reaches
+        ///    into its nodes;
+        ///  - and its sounds at the full rate where the card's are halved (so
+        ///    that a sound is the same on every map: `whole` says which are).
+        bool guestLevel(std::vector<std::uint8_t> &level, const std::function<bool(const std::string &)> &whole)
+        {
+            if (level.size() < hldata::kLevelDataStart)
+                return false;
+            hldata::LevelHeader header;
+            std::memcpy(&header, level.data(), sizeof(header));
+            auto *dir = reinterpret_cast<hldata::SectionDir *>(level.data() + sizeof(hldata::LevelHeader));
+            const auto at = [&](hldata::Section s) -> hldata::SectionDir & { return dir[static_cast<int>(s)]; };
+            // Sounds at the full rate: "x.5k" becomes "x.11k" where there is one.
+            {
+                const hldata::SectionDir &d = at(hldata::Section::Sounds);
+                auto *sounds = reinterpret_cast<hldata::SoundRef *>(level.data() + d.offset);
+                for (std::uint32_t i = 0; i < d.count; ++i)
+                {
+                    std::string name = sounds[i].name;
+                    const std::size_t dot = name.rfind('.');
+                    if (dot == std::string::npos || name.compare(dot, 2, ".5") != 0 || name.size() != dot + 3)
+                        continue;
+                    const std::string full = name.substr(0, dot) + ".11" + name.substr(dot + 2);
+                    if (full.size() >= sizeof(sounds[i].name) || !whole(full))
+                        continue;
+                    std::memset(sounds[i].name, 0, sizeof(sounds[i].name));
+                    std::memcpy(sounds[i].name, full.data(), full.size());
+                }
+            }
+            // The large hull's nodes, where they are its alone.
+            std::vector<std::vector<std::uint8_t>> bytes(hldata::kSectionCount);
+            for (int s = 0; s < hldata::kSectionCount; ++s)
+                bytes[s].assign(level.begin() + dir[s].offset, level.begin() + dir[s].offset + dir[s].size);
+            {
+                auto *models = reinterpret_cast<hldata::Model *>(bytes[static_cast<int>(hldata::Section::Models)].data());
+                const std::uint32_t modelCount = at(hldata::Section::Models).count;
+                std::vector<hldata::ClipNode> nodes(at(hldata::Section::ClipNodes).count);
+                std::memcpy(nodes.data(), bytes[static_cast<int>(hldata::Section::ClipNodes)].data(),
+                            nodes.size() * sizeof(hldata::ClipNode));
+                const std::int32_t root = modelCount > 0 ? models[0].clipLarge : -1;
+                std::vector<char> large(nodes.size(), 0);
+                bool alone = root >= 0 && static_cast<std::size_t>(root) < nodes.size();
+                if (alone)
+                {
+                    std::vector<std::int32_t> open{root};
+                    while (!open.empty())
+                    {
+                        const std::int32_t n = open.back();
+                        open.pop_back();
+                        if (n < 0 || large[static_cast<std::size_t>(n)])
+                            continue;
+                        large[static_cast<std::size_t>(n)] = 1;
+                        for (std::int16_t child : nodes[static_cast<std::size_t>(n)].children)
+                            open.push_back(child);
+                    }
+                    for (std::size_t n = 0; n < nodes.size() && alone; ++n)
+                    {
+                        for (std::int16_t child : nodes[n].children)
+                            alone = alone && (large[n] || child < 0 || !large[static_cast<std::size_t>(child)]);
+                    }
+                    for (std::uint32_t m = 0; m < modelCount && alone; ++m)
+                    {
+                        for (std::int32_t r : {models[m].clipStanding, models[m].clipCrouched})
+                            alone = alone && (r < 0 || !large[static_cast<std::size_t>(r)]);
+                    }
+                }
+                if (alone)
+                {
+                    std::vector<std::int32_t> moved(nodes.size(), -1);
+                    std::vector<hldata::ClipNode> kept;
+                    for (std::size_t n = 0; n < nodes.size(); ++n)
+                    {
+                        if (!large[n])
+                        {
+                            moved[n] = static_cast<std::int32_t>(kept.size());
+                            kept.push_back(nodes[n]);
+                        }
+                    }
+                    for (hldata::ClipNode &node : kept)
+                    {
+                        for (std::int16_t &child : node.children)
+                            child = child < 0 ? child : static_cast<std::int16_t>(moved[static_cast<std::size_t>(child)]);
+                    }
+                    for (std::uint32_t m = 0; m < modelCount; ++m)
+                    {
+                        for (std::int32_t *r : {&models[m].clipStanding, &models[m].clipCrouched})
+                            *r = *r < 0 ? *r : moved[static_cast<std::size_t>(*r)];
+                    }
+                    models[0].clipLarge = hldata::kContentsEmpty;
+                    auto &clip = bytes[static_cast<int>(hldata::Section::ClipNodes)];
+                    clip.assign(reinterpret_cast<const std::uint8_t *>(kept.data()),
+                                reinterpret_cast<const std::uint8_t *>(kept.data() + kept.size()));
+                    at(hldata::Section::ClipNodes).count = static_cast<std::uint32_t>(kept.size());
+                }
+            }
+            // Laid out again, each section where its turn puts it, as the
+            // writer does (LevelWriter.cpp): in the order they were, on words.
+            std::vector<int> order(hldata::kSectionCount);
+            for (int s = 0; s < hldata::kSectionCount; ++s)
+                order[s] = s;
+            std::sort(order.begin(), order.end(), [&](int a, int b) { return dir[a].offset < dir[b].offset; });
+            std::vector<std::uint8_t> out(level.begin(), level.begin() + hldata::kLevelDataStart);
+            auto *outDir = reinterpret_cast<hldata::SectionDir *>(out.data() + sizeof(hldata::LevelHeader));
+            for (int s : order)
+            {
+                while (out.size() % 4 != 0)
+                    out.push_back(0);
+                outDir = reinterpret_cast<hldata::SectionDir *>(out.data() + sizeof(hldata::LevelHeader));
+                outDir[s].offset = static_cast<std::uint32_t>(out.size());
+                outDir[s].size = static_cast<std::uint32_t>(bytes[s].size());
+                outDir[s].count = dir[s].count;
+                out.insert(out.end(), bytes[s].begin(), bytes[s].end());
+            }
+            while (out.size() % 4 != 0)
+                out.push_back(0);
+            header.fileSize = static_cast<std::uint32_t>(out.size());
+            std::memcpy(out.data(), &header, sizeof(header));
+            header.crc32 = hldata::crc32(out.data() + sizeof(header), static_cast<std::uint32_t>(out.size() - sizeof(header)));
+            std::memcpy(out.data(), &header, sizeof(header));
+            hldata::LevelView check;
+            if (check.open(out.data(), static_cast<std::uint32_t>(out.size())) != hldata::LevelError::Ok)
+                return false;
+            level = std::move(out);
+            return true;
+        }
+
         /// What of a map a console sent it for a game between consoles is
         /// given -- what the match can show and play there, and nothing more:
         ///  - the guns it can be held: the crowbar and the 9 mm everyone
@@ -307,11 +439,34 @@ namespace hlds
         {
             std::vector<std::uint8_t> level;
             hldata::LevelView view;
-            if (!readFile(stage / "maps" / (map + ".hlm"), level, error) ||
+            const auto whole = [&](const std::string &name)
+            { return fs::exists(stage / "snd" / (name + ".hsn")); };
+            if (!readFile(stage / "maps" / (map + ".hlm"), level, error) || !guestLevel(level, whole) ||
                 view.open(level.data(), static_cast<std::uint32_t>(level.size())) != hldata::LevelError::Ok)
             {
-                error = "the staged level does not open: " + map;
+                error = "the staged level does not open, or its guest's does not: " + map;
                 return false;
+            }
+            // (The guest's level, in pieces, where the host's were.)
+            {
+                std::vector<NpacMember> pieces;
+                const std::uint32_t size = static_cast<std::uint32_t>(level.size());
+                for (std::uint32_t piece = 0; piece < hldata::levelPieces(size); ++piece)
+                {
+                    NpacMember member;
+                    member.path = "level." + std::to_string(piece);
+                    const std::uint32_t start = hldata::levelPieceStart(piece);
+                    member.data.assign(level.begin() + start, level.begin() + start + hldata::levelPieceBytes(size, piece));
+                    pieces.push_back(std::move(member));
+                }
+                std::vector<NpacMember> rest;
+                for (NpacMember &member : packing.members)
+                {
+                    if (member.path.rfind("level.", 0) != 0)
+                        rest.push_back(std::move(member));
+                }
+                pieces.insert(pieces.end(), std::make_move_iterator(rest.begin()), std::make_move_iterator(rest.end()));
+                packing.members = std::move(pieces);
             }
             std::set<std::string> held = {"v_crowbar", "v_9mmhandgun"};
             for (std::uint32_t i = 0; i < view.actorCount; ++i)
@@ -369,23 +524,77 @@ namespace hlds
                 if (held.count(name) == 0)
                     gone.insert(member.path);
             }
+            // (The sounds again, in the level's order -- the order the console
+            // asks for them in -- the full rate's where the level now says so.)
             std::vector<NpacMember> kept_;
             for (NpacMember &member : packing.members)
             {
-                const bool sound = member.path.rfind("snd/", 0) == 0;
-                if ((sound && sounds.count(member.path) == 0) || gone.count(member.path) != 0)
+                if (member.path.rfind("snd/", 0) != 0 && gone.count(member.path) == 0)
+                    kept_.push_back(std::move(member));
+            }
+            std::set<std::string> listed;
+            for (std::uint32_t i = 0; i < view.soundCount; ++i)
+            {
+                const std::string path = std::string("snd/") + view.sounds[i].name + ".hsn";
+                if (sounds.count(path) == 0 || !listed.insert(path).second)
                     continue;
-                kept_.push_back(std::move(member));
+                NpacMember member;
+                std::string ignored;
+                member.path = path;
+                member.mayCompress = false;
+                if (readFile(stage / "snd" / (std::string(view.sounds[i].name) + ".hsn"), member.data, ignored))
+                    kept_.push_back(std::move(member));
             }
             packing.members = std::move(kept_);
+            // The guns held, as a guest has them: the lighter cook (stage
+            // gst/, the same on every map -- so in the base), with its skin.
+            auto skinOf = [](const std::vector<std::uint8_t> &model, const std::string &name)
+            {
+                if (model.size() < sizeof(hldata::ModelHeader))
+                    return std::string();
+                hldata::ModelHeader header;
+                std::memcpy(&header, model.data(), sizeof(header));
+                return header.atlasWidth == 0 ? std::string()
+                                              : hldata::modelSkinFile(name.c_str(), header.atlasWidth, header.atlasHeight);
+            };
+            for (std::size_t at = 0; at < packing.members.size(); ++at)
+            {
+                NpacMember &member = packing.members[at];
+                if ((member.path.rfind("mdl/v_", 0) != 0 && member.path != "mdl/player.hmd") ||
+                    member.path.size() < 8 || member.path.compare(member.path.size() - 4, 4, ".hmd") != 0)
+                    continue;
+                const std::string name = member.path.substr(4, member.path.size() - 8);
+                std::vector<std::uint8_t> lean;
+                std::string ignored;
+                if (!readFile(stage / "gst" / (name + ".hmd"), lean, ignored))
+                    continue;
+                const std::string oldSkin = skinOf(member.data, name), newSkin = skinOf(lean, name);
+                member.data = std::move(lean);
+                for (NpacMember &skin : packing.members)
+                {
+                    if (skin.path != "mdl/" + oldSkin)
+                        continue;
+                    // (The player's in 256 colours, its own, where the stage has it.)
+                    std::vector<std::uint8_t> bytes;
+                    if (!newSkin.empty() &&
+                        (readFile(stage / "gst" / newSkin, bytes, ignored) || readFile(stage / "mdl" / newSkin, bytes, ignored)))
+                    {
+                        skin.path = "mdl/" + newSkin;
+                        skin.data = std::move(bytes);
+                    }
+                    break;
+                }
+            }
             // ... and those that came later, it has lying about: packed, last.
             for (std::uint32_t i = 0; i < view.modelRefCount; ++i)
             {
                 const char *name = view.modelRefs[i].name;
                 if (!hldata::modelRefLazy(view.modelRefs[i]) || held.count(name) == 0)
                     continue;
-                if (!packing.add(stage / "wpn" / (std::string(name) + ".hmd"), std::string("wpn/") + name + ".hmd",
-                                 true))
+                // (The lighter cook, if the stage has it; else the card's.)
+                const fs::path lean = stage / "gst" / (std::string(name) + ".hmd");
+                if (!packing.add(fs::exists(lean) ? lean : stage / "wpn" / (std::string(name) + ".hmd"),
+                                 std::string("wpn/") + name + ".hmd", true))
                     continue;
                 const NpacMember &model = packing.members.back();
                 if (model.data.size() < sizeof(hldata::ModelHeader))

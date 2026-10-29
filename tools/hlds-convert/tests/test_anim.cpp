@@ -19,6 +19,7 @@
 #include <cstring>
 
 #include "HlAnim.hpp"
+#include "HlRemap.hpp"
 #include "TestBspBuilder.hpp"
 #include "hlds/ModelCook.hpp"
 
@@ -319,6 +320,74 @@ namespace
     }
 } // namespace
 
+namespace
+{
+    /// A player's colours, as the game lays them over the player model: the
+    /// two runs of a "DM_Base" texture (or where a "RemapN_a_b_c" one says)
+    /// take the hue they are given, keeping how bright and how strong each
+    /// colour is -- and nothing else of the palette changes. And the 256-
+    /// colour skin a guest is sent keeps that texture's own colours where
+    /// they were, the runs included.
+    void testRemap(const char *dir)
+    {
+        const hldata::RemapRuns base = hldata::remapRunsOf("DM_Base.bmp");
+        check(base.any && base.topFirst == 160 && base.topLast == 191 && base.bottomFirst == 192 && base.bottomLast == 223,
+              "DM_Base's runs are 160..191 and 192..223");
+        const hldata::RemapRuns named = hldata::remapRunsOf("Remap6_128_191_255.bmp");
+        check(named.any && named.topFirst == 128 && named.topLast == 191 && named.bottomFirst == 192 &&
+                  named.bottomLast == 255,
+              "a RemapN texture says where its runs are");
+        check(!hldata::remapRunsOf("DM_Face.bmp").any, "another texture has none");
+
+        std::uint8_t palette[256][3];
+        for (int i = 0; i < 256; ++i)
+        {
+            palette[i][0] = static_cast<std::uint8_t>(200 - i / 2);
+            palette[i][1] = static_cast<std::uint8_t>(40 + i / 4);
+            palette[i][2] = static_cast<std::uint8_t>(i / 3);
+        }
+        std::uint16_t red[256], blue[256];
+        hldata::playerPalette(palette, base, 0, 170, red);
+        hldata::playerPalette(palette, base, 170, 0, blue);
+        bool outsideSame = true, insideDiffers = true, redTop = true;
+        for (int i = 0; i < 256; ++i)
+        {
+            const bool run = i >= 160 && i <= 223;
+            if (!run)
+                outsideSame = outsideSame && red[i] == blue[i];
+            if (run)
+                insideDiffers = insideDiffers && red[i] != blue[i];
+            if (i >= 160 && i <= 191)
+            {
+                // (Hue 0: red is the strongest of the three.)
+                const int r = red[i] & 31, g = (red[i] >> 5) & 31, b = (red[i] >> 10) & 31;
+                redTop = redTop && r >= g && r >= b;
+            }
+        }
+        check(outsideSame, "the colours outside the runs are the model's own, whoever's they are");
+        check(insideDiffers, "the runs take each player's colours");
+        check(redTop, "a top colour of 0 is red");
+
+        // The player model, cooked as a guest's: its skin in 256 colours.
+        hlds::MdlFile mdl;
+        std::string error;
+        if (!mdl.load(std::string(dir) + "/models/player/gordon/gordon.mdl", error))
+            return;
+        hlds::CookedModel cooked;
+        hlds::ModelCookReport report;
+        check(hlds::cookModel(mdl, {"look_idle", "run"}, cooked, report, error, 128 * 128), "the player model cooks");
+        check(cooked.indexed.width == cooked.atlas.width && cooked.indexed.height == cooked.atlas.height &&
+                  cooked.indexed.texels.size() == static_cast<std::size_t>(cooked.atlas.width * cooked.atlas.height),
+              "... with its skin in 256 colours, in the same place");
+        int inRuns = 0;
+        for (std::uint8_t index : cooked.indexed.texels)
+            inRuns += index >= 160 && index <= 223;
+        std::printf("test_anim: the player's 256-colour skin, %dx%d: %d texels a player's colours go over\n",
+                    cooked.indexed.width, cooked.indexed.height, inRuns);
+        check(inRuns > static_cast<int>(cooked.indexed.texels.size()) / 20, "... a good part of it in the players' colours");
+    }
+} // namespace
+
 int main()
 {
     const char *dir = std::getenv("HLDS_VALVE_DIR");
@@ -327,6 +396,7 @@ int main()
         std::printf("test_anim: HLDS_VALVE_DIR not set, nothing to read\ntest_anim: ok\n");
         return 0;
     }
+    testRemap(dir);
     checkModel(dir, "scientist.mdl",
                {"idle1", "walk", "run", "pondering", "push_button", "cprscientistrevive", "sitlookleft"});
     checkModel(dir, "barney.mdl", {"idle1", "walk", "run", "unlatch", "sit1"});

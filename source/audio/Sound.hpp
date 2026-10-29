@@ -163,6 +163,16 @@ namespace hlrt
         /// The group's base's copy, if it has one (net/GuestLoad.hpp).
         bool borrowClip(const char *name, Clip &clip);
 #endif
+    public:
+#ifdef HLDS_CHILD_VRAMSOUND
+        /// A test (HLDS_CHILD_VRAMSOUND): whether the ARM7's channels play a
+        /// sound out of video memory given to the ARM7 (bank D, at its
+        /// 0x06020000) as they do out of main memory. The menu's first sound
+        /// is copied there, and the two are played in turn, a second apart,
+        /// `rounds` times: a recording of the sound says if they differ.
+        void vramTest(int rounds);
+#endif
+    private:
         void place(const hldata::fx *pos, int volume, int radius, int &outVolume, int &outPan) const;
         int start(hldata::SoundLayer layer, const Clip &clip, int volume, int pan, bool loop, int tag = -1,
                   int pitch = 100);

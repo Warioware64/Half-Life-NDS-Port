@@ -13,6 +13,7 @@
 #include "data/TextureCache.hpp"
 #include "data/VramWriter.hpp"
 #include "net/GuestLoad.hpp"
+#include "HlRemap.hpp"
 
 namespace hlrt
 {
@@ -54,6 +55,59 @@ namespace hlrt
         }
     } // namespace
 
+    namespace
+    {
+        /// Each player's colours until they say their own (their profile): eight
+        /// hues apart, top and bottom unlike.
+        constexpr std::uint8_t kDefaultColours[ModelCache::kPlayerColours][2] = {
+            {30, 6}, {160, 100}, {80, 200}, {230, 40}, {120, 10}, {190, 150}, {0, 70}, {50, 250}};
+        int playerColours[ModelCache::kPlayerColours][2];
+        bool playerColoursSet = false;
+    } // namespace
+
+    void ModelCache::makePlayerPalettes(int model)
+    {
+        if (!playerColoursSet)
+        {
+            for (int s = 0; s < kPlayerColours; ++s)
+            {
+                playerColours[s][0] = kDefaultColours[s][0];
+                playerColours[s][1] = kDefaultColours[s][1];
+            }
+            playerColoursSet = true;
+        }
+        playerModel_ = model;
+        for (int s = 0; s < kPlayerColours; ++s)
+            setPlayerColours(s, playerColours[s][0], playerColours[s][1]);
+    }
+
+    void ModelCache::setPlayerColours(int slot, int top, int bottom)
+    {
+        if (slot < 0 || slot >= kPlayerColours)
+            return;
+        playerColours[slot][0] = top;
+        playerColours[slot][1] = bottom;
+        if (playerModel_ < 0)
+            return;
+        // (The skin's colours as 8 bits each, the runs given the player's
+        // hues, and back.)
+        std::uint8_t base[256][3];
+        for (int i = 0; i < 256; ++i)
+        {
+            base[i][0] = static_cast<std::uint8_t>((playerBase_[i] & 31) << 3);
+            base[i][1] = static_cast<std::uint8_t>(((playerBase_[i] >> 5) & 31) << 3);
+            base[i][2] = static_cast<std::uint8_t>(((playerBase_[i] >> 10) & 31) << 3);
+        }
+        std::uint16_t colours[256];
+        hldata::playerPalette(base, hldata::remapRunsOf("DM_Base"), top, bottom, colours);
+        if (playerPalettes_[slot] == nullptr)
+            playerPalettes_[slot] = NEA_PaletteCreate();
+        if (playerPalettes_[slot] != nullptr && NEA_PaletteLoad(playerPalettes_[slot], colours, 256, NEA_PAL256) == 1)
+            playerPaletteWords_[slot] = NEA_PaletteGetBase(playerPalettes_[slot]);
+        else
+            playerPaletteWords_[slot] = 0;
+    }
+
     void ModelCache::release(bool engineGone)
     {
         for (int i = 0; i < count_; ++i)
@@ -65,6 +119,14 @@ namespace hlrt
             if (!engineGone && palettes_ != nullptr && palettes_[i] != nullptr)
                 NEA_PaletteDelete(palettes_[i]);
         }
+        for (int s = 0; s < kPlayerColours; ++s)
+        {
+            if (!engineGone && playerPalettes_[s] != nullptr)
+                NEA_PaletteDelete(playerPalettes_[s]);
+            playerPalettes_[s] = nullptr;
+            playerPaletteWords_[s] = 0;
+        }
+        playerModel_ = -1;
         std::free(views_);
         std::free(blocks_);
         std::free(materials_);
@@ -92,6 +154,12 @@ namespace hlrt
             materials_[i] = nullptr;
             palettes_[i] = nullptr;
         }
+        for (int s = 0; s < kPlayerColours; ++s)
+        {
+            playerPalettes_[s] = nullptr;
+            playerPaletteWords_[s] = 0;
+        }
+        playerModel_ = -1;
         // (Gone with the old engine, and the slots with it; wanted_ stays, and
         // is put back once there are slots again.)
         resident_ = residentSlot_ = writing_ = writingSlot_ = -1;
@@ -331,6 +399,12 @@ namespace hlrt
                 ++bare_;
                 if (kept_ != nullptr)
                     kept_[i] = 0;
+            }
+            // (A skin with a player's colours to lay over it: each player's
+            // palette, made from its own.)
+            else if (TextureCache::takeRemapBase(playerBase_))
+            {
+                makePlayerPalettes(i);
             }
         }
     }

@@ -41,6 +41,20 @@ namespace hlrt
         const hldata::ModelView *views() const { return views_; }
         int count() const { return count_; }
         NEA_Material *skin(unsigned index) const { return materials_[index]; }
+        /// Drawing the model `index` as player `slot` of a game between
+        /// consoles: the palette word of that player's colours, for a skin
+        /// that has them (a 256-colour one: a console sent the game); 0 for
+        /// the skin's own.
+        std::uint32_t playerPalette(unsigned index, int slot) const
+        {
+            return static_cast<int>(index) == playerModel_ && slot >= 0 && slot < kPlayerColours
+                       ? playerPaletteWords_[slot]
+                       : 0;
+        }
+        /// Player `slot`'s colours (0..255 each, the game's top and bottom):
+        /// their palette made again.
+        void setPlayerColours(int slot, int top, int bottom);
+        static constexpr int kPlayerColours = 8;
         int missing() const { return missing_; }
 
         /// `index`: weapon in hand; -1: none. A weapon the map has not is
@@ -79,6 +93,13 @@ namespace hlrt
         ModelCache &operator=(const ModelCache &) = delete;
 
     private:
+        // A skin a player's colours are laid over (TextureCache::takeRemapBase):
+        // its model, its palette as it came, and each player's.
+        int playerModel_ = -1;
+        std::uint16_t playerBase_[256] = {};
+        NEA_Palette *playerPalettes_[kPlayerColours] = {};
+        std::uint32_t playerPaletteWords_[kPlayerColours] = {};
+        void makePlayerPalettes(int model);
         void release(bool engineGone);
         void putAway(std::uint32_t now);
         bool lazy(int index) const;

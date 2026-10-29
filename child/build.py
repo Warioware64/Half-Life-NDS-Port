@@ -43,6 +43,10 @@ if not CLEANING:
 # is left of the memory is then what a guest sent them over the air has.
 fromcard = os.environ.get('HLDS_CHILD_FROMCARD', '').strip()
 extra = ['HLDS_CHILD_FROMCARD=\\"%s\\"' % fromcard] if fromcard else []
+# HLDS_CHILD_VRAMSOUND=1: the test of a sound played out of bank D given to
+# the ARM7 (Sound.hpp, vramTest), at the start.
+if os.environ.get('HLDS_CHILD_VRAMSOUND'):
+    extra.append('HLDS_CHILD_VRAMSOUND')
 
 arm9 = Arm9Binary(
     sourcedirs=['engine', 'game'],

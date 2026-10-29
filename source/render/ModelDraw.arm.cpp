@@ -13,6 +13,7 @@
 #include "HlPolygonIds.hpp"
 #include "Settings.hpp"
 #include "data/ModelCache.hpp"
+#include "net/NetGame.hpp"
 #include "game/Game.hpp"
 #include "game/Player.hpp"
 #include "render/Camera.hpp"
@@ -200,9 +201,16 @@ namespace hlrt
 
         const NEA_Material *skin = modelCache.skin(modelIndex);
         if (skin != nullptr)
+        {
             NEA_MaterialUse(skin);
+            // (Another player in a game between consoles: in their colours.)
+            if (const std::uint32_t palette = modelCache.playerPalette(modelIndex, id - netGame.match().firstActor))
+                GFX_PAL_FORMAT = palette;
+        }
         else
+        {
             GFX_TEX_FORMAT = 0;
+        }
         // Lit by the one light: how bright the actor stands sets its colour.
         const int bright = actor.light > 31 ? 31 : actor.light;
         // The lamp is a light of the hardware's own on whatever is in its

@@ -1,4 +1,6 @@
 #include "hlds/ModelCook.hpp"
+
+#include "HlRemap.hpp"
 #include "hlds/ModelMesh.hpp"
 
 #include <algorithm>
@@ -231,6 +233,87 @@ namespace hlds
                             to[0] = from[0], to[1] = from[1], to[2] = from[2];
                         }
                         to[3] = 255;
+                    }
+                }
+            }
+        }
+
+        /// The skin again as 256 colours (CookedModel::indexed), in the same
+        /// places, where the model has a texture a player's colours go over.
+        /// Texels are taken as they are, never blended: an index is a colour
+        /// only of its own palette.
+        void buildIndexedAtlas(const MdlFile &mdl, const RgbaImage &atlas, const std::vector<AtlasRect> &rects,
+                               CookedModel::IndexedSkin &out)
+        {
+            out = CookedModel::IndexedSkin();
+            int base = -1;
+            for (std::size_t t = 0; t < mdl.textures.size(); ++t)
+            {
+                if (hldata::remapRunsOf(mdl.textures[t].name.c_str()).any)
+                    base = static_cast<int>(t);
+            }
+            if (base < 0 || atlas.width == 0)
+                return;
+            const MdlTexture &remap = mdl.textures[static_cast<std::size_t>(base)];
+            const hldata::RemapRuns runs = hldata::remapRunsOf(remap.name.c_str());
+            out.width = atlas.width;
+            out.height = atlas.height;
+            out.texels.assign(static_cast<std::size_t>(atlas.width) * atlas.height, 0);
+            for (int i = 0; i < 768; ++i)
+                out.palette[static_cast<std::size_t>(i)] = brightened(remap.palette[static_cast<std::size_t>(i)]);
+            // (Another texture's colour: the nearest of the remap texture's that
+            // no player's colours go over.)
+            auto nearest = [&](const std::uint8_t *rgb)
+            {
+                int best = 0;
+                long bestOff = -1;
+                for (int i = 0; i < 256; ++i)
+                {
+                    if ((i >= runs.topFirst && i <= runs.topLast) || (i >= runs.bottomFirst && i <= runs.bottomLast))
+                        continue;
+                    long off = 0;
+                    for (int c = 0; c < 3; ++c)
+                    {
+                        const long d = static_cast<long>(rgb[c]) - out.palette[static_cast<std::size_t>(i * 3 + c)];
+                        off += d * d;
+                    }
+                    if (bestOff < 0 || off < bestOff)
+                    {
+                        bestOff = off;
+                        best = i;
+                    }
+                }
+                return static_cast<std::uint8_t>(best);
+            };
+            constexpr int kBorder = 2;
+            for (std::size_t t = 0; t < mdl.textures.size(); ++t)
+            {
+                const MdlTexture &texture = mdl.textures[t];
+                const AtlasRect &rect = rects[t];
+                if (rect.w <= 0 || rect.h <= 0 || texture.width <= 0 || texture.height <= 0)
+                    continue;
+                // (Its colours in the remap texture's: worked out once each.)
+                std::array<std::uint8_t, 256> mapped{};
+                for (int i = 0; i < 256; ++i)
+                {
+                    std::uint8_t rgb[3];
+                    for (int c = 0; c < 3; ++c)
+                        rgb[c] = brightened(texture.palette[static_cast<std::size_t>(i * 3 + c)]);
+                    mapped[static_cast<std::size_t>(i)] = static_cast<int>(t) == base ? static_cast<std::uint8_t>(i) : nearest(rgb);
+                }
+                for (int y = -kBorder; y < rect.h + kBorder; ++y)
+                {
+                    for (int x = -kBorder; x < rect.w + kBorder; ++x)
+                    {
+                        const int ax = rect.x + x, ay = rect.y + y;
+                        if (ax < 0 || ay < 0 || ax >= atlas.width || ay >= atlas.height)
+                            continue;
+                        const int sx = std::clamp(x, 0, rect.w - 1) * texture.width / rect.w;
+                        const int sy = std::clamp(y, 0, rect.h - 1) * texture.height / rect.h;
+                        const std::uint8_t index =
+                            rect.flat ? mapped[0]
+                                      : mapped[texture.pixels[static_cast<std::size_t>(sy) * texture.width + sx]];
+                        out.texels[static_cast<std::size_t>(ay) * atlas.width + ax] = index;
                     }
                 }
             }
@@ -493,7 +576,8 @@ namespace hlds
     }
 
     bool cookModel(const MdlFile &mdl, const std::vector<std::string> &clipNames, CookedModel &out,
-                   ModelCookReport &report, std::string &error, int skinTexels, bool full)
+                   ModelCookReport &report, std::string &error, int skinTexels, bool full,
+                   const ModelLean &lean)
     {
         out = CookedModel();
         report = ModelCookReport();
@@ -523,6 +607,7 @@ namespace hlds
         // ---- the skin
         std::vector<AtlasRect> rects;
         buildAtlas(mdl, out.atlas, rects, skinTexels);
+        buildIndexedAtlas(mdl, out.atlas, rects, out.indexed);
         const bool textured = out.atlas.width != 0;
         if (!textured)
             rects.assign(mdl.textures.size(), AtlasRect());
@@ -552,7 +637,7 @@ namespace hlds
                                 ? std::max(kModelTriangleTarget, sourceTriangles / 4)
                                 : sourceTriangles;
         std::vector<int> levelTargets = {allowed};
-        if (sourceTriangles > kModelLevelLeast * 2)
+        if (sourceTriangles > kModelLevelLeast * 2 && !lean.oneLevel)
         {
             levelTargets.push_back(std::max(kModelLevelLeast, allowed / 2));
             levelTargets.push_back(std::max(kModelLevelLeast, allowed * 35 / 100));
@@ -909,7 +994,7 @@ namespace hlds
                             for (int f = 0; f < frameCount && good; ++f)
                             {
                                 const BoneFrame got = blendKeys(frames, candidate, f);
-                                good = rotation ? turnOff(got, f) <= 0.75 : placeOff(got, f) <= 0.25;
+                                good = rotation ? turnOff(got, f) <= lean.turnOff : placeOff(got, f) <= lean.placeOff;
                             }
                             if (good)
                                 return candidate;

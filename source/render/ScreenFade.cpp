@@ -21,6 +21,11 @@ namespace hlrt
 
     void ScreenFade::showLayer(int eva)
     {
+#ifdef HLDS_CHILD
+        // (Sent the game, bank D is the ARM7's: a coloured fade is not shown.)
+        (void)eva;
+        return;
+#endif
         if (!layer_)
         {
             vramSetBankD(VRAM_D_MAIN_BG_0x06000000);

@@ -47,6 +47,14 @@ namespace hldata
     /// plain and opaque, drawn as the texture's flat color until the texture has been read in.
     /// Everything else is resident in video memory for the lifespan of the map.
     inline constexpr std::uint32_t kTextureStreamed = 32;
+    /// 256 colours, a byte a texel (the hardware's 256-colour form): a skin
+    /// a player's colours are laid over by changing its palette alone -- the
+    /// player model a console sent a game between consoles draws the others
+    /// with (HlRemap.hpp).
+    inline constexpr std::uint32_t kTexturePal256 = 64;
+    /// ... whose palette has the game's two runs of a player's colours where
+    /// "DM_Base" has them: 160..191 the top, 192..223 the bottom.
+    inline constexpr std::uint32_t kTextureRemapRuns = 128;
     /// What it is made of, for how a step on it sounds: bits 8..11 hold a
     /// Material (the game's sound/materials.txt, by the texture's name).
     inline constexpr int kTextureMaterialShift = 8;
@@ -136,9 +144,11 @@ namespace hldata
             return false;
         const std::uint32_t texels = static_cast<std::uint32_t>(h.width) * h.height;
         const bool a3i5 = (h.flags & kTextureA3I5) != 0;
-        const bool pieces = a3i5 ? (h.texelBytes == texels && h.indexBytes == 0 &&
-                                    h.paletteColours <= kA3I5Colours)
-                                 : (h.texelBytes == texels / 4 && h.indexBytes == texels / 8);
+        const bool pal256 = (h.flags & kTexturePal256) != 0;
+        const bool pieces = pal256 ? (h.texelBytes == texels && h.indexBytes == 0 && h.paletteColours == 256)
+                            : a3i5 ? (h.texelBytes == texels && h.indexBytes == 0 &&
+                                      h.paletteColours <= kA3I5Colours)
+                                   : (h.texelBytes == texels / 4 && h.indexBytes == texels / 8);
         return pieces &&
                h.paletteBytes == ((static_cast<std::uint32_t>(h.paletteColours) * 2 + 3) & ~3u) &&
                h.paletteColours != 0 &&

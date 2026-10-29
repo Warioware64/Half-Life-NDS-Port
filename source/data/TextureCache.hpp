@@ -102,11 +102,26 @@ namespace hlrt
                            NEA_Material *&material, NEA_Palette *&palette, std::uint16_t *tint = nullptr,
                            bool ramBacked = false);
 
+        /// The palette of the last 256-colour skin loaded that has a player's
+        /// colours laid over it (hldata::kTextureRemapRuns), into `out` (256
+        /// colours), once: what the players' own palettes are made from.
+        static bool takeRemapBase(std::uint16_t *out)
+        {
+            if (!remapReady_)
+                return false;
+            for (int i = 0; i < 256; ++i)
+                out[i] = remapBase_[i];
+            remapReady_ = false;
+            return true;
+        }
+
         TextureCache() = default;
         TextureCache(const TextureCache &) = delete;
         TextureCache &operator=(const TextureCache &) = delete;
 
     private:
+        static std::uint16_t remapBase_[256];
+        static bool remapReady_;
         bool loadOne(unsigned index);
         bool makeFlat(unsigned index, std::uint16_t colour);
 

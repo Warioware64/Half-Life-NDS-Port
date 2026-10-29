@@ -316,6 +316,7 @@ namespace hlds
             std::vector<std::uint8_t> bytesDsi;
             std::vector<std::string> eventSounds; ///< CookedModel::eventSounds
             RgbaImage atlas;
+            CookedModel::IndexedSkin indexed; ///< the 256-colour skin, where a player's colours go over it
             int triangles = 0, fullTriangles = 0; ///< body 0 at its finest, in each
             int far = 0;                          ///< ... and at its coarsest
             bool lazy = false; ///< a weapon the map has not: in the common archive (kModelRefLazy)
@@ -325,6 +326,10 @@ namespace hlds
         // all the same, to be loaded if a cheat gives one (each with every
         // clip the game plays, and a skin of one size: kLazySkinTexels).
         std::vector<ModelNeed> lazyNeeds;
+        // Every weapon, as a console sent the map for a game between consoles
+        // has them (cooked lighter, kGuestLean, and the same on every map:
+        // stage gst/). Only for a map such a game is played on.
+        std::vector<ModelNeed> guestWeapons;
         int modelTexels = 0;
         std::vector<ModelNeed> needs = collectModelNeeds(entities);
         // And of those who may walk in from next door: each neighbouring map
@@ -438,6 +443,18 @@ namespace hlds
                 hold(one);
             for (const Held &one : kLater)
                 hold(one);
+            for (const Held *list : {&kHeld[0], &kLater[0]})
+            {
+                const std::size_t count = list == &kHeld[0] ? std::size(kHeld) : std::size(kLater);
+                for (std::size_t i = 0; i < count; ++i)
+                {
+                    ModelNeed weapon;
+                    weapon.name = list[i].name;
+                    weapon.file = std::string("models/") + list[i].name + ".mdl";
+                    weapon.clips = list[i].clips;
+                    guestWeapons.push_back(weapon);
+                }
+            }
             // ... and what they leave about: a satchel thrown, a snark let
             // go, a bolt in a wall. (A tripmine on one is v_tripmine's mine,
             // above.)
@@ -484,7 +501,8 @@ namespace hlds
         addMultiplayerNeeds(entities, needs);
         // One model, with a skin of at most `skinTexels`. False if it cannot
         // be read or cooked (said once, in the warnings).
-        auto cookOne = [&](const ModelNeed &need, int skinTexels, ModelOut &out, bool quiet)
+        auto cookOne = [&](const ModelNeed &need, int skinTexels, ModelOut &out, bool quiet,
+                           const ModelLean &lean = ModelLean())
         {
             // The map names the file in whatever case its author typed.
             fs::path file = options_.gameDir;
@@ -526,7 +544,7 @@ namespace hlds
             ModelCookReport modelReport;
             out = ModelOut();
             out.name = need.name;
-            const bool cookedOk = cookModel(mdl, clips, cooked, modelReport, why, skinTexels);
+            const bool cookedOk = cookModel(mdl, clips, cooked, modelReport, why, skinTexels, false, lean);
             out.eventSounds = cooked.eventSounds;
             if (!cookedOk ||
                 !writeModel(cooked, out.bytes, why))
@@ -543,6 +561,7 @@ namespace hlds
                     result.warnings.push_back("model '" + need.file + "' has no clip '" + missing + "'");
             }
             out.atlas = std::move(cooked.atlas);
+            out.indexed = std::move(cooked.indexed);
             out.triangles = modelReport.triangles;
             out.fullTriangles = modelReport.sourceTriangles;
             out.far = modelReport.levels.empty() ? modelReport.triangles : modelReport.levels.back().triangles;
@@ -754,6 +773,26 @@ namespace hlds
                     cookOptions.lazyModelSounds.push_back(sound);
             }
             models.push_back(std::move(out));
+        }
+        // The guest's weapons (above), where a game between consoles is
+        // played on the map: written apart, not the map's.
+        std::vector<ModelOut> guestModels;
+        bool multiplayer = false;
+        for (const Entity &entity : entities)
+            multiplayer = multiplayer || entity.className() == "info_player_deathmatch";
+        for (const ModelNeed &need : multiplayer ? guestWeapons : std::vector<ModelNeed>())
+        {
+            ModelOut out;
+            if (cookOne(need, hldata::kLazySkinTexels, out, true, kGuestLean))
+                guestModels.push_back(std::move(out));
+        }
+        // ... and the others in the game as it sees them: the player model,
+        // its skin in 256 colours, each player's laid over it by its palette.
+        for (const ModelNeed &need : needs)
+        {
+            ModelOut out;
+            if (multiplayer && need.name == kPlayerModelName && cookOne(need, 128 * 128, out, true))
+                guestModels.push_back(std::move(out));
         }
         cookOptions.viewModel = kViewModelName;
         // (What the models sound like as they move: the level has to know
@@ -1022,6 +1061,28 @@ namespace hlds
                     if (!writeFileAtomic(file, packSound(cooked, hash), result.error))
                         return result;
                 }
+                // (Halved here, a sound is still wanted whole by a console
+                // sent the map for a game between consoles: there, every
+                // sound is at the full rate, the same on every map.)
+                if (multiplayer && kept[one.index] && one.cooked.rate < hldata::kSoundRate)
+                {
+                    const CookedSound whole = encodeSound(one.wav, hldata::kSoundRate, loops);
+                    const std::uint32_t settings[] = {static_cast<std::uint32_t>(whole.rate), loops ? 1u : 0u,
+                                                      hldata::kSoundVersion, 2u};
+                    const std::uint32_t hash =
+                        one.sourceHash ^
+                        hldata::crc32(reinterpret_cast<const std::uint8_t *>(settings), sizeof(settings)) * 131u;
+                    const fs::path file =
+                        stageDir() / "snd" / (soundCardName(level.soundPaths[one.index], whole.rate, loops) + ".hsn");
+                    std::vector<std::uint8_t> existing;
+                    std::string why;
+                    CookedSound old;
+                    hldata::SoundHeader oldHeader;
+                    if (!(readFile(file, existing, why) && unpackSound(existing, old, oldHeader) &&
+                          oldHeader.sourceHash == hash) &&
+                        !writeFileAtomic(file, packSound(whole, hash), result.error))
+                        return result;
+                }
             }
             result.sounds = static_cast<int>(made.size());
             result.soundKb = static_cast<int>(total / 1024);
@@ -1167,7 +1228,8 @@ namespace hlds
             // in (a map crowded with models has them smaller), shared by
             // every map that uses the model at that size, and encoded again
             // only if the picture has changed.
-            for (const auto &model : models)
+            for (const auto *list : {&models, &guestModels})
+            for (const auto &model : *list)
             {
                 if (!ok || model.atlas.width == 0)
                     continue;
@@ -1243,6 +1305,30 @@ namespace hlds
             if (model.bytesDsi.empty())
                 fs::remove(dsi, gone);
             else if (!writeFileAtomic(dsi, model.bytesDsi, result.error))
+                return result;
+        }
+        for (const auto &model : guestModels)
+        {
+            if (!writeFileAtomic(stageDir() / "gst" / (model.name + ".hmd"), model.bytes, result.error))
+                return result;
+            if (model.indexed.width == 0)
+                continue;
+            // The 256-colour skin, beside it.
+            CookedTexture skin;
+            skin.width = model.indexed.width;
+            skin.height = model.indexed.height;
+            skin.texels = model.indexed.texels;
+            for (int i = 0; i < 256; ++i)
+            {
+                const auto *rgb = &model.indexed.palette[static_cast<std::size_t>(i * 3)];
+                const std::uint16_t c = static_cast<std::uint16_t>((rgb[0] >> 3) | ((rgb[1] >> 3) << 5) | ((rgb[2] >> 3) << 10));
+                skin.palette.push_back(static_cast<std::uint8_t>(c & 0xFF));
+                skin.palette.push_back(static_cast<std::uint8_t>(c >> 8));
+            }
+            const fs::path file = stageDir() / "gst" /
+                                  hldata::modelSkinFile(model.name.c_str(), skin.width, skin.height);
+            if (!writeFileAtomic(file, packTexture(skin, hldata::kTexturePal256 | hldata::kTextureRemapRuns, 0),
+                                 result.error))
                 return result;
         }
         result.actors = static_cast<int>(level.actors.size());

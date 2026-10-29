@@ -26,6 +26,11 @@ namespace hlrt
 
     bool FrameFreeze::freeze()
     {
+#ifdef HLDS_CHILD
+        // (Sent the game, bank D is the ARM7's -- the sounds' -- not this
+        // picture's: a load goes dark instead.)
+        return false;
+#endif
         if (frozen_)
             return true;
         frozen_ = true;
