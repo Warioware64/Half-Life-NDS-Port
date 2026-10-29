@@ -43,6 +43,9 @@ namespace hlrt
         /// The same, as the game's title: CONTINUE, LOAD GAME, NEW GAME,
         /// OPTIONS, with no game behind it.
         void openTitle();
+        /// The same, on the lobby of the game between consoles this console
+        /// is in (a match over: back to it).
+        void openLobby();
         /// The list of saves that the load and save pages show (the
         /// caller's: SaveGame::index()).
         void setSaves(const hldata::SaveIndex *saves) { saves_ = saves; }

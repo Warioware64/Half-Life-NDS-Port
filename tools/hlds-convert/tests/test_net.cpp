@@ -826,10 +826,10 @@ namespace
                 if (p == n)
                     continue;
                 const ActorState &actor = room.c[n]->other(p);
-                fx feet[3] = {room.c[p]->player().origin[0], room.c[p]->player().origin[1],
-                              room.c[p]->player().origin[2] - fxFromInt(36)};
+                // (Their middle, where the players' model has its origin.)
+                const fx *middle = room.c[p]->player().origin;
                 seen = seen && actor.active && actor.kind == static_cast<std::uint8_t>(ActorKind::Player) &&
-                       far(actor.pos, feet) <= 2 && (actor.flags & kActorSolid) && actor.clip >= 0 &&
+                       far(actor.pos, middle) <= 2 && (actor.flags & kActorSolid) && actor.clip >= 0 &&
                        room.c[n]->g().actorBoxes[room.c[n]->match->firstActor + p].active;
                 named = named && std::strcmp(room.c[n]->match->names[p], kNames[p]) == 0;
                 apart = apart && far(room.c[n]->player().origin, room.c[p]->player().origin) > 100;
@@ -847,6 +847,44 @@ namespace
                               actor.kind == static_cast<std::uint8_t>(ActorKind::Player));
         }
         check(empty, "nobody of the map's own is in the match");
+
+        // ---- a shot at the middle of one, where their body is drawn, hits
+        {
+            Console &shooter = *room.c[0];
+            const int target = 1;
+            // (Put where the host has a clear line to them, a hundred units off.)
+            for (int k = 0; k < 8; ++k)
+            {
+                fx sine, cosine;
+                fxSinCos(static_cast<std::uint16_t>(k * 8192), sine, cosine);
+                const fx to[3] = {shooter.player().origin[0] + cosine * 100, shooter.player().origin[1] + sine * 100,
+                                  shooter.player().origin[2]};
+                if (!lineClear(shooter.g().logic.world[0], shooter.player().origin, to))
+                    continue;
+                for (int i = 0; i < 3; ++i)
+                    room.c[target]->player().origin[i] = to[i];
+                break;
+            }
+            room.run(30);
+            const fx eye[3] = {shooter.player().origin[0], shooter.player().origin[1],
+                               shooter.player().origin[2] + fxFromInt(28)};
+            const ActorState &seenAt = shooter.other(target);
+            fx dir[3] = {seenAt.pos[0] - eye[0], seenAt.pos[1] - eye[1], seenAt.pos[2] - eye[2]};
+            const fx length = fxLength(dir);
+            for (int i = 0; i < 3 && length > 0; ++i)
+                dir[i] = static_cast<fx>((static_cast<std::int64_t>(dir[i]) << kFxShift) / length);
+            if (lineClear(shooter.g().logic.world[0], eye, seenAt.pos))
+            {
+                const int health = room.c[target]->player().health;
+                fireLine(shooter.g().logic, shooter.player(), eye, dir, 8192, 8, true, kMarkShot, nullptr);
+                room.run(40);
+                check(room.c[target]->player().health < health,
+                      "a shot at a player's middle, where their body is drawn, hits them");
+                room.c[target]->player().health = 100;
+            }
+            else
+                std::printf("test_net: (no clear line from the host to a player: the shot at a middle not tried)\n");
+        }
 
         // ---- a hit: claimed by the shooter, taken by the victim, once
         Console &anna = *room.c[1], &bob = *room.c[2], &host = *room.c[0];
@@ -887,7 +925,7 @@ namespace
         {
             fx from[3] = {anna.player().origin[0], anna.player().origin[1], anna.player().origin[2]};
             const ActorState &body = anna.other(2);
-            fx at[3] = {body.pos[0], body.pos[1], body.pos[2] + fxFromInt(20)};
+            fx at[3] = {body.pos[0], body.pos[1], body.pos[2]};
             fx dir[3] = {at[0] - from[0], at[1] - from[1], at[2] - from[2]};
             const fx length = fxLength(dir);
             for (int i = 0; i < 3 && length > 0; ++i)

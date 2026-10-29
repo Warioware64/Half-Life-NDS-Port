@@ -87,6 +87,13 @@ namespace hlrt
         bool startAsked(std::string &map, int &skill);
         /// The map is loaded: the match begins here.
         void mapLoaded();
+        /// The match is over and its scores have been shown: the map is to
+        /// be left for the host's lobby, where the host may start another.
+        /// True once per match.
+        bool lobbyAsked();
+        /// ... and it has been left (the map is gone): the lobby again, with
+        /// whoever is still there.
+        void toLobby();
 
         // ---------------------------------------------------------- frames
         void frame();
@@ -122,6 +129,8 @@ namespace hlrt
         std::uint32_t sent_ = 0, heard_ = 0;
         std::uint32_t profilesSeen_ = 0; ///< the match's profileStamp, when the colours were last set
         std::uint32_t ticks_ = 0;
+        int overMs_ = 0;      ///< how long the match has been over
+        bool lobbyAsked_ = false;
 
         void send();
         void sayProfile();

@@ -2943,8 +2943,10 @@ namespace hldata
                 mins[i] = actor.pos[i] - fxFromInt(16);
                 maxs[i] = actor.pos[i] + fxFromInt(16);
             }
-            mins[2] = actor.pos[2];
-            maxs[2] = actor.pos[2] + fxFromInt(actor.mood != 0 ? 36 : 72);
+            // (Their origin is their middle: the game's player's box about it.)
+            const fx half = fxFromInt(actor.mood != 0 ? 18 : 36);
+            mins[2] = actor.pos[2] - half;
+            maxs[2] = actor.pos[2] + half;
             return;
         }
         if (isPerson(actor.kind))

@@ -227,7 +227,8 @@ namespace hlrt
             // counts) -- or where it has fallen on the wall, if they stand
             // in that.
             const int d[3] = {fxToInt(actor.pos[0] - camera.pos[0]), fxToInt(actor.pos[1] - camera.pos[1]),
-                              fxToInt(actor.pos[2] - camera.pos[2]) + 36};
+                              fxToInt(actor.pos[2] - camera.pos[2]) +
+                                  (actor.kind == static_cast<std::uint8_t>(ActorKind::Player) ? 0 : 36)};
             const int along = (d[0] * camera.forward[0] + d[1] * camera.forward[1] + d[2] * camera.forward[2]) >> 12;
             if (along > 0 && along < kLampReach)
             {

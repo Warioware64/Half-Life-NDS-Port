@@ -123,7 +123,11 @@ namespace hlrt
     void BottomScreen::drawBar()
     {
         Canvas &canvas = touchCanvas.canvas();
-        const TouchLayout at = touchLayout(mirrored_, netGame.playing());
+        // (The bar has other buttons in a match: what was there before is
+        // cleared, not drawn over.)
+        matchBar_ = netGame.playing();
+        const TouchLayout at = touchLayout(mirrored_, matchBar_);
+        canvas.fill(0, 0, kTouchWidth, kTouchBarHeight, kUiBack);
         label(at.menu, "MENU", held_ == kTouchMenu);
         label(at.use, "USE", held_ == kTouchUse);
         if (at.spray.w > 0)
@@ -395,7 +399,7 @@ namespace hlrt
 
     void BottomScreen::setStatus(int weapon, int clip, int spare, unsigned have, unsigned empty, bool canReload)
     {
-        const bool bar = canReload != canReload_;
+        const bool bar = canReload != canReload_ || netGame.playing() != matchBar_;
         const bool slots = weapon != weapon_ || clip != clip_ || spare != spare_ || have != have_;
         empty_ = empty;
         canReload_ = canReload;

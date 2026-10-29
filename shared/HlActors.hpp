@@ -772,6 +772,19 @@ namespace hldata
         }
         box.mins[2] = actor.pos[2];
         box.maxs[2] = actor.pos[2] + height;
+        // (Another player in a match: their origin is their middle, as the
+        // game's player's is, and theirs is its box -- crouched, half.)
+        if (actor.kind == static_cast<std::uint8_t>(ActorKind::Player))
+        {
+            const fx halfHigh = fxFromInt(actor.mood != 0 ? 18 : 36);
+            for (int i = 0; i < 2; ++i)
+            {
+                box.mins[i] = actor.pos[i] - fxFromInt(16);
+                box.maxs[i] = actor.pos[i] + fxFromInt(16);
+            }
+            box.mins[2] = actor.pos[2] - halfHigh;
+            box.maxs[2] = actor.pos[2] + halfHigh;
+        }
         // (A turret is where it is fixed, as much below as above; under a
         // ceiling, all below.)
         if (isTurret(actor.kind))

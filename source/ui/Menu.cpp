@@ -280,6 +280,15 @@ namespace hlrt
         draw();
     }
 
+    void Menu::openLobby()
+    {
+        open();
+        probeCard();
+        title_ = true;
+        page_ = netGame.isHost() ? Page::NetHost : Page::NetLobby;
+        draw();
+    }
+
     /// Which game: the game, its Hazard Course, Uplink -- each one there
     /// only if its first map is on the card.
     void Menu::probeCard()

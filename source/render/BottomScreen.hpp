@@ -95,6 +95,7 @@ namespace hlrt
         unsigned have_ = 0;
         int held_ = 0;
         bool mirrored_ = false; ///< as the pad was last drawn
+        bool matchBar_ = false; ///< the bar was drawn with a match's buttons (SPRAY)
         bool padPending_ = false; ///< the pad drawn off the screen, not yet on it
         bool iconsTried_ = false;
     };

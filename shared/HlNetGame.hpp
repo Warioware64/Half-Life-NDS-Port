@@ -35,6 +35,9 @@ namespace hldata
     inline constexpr int kNetWeaponBackMs = 20000; ///< a weapon or ammunition taken is back after this
     inline constexpr int kNetItemBackMs = 30000;   ///< ... a medkit or a battery after this
     inline constexpr int kNetBlameMs = 5000;     ///< a death this soon after a hit is the hitter's
+    /// The match over, the scores shown this long before everyone is back in
+    /// the host's lobby (the game's mp_chattime, before its next map).
+    inline constexpr int kNetIntermissionMs = 10000;
     inline constexpr int kNetSprayWaitMs = 30000; ///< a spray, then none until this long after (decalfrequency)
     inline constexpr int kNetSprayReach = 128;    ///< how far off a wall may be sprayed
     inline constexpr int kNetSprayHalf = 32;      ///< units from a spray's middle to its edge (64 across, as the game's)
@@ -1161,11 +1164,12 @@ namespace hldata
                 actor.health = kNetActorHealth;
                 match.pose[p] = 0;
             }
-            // (An actor is where its feet are; a player, where their middle
-            // is.)
+            // (Where their middle is: the players' model has its origin
+            // there, as the game's player has -- not at their feet, as most
+            // actors' do. HlActors.hpp's boxes for a Player know it.)
             actor.pos[0] = match.glide[p].pos[0];
             actor.pos[1] = match.glide[p].pos[1];
-            actor.pos[2] = match.glide[p].pos[2] - fxFromInt(crouched ? 18 : 36);
+            actor.pos[2] = match.glide[p].pos[2];
             actor.yaw = heard.yaw;
             actor.mood = crouched ? 1 : 0;
             actor.flags = alive ? kActorSolid : 0;

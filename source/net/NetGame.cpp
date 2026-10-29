@@ -352,6 +352,8 @@ namespace hlrt
         // being put up (nobody comes once the match has begun).
         effectDraw.loadSprays(match_);
         profilesSeen_ = 0;
+        overMs_ = 0;
+        lobbyAsked_ = false;
 
         // A development aid (tools/emu/play.sh with two consoles): "x y z
         // yaw" in debug_net.txt, whole units and degrees, puts the host
@@ -524,6 +526,9 @@ namespace hlrt
         if (phase_ != Phase::Playing)
             return;
         gameApi.netTick(match_, game.logic, player.state, yaw, pitch, did, lamp, ms);
+        // The match over: its scores for a while, then the lobby.
+        if (match_.over && !lobbyAsked_ && (overMs_ += ms) >= kNetIntermissionMs)
+            lobbyAsked_ = true;
         // (More than four: the host's frames every other frame, so that the
         // air has room for everyone's answers. Each glides between.)
         int here = 0;
@@ -531,6 +536,32 @@ namespace hlrt
             here += netHere(match_, p) ? 1 : 0;
         if (!isHost() || here <= 4 || (++ticks_ & 1) == 0)
             send();
+    }
+
+    bool NetGame::lobbyAsked()
+    {
+        if (phase_ != Phase::Playing || !lobbyAsked_)
+            return false;
+        lobbyAsked_ = false;
+        overMs_ = 0;
+        // (Asked once: the next is the next match's.)
+        match_.over = false;
+        return true;
+    }
+
+    void NetGame::toLobby()
+    {
+        if (phase_ != Phase::Playing)
+            return;
+        effectDraw.dropSprays();
+        match_.playing = false;
+        match_.over = false;
+        match_.firstActor = -1;
+        match_.passedCount = 0;
+        phase_ = isHost() ? Phase::Hosting : Phase::Lobby;
+        // (The host takes newcomers again, between matches.)
+        if (isHost())
+            netlink::admit(true);
     }
 
     bool NetGame::spray()

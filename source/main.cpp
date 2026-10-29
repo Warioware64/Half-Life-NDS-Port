@@ -896,7 +896,11 @@ int main(int argc, char *argv[])
         // (Before anything is loaded, the picture is kept and its textures go.)
         auto leaving = [&]() { hlrt::hudDraw.hideMenu(); };
         auto back = [&]() { moving = hlrt::hudDraw.showMenu(); };
-        hlrt::menu.openTitle();
+        // (A match over: its lobby, not the title.)
+        if (hlrt::netGame.on())
+            hlrt::menu.openLobby();
+        else
+            hlrt::menu.openTitle();
         while (true)
         {
             if (moving)
@@ -1038,6 +1042,27 @@ int main(int argc, char *argv[])
         lastVblank = lastPass = Global::vblanks();
     };
 
+    // ... or a match over: the map goes as it does for the title, the link
+    // stays, and the lobby is where the title would be.
+    auto backToLobby = [&]()
+    {
+        paused = false;
+        hlrt::sound.setPaused(false);
+        hlrt::screenFade.curtainDown();
+        if (hlrt::level.loaded())
+        {
+            logPerformance();
+            dropMap();
+            hlrt::level.unload();
+        }
+        hlrt::netGame.toLobby();
+        hlrt::hudDraw.clear();
+        leavingAbandoned = false;
+        if (!titleScreen())
+            newGame(true);
+        lastVblank = lastPass = Global::vblanks();
+    };
+
     while (true)
     {
         // (The wait is when the actors' thinking is done: game/Think.cpp.)
@@ -1079,6 +1104,13 @@ int main(int argc, char *argv[])
                     for (int n = 0; n < 150; ++n)
                         swiWaitForVBlank();
                     backToTitle();
+                    return;
+                }
+                // The match over and its scores shown: the host's lobby, for
+                // the next.
+                if (inMatch && hlrt::netGame.lobbyAsked())
+                {
+                    backToLobby();
                     return;
                 }
                 // Who killed whom, who came and went: a line at the top of
