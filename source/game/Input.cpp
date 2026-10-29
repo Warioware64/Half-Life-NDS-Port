@@ -60,7 +60,12 @@ namespace hlrt
         hldata::ControlsIn in;
         in.held = held;
         in.blank = Global::vblanks();
-        if (held & KEY_TOUCH)
+        // (A touch the menu had, still down: as though it were not.)
+        if (touchHeld_ && !(held & KEY_TOUCH))
+            touchHeld_ = false;
+        if (touchHeld_)
+            in.held &= ~static_cast<std::uint32_t>(KEY_TOUCH);
+        else if (held & KEY_TOUCH)
         {
             touchPosition touch;
             touchRead(&touch);

@@ -63,6 +63,8 @@ namespace hlrt
         void addHurt(unsigned kinds) { hurtKinds_ |= kinds; }
         /// Once a frame, after the pass: what the sprites are to show.
         void draw();
+        /// Nothing of the display shown (no game: the title).
+        void clear();
         /// From the vertical blank interrupt: what draw() said, to the
         /// sprites' table.
         void onVblank();

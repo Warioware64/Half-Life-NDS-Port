@@ -167,6 +167,24 @@ namespace
     /// that map in the game's progress -- which is by then another game's.
     bool leavingAbandoned = false;
 
+    /// Everything of the map being played let go: its sounds, its game, and
+    /// what it has in video memory.
+    void dropMap()
+    {
+        // Silence first: the sounds are the map's, and are played out of its
+        // memory.
+        hlrt::sound.unload();
+        hlrt::game.destroy();
+        hlrt::worldDraw.destroy();
+        hlrt::textureStream.end();
+        hlrt::textureCache.destroy();
+        hlrt::spriteCache.destroy();
+        hlrt::modelCache.destroy();
+        // (All of the map gone: anything that wrote where it should not
+        // while it was played is found now, by its block.)
+        hlrt::guard::check("map left");
+    }
+
     LoadResult loadLevel(const std::string &name, const hldata::Arrival *arrival,
                          std::string &error)
     {
@@ -209,18 +227,7 @@ namespace
         }
         leavingAbandoned = false;
         hlrt::gpuStats.beginMap();
-        // Silence first: the sounds are the map's, and are played out of its
-        // memory.
-        hlrt::sound.unload();
-        hlrt::game.destroy();
-        hlrt::worldDraw.destroy();
-        hlrt::textureStream.end();
-        hlrt::textureCache.destroy();
-        hlrt::spriteCache.destroy();
-        hlrt::modelCache.destroy();
-        // (All of the map gone: anything that wrote where it should not
-        // while it was played is found now, by its block.)
-        hlrt::guard::check("map left");
+        dropMap();
         // With no picture kept: the game's loading picture, on the screen
         // and left there while the map is read (video memory is empty just
         // now: there is room). That is the first load, and little else.
@@ -968,14 +975,26 @@ int main(int argc, char *argv[])
     std::uint32_t lastVblank = Global::vblanks();
     std::uint32_t lastPass = lastVblank;
     bool paused = false;
-    // Out of a game between consoles: the title again, and whatever is
-    // chosen there.
+    // Out of a game between consoles, or QUIT TO MAIN MENU: the title again,
+    // and whatever is chosen there.
     auto backToTitle = [&]()
     {
         hlrt::netGame.leave();
         paused = false;
         hlrt::sound.setPaused(false);
         hlrt::screenFade.curtainDown();
+        // The map given up goes, all of it, before the title: its textures
+        // fill video memory, and the title's animated logo would have no
+        // room beside them (and came back still). Nothing of that game is
+        // remembered: it is over.
+        if (hlrt::level.loaded())
+        {
+            logPerformance();
+            dropMap();
+            hlrt::level.unload();
+        }
+        hlrt::hudDraw.clear();
+        leavingAbandoned = false;
         if (!titleScreen())
             newGame(true);
         lastVblank = lastPass = Global::vblanks();
@@ -1142,6 +1161,10 @@ int main(int argc, char *argv[])
                         hlrt::sound.setPaused(false);
                         hlrt::bottomScreen.showPad();
                     }
+                    // However the menu was left for the game: the tap
+                    // that left it picks no weapon.
+                    if (!paused)
+                        hlrt::input.holdTouch();
                 }
 
                 // Dead: back to the last save, or to the start of the map if

@@ -35,6 +35,10 @@ namespace hlrt
         /// No list up (the menu over the game, a map loaded: it is not to be
         /// drawn again stale).
         void dropWeaponList() { weaponList_ = hldata::WeaponList(); }
+        /// Back to the game from a menu: a touch still down then is the
+        /// menu's (the tap that closed it), and is no one's until the
+        /// stylus is lifted -- not a weapon picked, nor a look about.
+        void holdTouch() { touchHeld_ = true; }
         static void notePressure(int z1, int z2)
         {
             if (z1 > 0 && z2 > z1)
@@ -46,6 +50,7 @@ namespace hlrt
         hldata::ControlsState state_;
         hldata::WeaponList weaponList_;
         bool touchWas_ = false;
+        bool touchHeld_ = false;
         static inline bool pressureSeen_ = false;
     };
 

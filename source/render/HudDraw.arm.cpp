@@ -531,6 +531,21 @@ namespace hlrt
         leaveCriticalSection(state);
     }
 
+    void HudDraw::clear()
+    {
+        for (int n = 0; n < kSprites; ++n)
+            hide(n);
+        flashColour = 0;
+        std::memset(painColour, 0, sizeof(painColour));
+        std::memset(hurtColour, 0, sizeof(hurtColour));
+        const int state = enterCriticalSection();
+        std::memcpy(shown, shadow, sizeof(shown));
+        shownFlash = flashColour;
+        std::memcpy(shownPain, painColour, sizeof(shownPain));
+        std::memcpy(shownHurt, hurtColour, sizeof(shownHurt));
+        leaveCriticalSection(state);
+    }
+
     void HudDraw::compose()
     {
         static int shownHealth = -1, shownArmor = -1, shownWeapon = -1, shownClip = -1, shownSpare = -1,
