@@ -153,6 +153,8 @@ namespace hlrt::guest
     bool beginMap(const std::string &map)
     {
         endMap();
+        // (The last map's weapons, kept packed, go with it.)
+        air::dropMapFiles();
         for (int i = 0; i < offerCount; ++i)
         {
             if (offers[i].map != map)
@@ -187,6 +189,7 @@ namespace hlrt::guest
 
     void endMap()
     {
+        air::drain();
         air::stream(nullptr);
         if (mapCursor != nullptr)
             mapCursor->~GuestCursor();

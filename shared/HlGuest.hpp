@@ -44,6 +44,10 @@ namespace hldata
     };
 
     inline constexpr std::uint8_t kGuestLz77 = 1; ///< the member's bytes are LZ77
+    /// Kept as it came, packed, and undone only when it is opened: a weapon
+    /// the map has lying about (its model and skin, "wpn/..."), one of which
+    /// is in memory whole at a time -- when it is in hand -- as on a card.
+    inline constexpr std::uint8_t kGuestKeepPacked = 2;
 
     struct GuestHeader
     {
@@ -191,6 +195,20 @@ namespace hldata
                 got += wrote;
                 taken_ += static_cast<std::uint32_t>(wrote);
             }
+            return got;
+        }
+
+        /// The member's bytes as they came (packed, if they are), all of them,
+        /// into `out` (room for packedSize). False if the stream is wrong.
+        bool readPacked(std::uint8_t *out)
+        {
+            if (!open_ || taken_ != 0 || packedLeft_ != member_.packedSize)
+                return false;
+            const bool got = take(out, member_.packedSize);
+            packedLeft_ = 0;
+            taken_ = member_.rawSize;
+            open_ = false;
+            failed_ = failed_ || !got;
             return got;
         }
 

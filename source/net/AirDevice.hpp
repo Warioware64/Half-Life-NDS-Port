@@ -27,6 +27,11 @@ namespace hlrt::air
     void stream(hldata::GuestCursor *cursor);
     /// The files put here that own their memory (putOwned), let go of.
     void dropOwned();
+    /// The rest of the map's stream gone through, what is kept packed of it
+    /// (kGuestKeepPacked: the weapons lying about) kept as files of the map's.
+    void drain();
+    /// The map's files (drain()'s) let go of: a new map is coming.
+    void dropMapFiles();
     /// `name`'s whole bytes, owned by the drive (freed by dropOwned()).
     bool putOwned(const char *name, std::uint8_t *data, std::uint32_t size);
 

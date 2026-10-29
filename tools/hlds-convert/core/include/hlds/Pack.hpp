@@ -44,12 +44,14 @@ namespace hlds
         {
             std::string name;
             std::size_t bytes = 0; ///< its own stream, without the base
-            /// What it holds of each kind (hldata::GuestKind), undone.
-            std::size_t raw[8] = {};
+            /// What it holds of each kind (hldata::GuestKind), undone; then
+            /// what of it is kept packed (the weapons lying about), and the
+            /// biggest of that undone.
+            std::size_t raw[10] = {};
             int missing = 0;
         };
         std::size_t baseBytes = 0;
-        std::size_t baseRaw[8] = {};
+        std::size_t baseRaw[10] = {};
         std::vector<Map> maps;
     };
 

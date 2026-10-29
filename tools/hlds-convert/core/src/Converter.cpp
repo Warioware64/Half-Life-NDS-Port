@@ -146,15 +146,19 @@ namespace hlds
                 const std::size_t level = of(map.raw, hldata::GuestKind::Level);
                 const std::size_t models = of(map.raw, hldata::GuestKind::Model);
                 const std::size_t sounds = of(map.raw, hldata::GuestKind::Sound);
-                const auto data = static_cast<std::uint32_t>(level + models + sounds + base);
+                // (The weapons lying about, kept packed: all of them so, and
+                // the one in hand undone besides.)
+                const std::size_t packed = map.raw[static_cast<int>(hldata::GuestKind::Count)] +
+                                           map.raw[static_cast<int>(hldata::GuestKind::Count) + 1];
+                const auto data = static_cast<std::uint32_t>(level + models + sounds + packed + base);
                 CommonResult::Guest guest;
                 guest.peak = hldata::guestPeak(data);
                 guest.fits = hldata::guestFits(data);
                 common_.guestByMap[map.name] = guest;
                 char line[160];
                 std::snprintf(line, sizeof(line),
-                              "  %-14s level %4zu  models %3zu  sounds %3zu  -> %4u KB of %u, %s (sent: %zu KB)",
-                              map.name.c_str(), level / 1024, models / 1024, sounds / 1024,
+                              "  %-14s level %4zu  models %3zu  sounds %3zu  weapons %3zu  -> %4u KB of %u, %s (sent: %zu KB)",
+                              map.name.c_str(), level / 1024, models / 1024, sounds / 1024, packed / 1024,
                               static_cast<unsigned>(guest.peak / 1024), static_cast<unsigned>(hldata::kGuestRamBytes / 1024),
                               guest.fits ? "fits" : "TOO BIG", map.bytes / 1024);
                 common_.guest.push_back(line);

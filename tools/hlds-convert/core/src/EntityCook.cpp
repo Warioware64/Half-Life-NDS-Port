@@ -3873,28 +3873,14 @@ namespace hlds
         // but neither loaded with the map nor in its archive.
         auto gunSounds = [&](const std::vector<std::string> &held)
         {
-            // (The newer guns': where the map has them to be held.)
-            if (std::find(held.begin(), held.end(), "v_9mmar") != held.end())
-            {
-                use(CommonSound::Mp5Fire, CommonSound::Launcher);
-                use(CommonSound::Mp5Fire1, CommonSound::Launcher2);
-            }
-            if (std::find(held.begin(), held.end(), "v_357") != held.end())
-            {
-                use(CommonSound::PythonFire, CommonSound::PythonReload);
-                use(CommonSound::PythonFire2, CommonSound::PythonFire2);
-            }
-            if (std::find(held.begin(), held.end(), "v_shotgun") != held.end())
-                use(CommonSound::ShotgunDouble, CommonSound::ShotgunReload3);
-            if (std::find(held.begin(), held.end(), "v_grenade") != held.end())
-                use(CommonSound::GrenadeBounce2, CommonSound::GrenadeBounce3);
-            // (... and those that came later: where the map has them to be held,
-            // or lying about to be picked up.)
+            // (The first six: where the map has them to be held. Those that
+            // came later: where it has them to be held, or lying about to be
+            // picked up.)
             auto holds = [&](const char *viewModel, ItemKind item, ItemKind other = ItemKind::None)
             {
                 if (std::find(held.begin(), held.end(), viewModel) != held.end())
                     return true;
-                if (lazy)
+                if (lazy || item == ItemKind::None)
                     return false; // (what lies about is the map's own)
                 for (const ActorRecord &actor : out.actors)
                 {
@@ -3904,25 +3890,11 @@ namespace hlds
                 }
                 return false;
             };
-            if (holds("v_crossbow", ItemKind::Crossbow, ItemKind::Bolts))
-                use(CommonSound::XbowFire, CommonSound::XbowReload);
-            if (holds("v_tripmine", ItemKind::Tripmine))
+            for (const GunSounds &gun : kGunSounds)
             {
-                use(CommonSound::MineDeploy, CommonSound::MineCharge);
-                use(CommonSound::MineActivate, CommonSound::MineActivate);
+                if (holds(gun.viewModel, gun.item, gun.other))
+                    use(gun.first, gun.last);
             }
-            if (holds("v_satchel", ItemKind::Satchel))
-                use(CommonSound::SatchelBounce, CommonSound::SatchelBounce);
-            if (holds("v_squeak", ItemKind::Snark))
-                use(CommonSound::SnarkDeploy, CommonSound::SnarkBlast);
-            if (holds("v_rpg", ItemKind::Rpg, ItemKind::RpgClip))
-                use(CommonSound::RocketFire, CommonSound::RocketFly);
-            if (holds("v_gauss", ItemKind::Gauss, ItemKind::GaussClip))
-                use(CommonSound::GaussFire, CommonSound::Electro6);
-            if (holds("v_egon", ItemKind::Egon))
-                use(CommonSound::EgonWindup, CommonSound::EgonOff);
-            if (holds("v_hgun", ItemKind::Hornetgun))
-                use(CommonSound::HornetFire1, CommonSound::HornetHit3);
         };
         gunSounds(models);
         lazy = true;

@@ -49,6 +49,11 @@ namespace hlds
             }
         };
 
+        // (Beside the kinds, in a report's `raw`: what is kept packed, and the
+        // biggest of it undone.)
+        constexpr int kGuestPacked = static_cast<int>(hldata::GuestKind::Count);
+        constexpr int kGuestUnpackedMost = kGuestPacked + 1;
+
         /// A guest stream (HlGuest.hpp) of `members`, in their order: each
         /// LZ77 where that makes it a good deal smaller (not a sound: they
         /// are compressed already, as sound). What each kind comes to,
@@ -69,16 +74,20 @@ namespace hlds
                     return false;
                 }
                 const hldata::GuestKind kind = hldata::guestKindOf(member.path.c_str());
+                // (A weapon lying about is kept packed: LZ77, however little
+                // that saves.)
+                const bool keepPacked = member.path.rfind("wpn/", 0) == 0;
                 std::vector<std::uint8_t> packed;
                 if (kind != hldata::GuestKind::Sound && member.data.size() >= 256)
                 {
                     packed = lz77Compress(member.data.data(), member.data.size());
-                    if (packed.size() * 8 > member.data.size() * 7)
+                    if (!keepPacked && packed.size() * 8 > member.data.size() * 7)
                         packed.clear();
                 }
                 hldata::GuestMember record{};
                 record.kind = static_cast<std::uint8_t>(kind);
-                record.flags = packed.empty() ? 0 : hldata::kGuestLz77;
+                record.flags = static_cast<std::uint8_t>((packed.empty() ? 0 : hldata::kGuestLz77) |
+                                                         (keepPacked && !packed.empty() ? hldata::kGuestKeepPacked : 0));
                 record.nameBytes = static_cast<std::uint16_t>(member.path.size());
                 record.rawSize = static_cast<std::uint32_t>(member.data.size());
                 const std::vector<std::uint8_t> &bytes = packed.empty() ? member.data : packed;
@@ -89,7 +98,15 @@ namespace hlds
                 stream.insert(stream.end(), bytes.begin(), bytes.end());
                 ++header.members;
                 header.rawBytes += record.rawSize;
-                if (raw != nullptr)
+                // (What a weapon kept packed takes of the memory is what it
+                // came as; and while it is in hand, itself besides.)
+                if (raw != nullptr && (record.flags & hldata::kGuestKeepPacked))
+                {
+                    raw[kGuestPacked] += record.packedSize;
+                    if (record.rawSize > raw[kGuestUnpackedMost])
+                        raw[kGuestUnpackedMost] = record.rawSize;
+                }
+                else if (raw != nullptr)
                     raw[static_cast<int>(kind)] += member.data.size();
             }
             header.streamBytes = static_cast<std::uint32_t>(stream.size());
@@ -273,6 +290,118 @@ namespace hlds
         }
     } // namespace
 
+    namespace
+    {
+        /// What of a map a console sent it for a game between consoles is
+        /// given -- what the match can show and play there, and nothing more:
+        ///  - the guns it can be held: the crowbar and the 9 mm everyone
+        ///    starts with, and those lying about to be taken up. The other
+        ///    first six go (their models, skins, sounds); those that came
+        ///    later, the map has lying about, come -- kept packed ("wpn/"), as
+        ///    they are loaded only when taken up;
+        ///  - its sounds kept loaded, less those of guns it has not, of
+        ///    ladders and water it has not, and the suit's words (the game's
+        ///    SetSuitUpdate: "We don't play HEV sounds in multiplayer"); none
+        ///    of what is only spoken.
+        bool guestMatch(const fs::path &stage, const std::string &map, Packing &packing, std::string &error)
+        {
+            std::vector<std::uint8_t> level;
+            hldata::LevelView view;
+            if (!readFile(stage / "maps" / (map + ".hlm"), level, error) ||
+                view.open(level.data(), static_cast<std::uint32_t>(level.size())) != hldata::LevelError::Ok)
+            {
+                error = "the staged level does not open: " + map;
+                return false;
+            }
+            std::set<std::string> held = {"v_crowbar", "v_9mmhandgun"};
+            for (std::uint32_t i = 0; i < view.actorCount; ++i)
+            {
+                const hldata::ActorRecord &actor = view.actors[i];
+                if (actor.kind != static_cast<std::uint8_t>(hldata::ActorKind::Item))
+                    continue;
+                if (const char *model = hldata::itemViewModel(static_cast<hldata::ItemKind>(actor.item & 0xFF)))
+                    held.insert(model);
+            }
+            if (held.count("v_satchel") != 0)
+                held.insert("v_satchel_radio");
+            // Sounds: what a match plays there.
+            std::vector<char> kept(view.soundCount + 1, 0);
+            hldata::soundsKept(view.logic, view.logicCount, view.logicSounds, view.logicSoundCount, view.soundCount,
+                               reinterpret_cast<bool *>(kept.data()), view.modelSounds, view.modelSoundCount);
+            auto drop = [&](hldata::CommonSound first, hldata::CommonSound last)
+            {
+                for (int i = static_cast<int>(first); i <= static_cast<int>(last) && i < static_cast<int>(view.soundCount);
+                     ++i)
+                    kept[static_cast<std::size_t>(i)] = 0;
+            };
+            for (const hldata::GunSounds &gun : hldata::kGunSounds)
+            {
+                if (held.count(gun.viewModel) == 0)
+                    drop(gun.first, gun.last);
+            }
+            bool ladder = false, water = false;
+            for (std::uint32_t i = 0; i < view.logicCount; ++i)
+                ladder = ladder || view.logic[i].kind == static_cast<std::uint8_t>(hldata::LogicKind::Ladder);
+            for (std::uint32_t i = 0; i < view.leafCount; ++i)
+            {
+                const std::int8_t c = view.leaves[i].contents;
+                water = water || c == hldata::kContentsWater || c == hldata::kContentsSlime || c == hldata::kContentsLava;
+            }
+            for (std::uint32_t i = 0; i < view.brushCount; ++i)
+                water = water || view.brushes[i].kind != 0;
+            if (!ladder)
+                drop(hldata::CommonSound::Ladder1, hldata::CommonSound::Ladder4);
+            if (!water)
+                drop(hldata::CommonSound::Wade1, hldata::CommonSound::Slosh4);
+            std::set<std::string> sounds;
+            for (std::uint32_t i = 0; i < view.soundCount; ++i)
+            {
+                if (kept[i] != 0 && view.sounds[i].name[0] != '\0' && !hldata::soundLazy(view.sounds[i]))
+                    sounds.insert(std::string("snd/") + view.sounds[i].name + ".hsn");
+            }
+            // The models and skins of the first six it has not.
+            std::set<std::string> gone;
+            for (const NpacMember &member : packing.members)
+            {
+                if (member.path.rfind("mdl/v_", 0) != 0)
+                    continue;
+                const std::string name = member.path.substr(4, member.path.find('.') - 4);
+                if (held.count(name) == 0)
+                    gone.insert(member.path);
+            }
+            std::vector<NpacMember> kept_;
+            for (NpacMember &member : packing.members)
+            {
+                const bool sound = member.path.rfind("snd/", 0) == 0;
+                if ((sound && sounds.count(member.path) == 0) || gone.count(member.path) != 0)
+                    continue;
+                kept_.push_back(std::move(member));
+            }
+            packing.members = std::move(kept_);
+            // ... and those that came later, it has lying about: packed, last.
+            for (std::uint32_t i = 0; i < view.modelRefCount; ++i)
+            {
+                const char *name = view.modelRefs[i].name;
+                if (!hldata::modelRefLazy(view.modelRefs[i]) || held.count(name) == 0)
+                    continue;
+                if (!packing.add(stage / "wpn" / (std::string(name) + ".hmd"), std::string("wpn/") + name + ".hmd",
+                                 true))
+                    continue;
+                const NpacMember &model = packing.members.back();
+                if (model.data.size() < sizeof(hldata::ModelHeader))
+                    continue;
+                hldata::ModelHeader header;
+                std::memcpy(&header, model.data.data(), sizeof(header));
+                if (header.atlasWidth != 0)
+                {
+                    const std::string skin = hldata::modelSkinFile(name, header.atlasWidth, header.atlasHeight);
+                    packing.add(stage / "mdl" / skin, "wpn/" + skin, true);
+                }
+            }
+            return true;
+        }
+    } // namespace
+
     bool packMap(const fs::path &stage, const fs::path &card, const std::string &map, bool compress,
                  PackReport &report, std::string &error)
     {
@@ -297,13 +426,8 @@ namespace hlds
             each[m].report = &reports[m];
             if (!collectMap(stage, maps[m], true, each[m], error))
                 return false;
-            // (The suit says nothing in a game between consoles: the game's
-            // SetSuitUpdate, "We don't play HEV sounds in multiplayer".)
-            if (multiplayer)
-                each[m].members.erase(std::remove_if(each[m].members.begin(), each[m].members.end(),
-                                                     [](const NpacMember &member)
-                                                     { return member.path.rfind("snd/fvox_", 0) == 0; }),
-                                      each[m].members.end());
+            if (multiplayer && !guestMatch(stage, maps[m], each[m], error))
+                return false;
         }
         // A model is cooked for each map with a skin as big as that map has
         // room for: here every map has the same one, the smallest any of

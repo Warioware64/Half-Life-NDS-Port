@@ -348,6 +348,62 @@ namespace hldata
     };
     /// How many of these a map of level version 29 or before has.
     inline constexpr std::uint16_t kCommonSoundsBefore30 = static_cast<std::uint16_t>(CommonSound::XbowFire);
+
+    /// Each gun's own sounds, by the model it is held as: the converter keeps
+    /// them for a map where the gun can be held (EntityCook), and leaves them
+    /// out of what a console sent the map is given where it cannot (Pack).
+    /// `item` (and `other`, its ammunition): what lying about on a map gives
+    /// one of the guns that came after the first six; None for those six,
+    /// which a map has to be held or not.
+    struct GunSounds
+    {
+        const char *viewModel;
+        ItemKind item;
+        ItemKind other;
+        CommonSound first;
+        CommonSound last;
+    };
+    inline constexpr GunSounds kGunSounds[] = {
+        {"v_9mmar", ItemKind::None, ItemKind::None, CommonSound::Mp5Fire, CommonSound::Launcher},
+        {"v_9mmar", ItemKind::None, ItemKind::None, CommonSound::Mp5Fire1, CommonSound::Launcher2},
+        {"v_357", ItemKind::None, ItemKind::None, CommonSound::PythonFire, CommonSound::PythonReload},
+        {"v_357", ItemKind::None, ItemKind::None, CommonSound::PythonFire2, CommonSound::PythonFire2},
+        {"v_shotgun", ItemKind::None, ItemKind::None, CommonSound::ShotgunDouble, CommonSound::ShotgunReload3},
+        {"v_grenade", ItemKind::None, ItemKind::None, CommonSound::GrenadeBounce2, CommonSound::GrenadeBounce3},
+        {"v_crossbow", ItemKind::Crossbow, ItemKind::Bolts, CommonSound::XbowFire, CommonSound::XbowReload},
+        {"v_tripmine", ItemKind::Tripmine, ItemKind::None, CommonSound::MineDeploy, CommonSound::MineCharge},
+        {"v_tripmine", ItemKind::Tripmine, ItemKind::None, CommonSound::MineActivate, CommonSound::MineActivate},
+        {"v_satchel", ItemKind::Satchel, ItemKind::None, CommonSound::SatchelBounce, CommonSound::SatchelBounce},
+        {"v_squeak", ItemKind::Snark, ItemKind::None, CommonSound::SnarkDeploy, CommonSound::SnarkBlast},
+        {"v_rpg", ItemKind::Rpg, ItemKind::RpgClip, CommonSound::RocketFire, CommonSound::RocketFly},
+        {"v_gauss", ItemKind::Gauss, ItemKind::GaussClip, CommonSound::GaussFire, CommonSound::Electro6},
+        {"v_egon", ItemKind::Egon, ItemKind::None, CommonSound::EgonWindup, CommonSound::EgonOff},
+        {"v_hgun", ItemKind::Hornetgun, ItemKind::None, CommonSound::HornetFire1, CommonSound::HornetHit3},
+    };
+
+    /// The model a weapon lying about is held as, once taken up (nothing for
+    /// what is only ammunition).
+    inline const char *itemViewModel(ItemKind item)
+    {
+        switch (item)
+        {
+        case ItemKind::Crowbar: return "v_crowbar";
+        case ItemKind::Glock: return "v_9mmhandgun";
+        case ItemKind::Shotgun: return "v_shotgun";
+        case ItemKind::Grenades: return "v_grenade";
+        case ItemKind::Mp5: return "v_9mmar";
+        case ItemKind::Python: return "v_357";
+        case ItemKind::Crossbow: return "v_crossbow";
+        case ItemKind::Satchel: return "v_satchel";
+        case ItemKind::Tripmine: return "v_tripmine";
+        case ItemKind::Snark: return "v_squeak";
+        case ItemKind::Rpg: return "v_rpg";
+        case ItemKind::Gauss: return "v_gauss";
+        case ItemKind::Egon: return "v_egon";
+        case ItemKind::Hornetgun: return "v_hgun";
+        default: return nullptr;
+        }
+    }
     /// ... and of version 30.
     inline constexpr std::uint16_t kCommonSoundsBefore31 = static_cast<std::uint16_t>(CommonSound::RocketFire);
     /// ... and of version 31.

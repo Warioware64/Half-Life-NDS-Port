@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
+#include <new>
 #include <sys/stat.h>
 
 namespace hlrt::air
@@ -23,8 +24,10 @@ namespace hlrt::air
         {
             char name[kNameBytes] = {};
             const std::uint8_t *data = nullptr;
-            std::uint32_t size = 0;
+            std::uint32_t size = 0; ///< as it is read: undone, if it is packed
+            std::uint32_t packedSize = 0; ///< what it is kept as, if it is packed (0: it is not)
             bool owned = false;
+            bool ofMap = false; ///< the map's (a weapon lying about): let go with it
         };
         File files[kOwnedFiles];
         int fileCount = 0;
@@ -41,6 +44,10 @@ namespace hlrt::air
         {
             const File *file;
             std::uint32_t at;
+            /// A packed file's: where in what it is kept as, and its undoing
+            /// (made when it is first read).
+            std::uint32_t packedAt;
+            hldata::Lz77Stream *lz;
         };
 
         /// The order the game loads a map's kinds of file in, which is the
@@ -48,6 +55,21 @@ namespace hlrt::air
         bool kindBefore(hldata::GuestKind a, hldata::GuestKind b)
         {
             return static_cast<int>(a) < static_cast<int>(b);
+        }
+
+        bool putFile(const char *name, const std::uint8_t *data, std::uint32_t size, std::uint32_t packedSize, bool owned,
+                     bool ofMap);
+
+        /// The cursor's member, kept as it came (kGuestKeepPacked): a file of
+        /// the map's from now on.
+        void keepPacked()
+        {
+            const hldata::GuestMember &member = cursor->member();
+            auto *data = static_cast<std::uint8_t *>(std::malloc(member.packedSize > 0 ? member.packedSize : 1));
+            if (data == nullptr || !cursor->readPacked(data) ||
+                !putFile(cursor->name(), data, member.rawSize, member.packedSize, true, true))
+                std::free(data);
+            memberOpen = false;
         }
 
         /// Whether `name` is the stream's member next, unread: gone past
@@ -67,6 +89,11 @@ namespace hlrt::air
                     if (!cursor->next())
                         return false;
                     memberOpen = true;
+                }
+                if (cursor->member().flags & hldata::kGuestKeepPacked)
+                {
+                    keepPacked();
+                    continue;
                 }
                 const hldata::GuestKind kind = static_cast<hldata::GuestKind>(cursor->member().kind);
                 if (std::strcmp(cursor->name(), name) == 0)
@@ -122,13 +149,21 @@ namespace hlrt::air
             }
             open->file = file;
             open->at = 0;
+            open->packedAt = 0;
+            open->lz = nullptr;
             (void)flags;
             return static_cast<int>(reinterpret_cast<std::uintptr_t>(open));
         }
 
         int close(int fd)
         {
-            std::free(of(fd));
+            Open *open = of(fd);
+            if (open->lz != nullptr)
+            {
+                open->lz->~Lz77Stream();
+                std::free(open->lz);
+            }
+            std::free(open);
             return 0;
         }
 
@@ -143,6 +178,37 @@ namespace hlrt::air
                 open->at += static_cast<std::uint32_t>(got);
                 if (cursor->taken() == cursor->member().rawSize)
                     memberOpen = false;
+                return static_cast<ssize_t>(got);
+            }
+            if (open->file->packedSize != 0)
+            {
+                // Kept packed: undone as it is read, from the start only.
+                if (open->lz == nullptr)
+                {
+                    if (open->at != 0)
+                    {
+                        errno = EIO;
+                        return -1;
+                    }
+                    void *room = std::malloc(sizeof(hldata::Lz77Stream));
+                    if (room == nullptr)
+                    {
+                        errno = ENOMEM;
+                        return -1;
+                    }
+                    open->lz = new (room) hldata::Lz77Stream();
+                    open->lz->begin(open->file->size);
+                }
+                const std::uint8_t *in = open->file->data + open->packedAt;
+                std::size_t left = open->file->packedSize - open->packedAt;
+                const std::size_t got = open->lz->pump(in, left, static_cast<std::uint8_t *>(to), length);
+                open->packedAt = open->file->packedSize - static_cast<std::uint32_t>(left);
+                open->at += static_cast<std::uint32_t>(got);
+                if (open->lz->failed())
+                {
+                    errno = EIO;
+                    return -1;
+                }
                 return static_cast<ssize_t>(got);
             }
             const std::uint32_t left = open->file->size - open->at;
@@ -168,13 +234,14 @@ namespace hlrt::air
             const off_t to = from + offset;
             // (A member of the stream goes one way: only to where it is, as
             // a size is asked -- to its end and straight back.)
+            const bool oneWay = open->file == nullptr || open->file->packedSize != 0;
             if (from < 0 || to < 0 || to > static_cast<off_t>(sizeOf(open)) ||
-                (open->file == nullptr && to != static_cast<off_t>(open->at) && to != static_cast<off_t>(sizeOf(open))))
+                (oneWay && to != static_cast<off_t>(open->at) && to != static_cast<off_t>(sizeOf(open))))
             {
                 errno = EINVAL;
                 return -1;
             }
-            if (open->file == nullptr)
+            if (oneWay)
                 return to; // (where it is stays where it is: the size was asked)
             open->at = static_cast<std::uint32_t>(to);
             return to;
@@ -225,48 +292,82 @@ namespace hlrt::air
         return installed;
     }
 
+    namespace
+    {
+        bool putFile(const char *name, const std::uint8_t *data, std::uint32_t size, std::uint32_t packedSize, bool owned,
+                     bool ofMap)
+        {
+            File *slot = const_cast<File *>(find(name));
+            if (slot == nullptr)
+            {
+                if (fileCount == kOwnedFiles || std::strlen(name) >= kNameBytes)
+                    return false;
+                slot = &files[fileCount++];
+                std::strcpy(slot->name, name);
+            }
+            else if (slot->owned)
+            {
+                std::free(const_cast<std::uint8_t *>(slot->data));
+            }
+            slot->data = data;
+            slot->size = size;
+            slot->packedSize = packedSize;
+            slot->owned = owned;
+            slot->ofMap = ofMap;
+            return true;
+        }
+
+        void drop(bool ofMap)
+        {
+            int kept = 0;
+            for (int i = 0; i < fileCount; ++i)
+            {
+                if (files[i].owned && files[i].ofMap == ofMap)
+                    std::free(const_cast<std::uint8_t *>(files[i].data));
+                else
+                    files[kept++] = files[i];
+            }
+            for (int i = kept; i < fileCount; ++i)
+                files[i] = File();
+            fileCount = kept;
+        }
+    } // namespace
+
     bool put(const char *name, const std::uint8_t *data, std::uint32_t size)
     {
-        File *slot = const_cast<File *>(find(name));
-        if (slot == nullptr)
-        {
-            if (fileCount == kOwnedFiles || std::strlen(name) >= kNameBytes)
-                return false;
-            slot = &files[fileCount++];
-            std::strcpy(slot->name, name);
-        }
-        else if (slot->owned)
-        {
-            std::free(const_cast<std::uint8_t *>(slot->data));
-        }
-        slot->data = data;
-        slot->size = size;
-        slot->owned = false;
-        return true;
+        return putFile(name, data, size, 0, false, false);
     }
 
     bool putOwned(const char *name, std::uint8_t *data, std::uint32_t size)
     {
-        if (!put(name, data, size))
-            return false;
-        const_cast<File *>(find(name))->owned = true;
-        return true;
+        return putFile(name, data, size, 0, true, false);
+    }
+
+    void dropMapFiles() { drop(true); }
+
+    void drain()
+    {
+        // (What is left of the map's stream: the weapons lying about, kept.)
+        if (cursor == nullptr)
+            return;
+        while (true)
+        {
+            const bool current = memberOpen && cursor->taken() == 0 && !cursor->ended();
+            if (!current && !cursor->next())
+                break;
+            memberOpen = true;
+            if (cursor->member().flags & hldata::kGuestKeepPacked)
+                keepPacked();
+            else
+                memberOpen = false;
+        }
     }
 
     void dropOwned()
     {
-        // (Those it was only shown -- a test's debug_start.txt -- stay.)
-        int kept = 0;
-        for (int i = 0; i < fileCount; ++i)
-        {
-            if (files[i].owned)
-                std::free(const_cast<std::uint8_t *>(files[i].data));
-            else
-                files[kept++] = files[i];
-        }
-        for (int i = kept; i < fileCount; ++i)
-            files[i] = File();
-        fileCount = kept;
+        // (Those it was only shown -- a test's debug_start.txt -- stay; and
+        // the map's.)
+        drop(false);
     }
 
     void stream(hldata::GuestCursor *to)
