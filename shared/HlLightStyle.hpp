@@ -37,30 +37,46 @@ namespace hldata
         "mmnnmmnnnmmnn"};                                       // 12: underwater
 
     /// How strong `style` is at tenth-of-a-second `tick` (kStyleWhole: as
-    /// made), with the switched ones in `off` (a bit each) dark.
-    inline int lightStyleValue(int style, std::uint32_t tick, std::uint64_t off)
+    /// made), with the switched ones in `off` (a bit each) dark -- and, on,
+    /// each by its pattern in `patterns` (for styles 32 on; null: steady).
+    inline int lightStyleValue(int style, std::uint32_t tick, std::uint64_t off,
+                               const char *const *patterns = nullptr)
     {
         if (style < 0 || style >= kLightStyles)
             return kStyleWhole;
+        const char *pattern = nullptr;
         if (style >= 32)
-            return (off >> style) & 1 ? 0 : kStyleWhole;
-        if (style == 0 || style > 12)
+        {
+            if ((off >> style) & 1)
+                return 0;
+            pattern = patterns != nullptr ? patterns[style - 32] : nullptr;
+            if (pattern == nullptr || pattern[0] < 'a' || pattern[0] > 'z')
+                return kStyleWhole;
+        }
+        else if (style == 0 || style > 12)
+        {
             return kStyleWhole;
-        const char *pattern = kStylePattern[style];
+        }
+        else
+        {
+            pattern = kStylePattern[style];
+        }
         std::uint32_t length = 0;
         while (pattern[length] != '\0')
             ++length;
-        return ((pattern[tick % length] - 'a') * kStyleWhole) / 12;
+        const char letter = pattern[tick % length];
+        return (((letter < 'a' ? 'a' : (letter > 'z' ? 'z' : letter)) - 'a') * kStyleWhole) / 12;
     }
 
     /// Every style's strength at once, into `values` (kLightStyles of
     /// them). True if any is not what `values` had.
-    inline bool lightStyleValues(std::uint32_t tick, std::uint64_t off, std::uint16_t *values)
+    inline bool lightStyleValues(std::uint32_t tick, std::uint64_t off, std::uint16_t *values,
+                                 const char *const *patterns = nullptr)
     {
         bool changed = false;
         for (int style = 0; style < kLightStyles; ++style)
         {
-            const auto value = static_cast<std::uint16_t>(lightStyleValue(style, tick, off));
+            const auto value = static_cast<std::uint16_t>(lightStyleValue(style, tick, off, patterns));
             changed = changed || value != values[style];
             values[style] = value;
         }

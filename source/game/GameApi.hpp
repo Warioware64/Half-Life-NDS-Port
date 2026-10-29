@@ -51,7 +51,7 @@ namespace hlrt
     class TopText;
 
     /// Changed whenever either table or anything they carry changes shape.
-    inline constexpr std::uint32_t kGameApiVersion = 5;
+    inline constexpr std::uint32_t kGameApiVersion = 8;
 
     /// The sizes of what both sides lay out, compared at the handshake: a
     /// library built from other headers, or with other settings, is refused
@@ -121,11 +121,11 @@ namespace hlrt
         hldata::Trace (*traceAll)(const hldata::MoveWorld &, bool crouched, const hldata::fx *start,
                                   const hldata::fx *end);
         void (*poseModel)(const hldata::ModelView &, int clip, std::uint32_t frame, hldata::BoneMatrix *out,
-                          const std::int32_t *controls);
+                          const std::int32_t *controls, int blend);
         std::uint32_t (*actorAdvance)(const hldata::ActorWorld &, hldata::ActorState &, int ms);
         int (*walkTick)(hldata::ActorWorld &, const hldata::MoveWorld &, int index, int small, const hldata::fx *dest,
                         hldata::fx speed, int ms, const hldata::PlayerState *player, hldata::fx half,
-                        hldata::fx height, bool still);
+                        hldata::fx height, bool still, std::uint16_t *idealYaw);
     };
 
     /// What the engine asks of the game. The first group is `Game`'s own
@@ -157,7 +157,7 @@ namespace hlrt
         bool (*thinkRunOne)(hldata::LogicWorld &, void (*yield)());
         void (*thinkClear)(hldata::ThinkQueue &);
         /// Damage to the player from outside the logic (a fall).
-        void (*hurtPlayer)(hldata::PlayerState &, std::int32_t amount);
+        void (*hurtPlayer)(hldata::PlayerState &, std::int32_t amount, std::uint32_t type);
         /// The COMMAND line's killall.
         int (*killAllOfKind)(hldata::LogicWorld &, hldata::ActorKind);
         /// The multiplayer match's rules (NetGame.cpp has the wireless).

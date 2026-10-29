@@ -23,6 +23,71 @@ namespace
 {
     double toUnits(fx v) { return v / 4096.0; }
 
+    /// The player's hurt, as CBasePlayer::TakeDamage has it: the armour
+    /// takes four fifths of what is not a fall or drowning, and is worn by
+    /// four tenths of it; health loses the rest, rounded down; the suit says
+    /// what it was; and below -40 the player is in pieces.
+    void testPlayerDamage()
+    {
+        auto fresh = [](int health, int armor)
+        {
+            PlayerState p;
+            p.health = health;
+            p.inv.armor = static_cast<std::int16_t>(armor);
+            p.inv.have = 1; // (the suit)
+            return p;
+        };
+        PlayerState p = fresh(100, 50);
+        playerTakeDamage(p, 30, kDmgCrush);
+        check(p.health == 94 && p.inv.armor == 38, "armour takes four fifths of a crush, and is worn by twelve");
+        p = fresh(100, 50);
+        logicHurt(p, 30, 0, kDmgGeneric);
+        check(p.health == 94 && p.inv.armor == 38, "... and of what the world does (a trigger_hurt's)");
+        p = fresh(100, 50);
+        playerTakeDamage(p, 30, kDmgFall);
+        check(p.health == 70 && p.inv.armor == 50, "a fall goes past the armour");
+        p = fresh(100, 50);
+        playerTakeDamage(p, 30, kDmgDrown);
+        check(p.health == 70 && p.inv.armor == 50, "... and so does drowning");
+        p = fresh(100, 50);
+        playerTakeDamage(p, 2, kDmgCrush);
+        check(p.health == 100, "what is left to health is rounded down: two through armour is nothing");
+        playerTakeDamage(p, 2, kDmgCrush);
+        playerTakeDamage(p, 2, kDmgCrush);
+        check(p.inv.armor == 47 && p.armorTenths.value == 6, "... and the armour is worn in tenths");
+        p = fresh(100, 4);
+        playerTakeDamage(p, 30, kDmgCrush);
+        check(p.health == 78 && p.inv.armor == 0, "too little armour: it takes twice itself, the rest is health");
+        // The suit's word for it.
+        p = fresh(60, 0);
+        playerTakeDamage(p, 30, kDmgCrush);
+        check(p.suit.value.queue[0] == kSuitDmg5, "a crush of 30 is a major fracture");
+        p = fresh(60, 0);
+        playerTakeDamage(p, 10, kDmgFall);
+        check(p.suit.value.queue[0] == kSuitDmg4, "... a fall of 10, a minor one");
+        p = fresh(100, 0);
+        playerTakeDamage(p, 10, kDmgCrush);
+        check(p.suit.value.queue[0] < 0, "... and nothing is said of a hurt with health still over 75");
+        p = fresh(100, 0);
+        p.health = 90;
+        playerTakeDamage(p, 30, kDmgCrush);
+        playerTakeDamage(p, 30, kDmgCrush);
+        int majors = 0;
+        for (std::int8_t line : p.suit.value.queue)
+            majors += line == kSuitDmg5;
+        check(majors == 1, "... nor said again within thirty seconds");
+        // In pieces below -40.
+        p = fresh(10, 0);
+        playerTakeDamage(p, 51, kDmgGeneric);
+        check(p.health == -41 && p.gib.value == 1, "killed to -41, the player is in pieces");
+        p = fresh(10, 0);
+        playerTakeDamage(p, 49, kDmgGeneric);
+        check(p.health == -39 && p.gib.value == 0, "... to -39, not");
+        p = fresh(10, 0);
+        playerTakeDamage(p, 11, kDmgAlwaysGib);
+        check(p.gib.value == 1, "... and always, by what always does it (a barnacle's)");
+    }
+
     void testSums()
     {
         PlayerState player;
@@ -225,6 +290,214 @@ namespace
     {
         g.player.origin[2] += fxFromInt(30000);
     }
+    /// c1a2's ladder up through the hatch: its foot is 64 above the floor,
+    /// and the box (*4) is what the game has the player push under it. On
+    /// the box, facing it and looking up, forward climbs it.
+    void testHatchLadder(const char *dir)
+    {
+        auto game = load(dir, "c1a2");
+        if (!game)
+            return;
+        Game &g = *game;
+        int ladder = -1;
+        for (int i = 0; i < g.move.ladderCount; ++i)
+        {
+            const LadderVolume &l = g.ladders[i];
+            if (l.active && fxToInt(l.mins[0]) >= 110 && fxToInt(l.maxs[0]) <= 214 && fxToInt(l.mins[1]) < -770 &&
+                fxToInt(l.maxs[1]) > -790)
+                ladder = i;
+        }
+        check(ladder >= 0, "c1a2's hatch ladder");
+        int box = -1;
+        for (std::uint32_t b = 0; b < g.view.brushCount; ++b)
+            box = g.view.brushes[b].model == 4 ? static_cast<int>(b) : box;
+        check(box >= 0, "... and the box that goes under it");
+        if (ladder < 0 || box < 0)
+            return;
+        // The box pushed under the hatch, as the player would: walked into
+        // from its +x side, towards -x, until its middle is under it.
+        {
+            g.player.origin[0] = fxFromInt(320 + 17);
+            g.player.origin[1] = fxFromInt(-801);
+            g.player.origin[2] = fxFromInt(-576) + kStandingFeet;
+            MoveCommand push;
+            push.forwardXY[0] = -kFxOne;
+            push.forwardXY[1] = 0;
+            push.rightXY[0] = 0;
+            push.rightXY[1] = kFxOne;
+            push.viewForward[0] = -kFxOne;
+            push.viewRight[1] = kFxOne;
+            push.forward = 1;
+            for (int i = 0; i < 30 * 8; ++i)
+            {
+                logicTick(g.logic, g.player, 33);
+                playerMove(g.player, push, g.move, kPlayerTick);
+                const MoverHull &moved = g.movers[box];
+                if ((moved.mins[0] + moved.maxs[0]) / 2 <= fxFromInt(162))
+                    break;
+            }
+        }
+        const MoverHull &top = g.movers[box];
+        std::printf("test_monsters: c1a2: pushed, the box's middle is at %.0f %.0f (under the hatch: 120..204)\n",
+                    toUnits((top.mins[0] + top.maxs[0]) / 2), toUnits((top.mins[1] + top.maxs[1]) / 2));
+        check((top.mins[0] + top.maxs[0]) / 2 < fxFromInt(200), "the box can be pushed under the hatch");
+        g.player.origin[0] = fxFromInt(162);
+        g.player.origin[1] = fxFromInt(-801);
+        g.player.origin[2] = top.maxs[2] + kStandingFeet + fxFromInt(1);
+        g.player.velocity[0] = g.player.velocity[1] = g.player.velocity[2] = 0;
+        g.player.health = 100;
+        MoveCommand cmd;
+        for (int i = 0; i < 10; ++i)
+            playerMove(g.player, cmd, g.move, kPlayerTick);
+        std::printf("test_monsters: c1a2: standing on the box, the player's head is at %.2f, the ladder's foot at %.2f\n",
+                    toUnits(g.player.origin[2] + kStandingFeet), toUnits(g.ladders[ladder].mins[2]));
+        cmd.forwardXY[0] = 0;
+        cmd.forwardXY[1] = kFxOne; // facing +y, the ladder
+        cmd.rightXY[0] = kFxOne;
+        cmd.rightXY[1] = 0;
+        cmd.viewForward[0] = 0;
+        cmd.viewForward[1] = fxFromDouble(0.5);
+        cmd.viewForward[2] = fxFromDouble(0.866); // looking up
+        cmd.viewRight[0] = kFxOne;
+        cmd.forward = 1;
+        bool held = false;
+        for (int i = 0; i < 60; ++i)
+        {
+            playerMove(g.player, cmd, g.move, kPlayerTick);
+            held = held || g.player.onLadder;
+        }
+        std::printf("test_monsters: c1a2: %s the ladder; now at %.0f\n", held ? "took hold of" : "never took", toUnits(g.player.origin[2]));
+        check(held, "on the box under the hatch, the player takes hold of its ladder");
+        check(g.player.origin[2] - kStandingFeet > fxFromInt(-400), "... and climbs it, up through the hatch");
+    }
+
+    /// c1a2b's ladders: walked into from the floor at the foot of each, the
+    /// player takes hold of it and climbs.
+    void testLadderFeet(const char *dir)
+    {
+        auto game = load(dir, "c1a2b");
+        if (!game)
+            return;
+        Game &g = *game;
+        int tried = 0, climbed = 0;
+        for (int i = 0; i < g.move.ladderCount; ++i)
+        {
+            const LadderVolume &l = g.ladders[i];
+            if (!l.active)
+                continue;
+            // Its thin side is the way in: stand 40 off it, on the floor
+            // under its foot, either side, and walk at it.
+            const bool thinX = l.maxs[0] - l.mins[0] < l.maxs[1] - l.mins[1];
+            bool ok = false;
+            // From the floor at its foot, or (a ladder down a shaft) from the
+            // floor at its top, walking out over it.
+            (void)thinX;
+            for (int way = 0; way < 24 && !ok; ++way)
+            {
+                // (Each side of it -- face on, or along a ledge into its
+                // edge, flush with its face, hugging the wall it is on.)
+                const int side = way & 1 ? 1 : -1;
+                const int axis = (way >> 1) & 1;
+                const bool fromTop = ((way >> 2) & 1) != 0;
+                const int cross = way >> 3; // 0: in line; 1, 2: out from either face
+                fx at[3] = {(l.mins[0] + l.maxs[0]) / 2, (l.mins[1] + l.maxs[1]) / 2,
+                            (fromTop ? l.maxs[2] : l.mins[2]) + fxFromInt(40)};
+                if (cross != 0)
+                {
+                    const int other = axis ^ 1;
+                    at[other] = cross == 1 ? l.maxs[other] + fxFromInt(16) : l.mins[other] - fxFromInt(16);
+                }
+                at[axis] = (side < 0 ? l.mins[axis] : l.maxs[axis]) + side * fxFromInt(40);
+                ActorState probe;
+                for (int k = 0; k < 3; ++k)
+                    probe.pos[k] = at[k];
+                if (!actorToFloor(g.move, probe, fxFromInt(8), fxFromInt(96)))
+                    continue;
+                if (!fromTop && probe.pos[2] < l.mins[2] - fxFromInt(48))
+                    continue; // (its foot is out of reach from there)
+                g.player.origin[0] = probe.pos[0];
+                g.player.origin[1] = probe.pos[1];
+                g.player.origin[2] = probe.pos[2] + kStandingFeet;
+                g.player.velocity[0] = g.player.velocity[1] = g.player.velocity[2] = 0;
+                g.player.onLadder = false;
+                MoveCommand cmd;
+                cmd.forwardXY[0] = axis == 0 ? -side * kFxOne : 0;
+                cmd.forwardXY[1] = axis == 0 ? 0 : -side * kFxOne;
+                cmd.rightXY[0] = cmd.forwardXY[1];
+                cmd.rightXY[1] = -cmd.forwardXY[0];
+                for (int k = 0; k < 2; ++k)
+                {
+                    cmd.viewForward[k] = cmd.forwardXY[k];
+                    cmd.viewRight[k] = cmd.rightXY[k];
+                }
+                cmd.viewForward[2] = 0;
+                cmd.forward = 1;
+                const fx start = g.player.origin[2];
+                bool held = false;
+                for (int f = 0; f < 60; ++f)
+                {
+                    // (From the top: looking down, forward goes down it.)
+                    if (fromTop && g.player.onLadder)
+                    {
+                        cmd.viewForward[0] = cmd.viewForward[0] / 2;
+                        cmd.viewForward[1] = cmd.viewForward[1] / 2;
+                        cmd.viewForward[2] = -fxFromDouble(0.866);
+                    }
+                    playerMove(g.player, cmd, g.move, kPlayerTick);
+                    held = held || g.player.onLadder;
+                }
+                ok = held && (fromTop ? g.player.origin[2] < start - fxFromInt(64)
+                                      : g.player.origin[2] > start + fxFromInt(64));
+                if (std::getenv("HLDS_DEBUG_LADDER"))
+                    std::printf("  ladder %d way %d from %.0f %.0f %.0f: held %d, ended %.0f %.0f %.0f\n", i, way,
+                                toUnits(probe.pos[0]), toUnits(probe.pos[1]), toUnits(start), held,
+                                toUnits(g.player.origin[0]), toUnits(g.player.origin[1]), toUnits(g.player.origin[2]));
+            }
+            ++tried;
+            climbed += ok;
+            if (!ok)
+                std::printf("test_monsters: c1a2b: the ladder at %.0f %.0f %.0f was not climbed\n",
+                            toUnits(l.mins[0]), toUnits(l.mins[1]), toUnits(l.mins[2]));
+        }
+        std::printf("test_monsters: c1a2b: %d of %d ladders climbed\n", climbed, tried);
+        check(tried >= 4 && climbed == tried, "every c1a2b ladder is taken hold of and climbed (up from its foot, or down from its top)");
+    }
+
+    /// The hazard course's hologram (a monster_generic of holo.mdl): its
+    /// origin is its middle, as the game's box for it has it. The one on the
+    /// projector is left where the map put it (its drop starts in the
+    /// projector), the one by the button is let down to the floor, its
+    /// middle 36 above.
+    void testHologram(const char *dir)
+    {
+        auto game = load(dir, "t0a0");
+        if (!game)
+            return;
+        Game &g = *game;
+        auto named = [&](const char *name)
+        {
+            const std::uint16_t id = nameIdOfHash(g.view.nameHashes, g.view.nameCount, nameHash(name));
+            for (int i = 0; id != 0 && i < g.actors.count; ++i)
+            {
+                if (g.actors.states[i].name == id)
+                    return i;
+            }
+            return -1;
+        };
+        const int intro = named("intromona"), gen = named("genmona");
+        check(intro >= 0 && gen >= 0, "t0a0's two holograms");
+        if (intro < 0 || gen < 0)
+            return;
+        // (After a second of the map: nothing that thinks lets them down to
+        // where feet would be.)
+        for (int n = 0; n < 30; ++n)
+            tick(g, 2);
+        const double introZ = toUnits(g.actors.states[intro].pos[2]), genZ = toUnits(g.actors.states[gen].pos[2]);
+        std::printf("test_monsters: t0a0: the holograms' middles at %.1f (on the projector) and %.1f\n", introZ, genZ);
+        check(std::fabs(introZ + 5) < 1.5, "the hologram on the projector is where the map has it");
+        check(std::fabs(genZ + 9) < 1.5, "... the other stands on the floor, its middle 36 above it");
+    }
+
 
     /// A round in the head counts three times: a zombie takes 24 of a
     /// pistol's 8 there and 8 anywhere else (the game's 30% for bullets is
@@ -974,15 +1247,31 @@ namespace
         monsterHurt(g.logic, crab, 1, false);
         bool solid = false;
         int frames = 0;
+        // (While it walks it turns at its own yaw speed, yaw_speed * 2
+        // degrees a second -- not faster, whatever the way does.)
+        int walkedTurn = 0, tooFast = 0;
         for (; frames < 30 * 40 && g.player.health == 100; ++frames)
         {
+            const AiMonster *m = aiFind(g.actors, crab);
+            const bool walking = m != nullptr && m->movementGoal != kMoveGoalNone && !m->inAir;
+            const int most = m != nullptr ? (m->yawSpeed * 2 * 65536 * 33) / (360 * 1000) + 2 : 0;
+            const std::uint16_t before = actor.yaw;
             tick(g, 2);
             solid = solid || inSolid(g, actor);
+            m = aiFind(g.actors, crab);
+            if (walking && m != nullptr && m->movementGoal != kMoveGoalNone && !m->inAir)
+            {
+                const int turned = static_cast<std::int16_t>(actor.yaw - before);
+                walkedTurn += turned < 0 ? -turned : turned;
+                tooFast += (turned < 0 ? -turned : turned) > most;
+            }
         }
         const fx d1[3] = {g.player.origin[0] - actor.pos[0], g.player.origin[1] - actor.pos[1], 0};
-        std::printf("test_monsters: round the corner from %.0f units: bitten after %.1f s (now %.0f off)\n",
-                    start, frames / 30.0, toUnits(fxLength(d1)));
+        std::printf("test_monsters: round the corner from %.0f units: bitten after %.1f s (now %.0f off); "
+                    "turned %.0f degrees walking, %d frames too fast\n",
+                    start, frames / 30.0, toUnits(fxLength(d1)), walkedTurn * 360.0 / 65536, tooFast);
         check(g.player.health < 100 && !solid, "stung, it finds them by the nodes and bites");
+        check(walkedTurn >= 8192 && tooFast == 0, "walking round the corner it turns, at its yaw speed");
     }
 
     void testZombie(const char *dir)
@@ -2359,6 +2648,7 @@ int main()
     testPick();
     testGunRules();
     testSums();
+    testPlayerDamage();
     const char *dir = std::getenv("HLDS_VALVE_DIR");
     if (dir != nullptr && dir[0] != '\0')
     {
@@ -2366,6 +2656,9 @@ int main()
         for (int vblanks = 1; vblanks <= 4; ++vblanks)
             testHeadcrab(dir, vblanks);
         testRoundTheCorner(dir);
+        testHatchLadder(dir);
+        testLadderFeet(dir);
+        testHologram(dir);
         testZombie(dir);
         testMaker(dir);
         testItems(dir);

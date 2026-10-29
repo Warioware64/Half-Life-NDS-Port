@@ -654,6 +654,170 @@ namespace
             tick(g);
         check(g.player.health <= 0, "the player, taken up, dies at its mouth");
     }
+
+    int actorNamed(const Game &g, const char *name)
+    {
+        const std::uint16_t id = nameIdOfHash(g.view.nameHashes, g.view.nameCount, nameHash(name));
+        for (int i = 0; id != 0 && i < g.actors.count; ++i)
+        {
+            if (g.actors.states[i].name == id)
+                return i;
+        }
+        return -1;
+    }
+
+    int recordNamed(const Game &g, const char *name)
+    {
+        const std::uint32_t hash = nameHash(name);
+        for (std::uint32_t i = 0; i < g.view.logicCount; ++i)
+        {
+            const LogicRecord &r = g.view.logic[i];
+            if (r.name != 0 && g.view.nameHashes[r.name] == hash)
+                return static_cast<int>(i);
+        }
+        return -1;
+    }
+
+    /// c1a1f's two zombies in scripts: the freak behind the computers, held
+    /// by a script nothing interrupts, ends it (and dies) by its own
+    /// half-health trigger; the one that slides down the wall, hurt before
+    /// its scene, is let go and stays let go -- its script takes it once.
+    void testC1a1fScripts(const char *dir)
+    {
+        auto game = load(dir, "c1a1f");
+        if (!game)
+            return;
+        Game &g = *game;
+        const int freak = actorNamed(g, "freakin_zombie");
+        const int slide = actorNamed(g, "slide_zombie");
+        const int suspense = recordNamed(g, "suspense_track_trigger");
+        check(freak >= 0 && slide >= 0 && suspense >= 0, "c1a1f's freak and slide zombies, and the suspense trigger");
+        if (freak < 0 || slide < 0 || suspense < 0)
+            return;
+        g.player.health = 100;
+        for (int n = 0; n < 60; ++n)
+            tickStill(g);
+        ActorState &f = g.actors.states[freak];
+        ActorState &z = g.actors.states[slide];
+        check(f.script >= 0 && z.script >= 0, "both are held by their scripts from the start");
+        // Shot: past half its health, and its trigger plays it its death.
+        monsterHurt(g.logic, freak, 30, true);
+        bool died = false;
+        for (int n = 0; n < 90 && !died; ++n)
+        {
+            tickStill(g);
+            trace(g, freak, n * 33);
+            died = f.ai == kAiDead;
+        }
+        check(died, "the freak zombie, shot past half its health, plays its death");
+        check(g.states[suspense].dead, "... and its scene kills the suspense trigger");
+        for (int n = 0; n < 150; ++n)
+            tickStill(g);
+        check(f.active, "... and, as its script says, leaves its body");
+        // The slide zombie, hurt before its scene: let go, and not taken back.
+        monsterHurt(g.logic, slide, 5, true);
+        for (int n = 0; n < 30; ++n)
+        {
+            tickStill(g);
+            trace(g, slide, n * 33);
+        }
+        check(z.script < 0 && z.ai != kAiDead, "the slide zombie, hurt, is let go of its scene");
+        for (int n = 0; n < 90; ++n)
+            tickStill(g);
+        check(z.script < 0, "... and its script does not take it back");
+        // (Let go, it is idle, as CineCleanup leaves it: it fights what it sees.)
+        bool fights = false;
+        if (standAt(g, slide, 200))
+        {
+            for (int n = 0; n < 90 && !fights; ++n)
+            {
+                tickStill(g);
+                trace(g, slide, 2000 + n * 33);
+                fights = mind(g, slide).state == kStateCombat;
+            }
+        }
+        check(fights, "... and goes for the player when it sees them");
+    }
+    /// c1a1c's crabs: five monstermakers under the ceiling (hck1..hck5,
+    /// two alive at a time) and a push under them that carries what they
+    /// drop out from under them -- the game's MakeMonster will not build a
+    /// stack. And the bullsquid its teleporter makes over the pit falls into
+    /// it (made monsters are let fall).
+    void testC1a1cMakers(const char *dir)
+    {
+        auto game = load(dir, "c1a1c");
+        if (!game)
+            return;
+        Game &g = *game;
+        g.player.health = 100;
+        const std::uint16_t crabber = nameIdOfHash(g.view.nameHashes, g.view.nameCount, nameHash("hcrabber"));
+        check(crabber != 0, "c1a1c's hcrabber");
+        logicFire(g.logic, g.player, crabber, -1, kUseToggle, 0);
+        for (int n = 0; n < 30 * 60; ++n) // (a minute)
+            tickStill(g);
+        int makers = 0, made = 0;
+        bool stacked = false, underIt = false;
+        for (std::uint32_t i = 0; i < g.view.logicCount; ++i)
+        {
+            const LogicRecord &r = g.view.logic[i];
+            if (r.kind != static_cast<std::uint8_t>(LogicKind::Maker) || r.name == 0)
+                continue;
+            const std::uint32_t hash = g.view.nameHashes[r.name];
+            bool crab = false;
+            for (const char *name : {"hck1", "hck2", "hck3", "hck4", "hck5"})
+                crab = crab || hash == nameHash(name);
+            if (!crab)
+                continue;
+            ++makers;
+            made += static_cast<int>(g.states[i].bits);
+            const ActorRecord &born = g.actors.records[r.extra[0]];
+            for (int n = 0; n < static_cast<int>(r.extra[1]); ++n)
+            {
+                const ActorState &crabState = g.actors.states[r.extra[0] + n];
+                if (!crabState.active || crabState.ai >= kAiDying)
+                    continue;
+                const fx d[3] = {crabState.pos[0] - born.origin[0], crabState.pos[1] - born.origin[1], 0};
+                underIt = underIt || fxLength(d) < fxFromInt(20);
+                for (int m = 0; m < n; ++m)
+                {
+                    const ActorState &other = g.actors.states[r.extra[0] + m];
+                    const fx e[3] = {crabState.pos[0] - other.pos[0], crabState.pos[1] - other.pos[1], 0};
+                    stacked = stacked || (other.active && fxLength(e) < fxFromInt(8));
+                }
+            }
+        }
+        std::printf("test_ai: c1a1c: %d crab makers made %d\n", makers, made);
+        check(makers == 5 && made >= 9, "c1a1c's crab makers make their crabs (two alive each, as room allows)");
+        check(!underIt, "... each carried out from under its maker by the push");
+        check(!stacked, "... and none made on top of another");
+
+        // The bullsquid over the pit.
+        const std::uint16_t teleport = nameIdOfHash(g.view.nameHashes, g.view.nameCount, nameHash("teleport_mm1"));
+        logicFire(g.logic, g.player, teleport, -1, kUseToggle, 0);
+        int squid = -1;
+        fx highest = 0;
+        for (int n = 0; n < 30 * 3; ++n)
+        {
+            tickStill(g);
+            for (int k = 0; squid < 0 && k < g.actors.count; ++k)
+            {
+                const ActorState &s2 = g.actors.states[k];
+                if (s2.active && s2.kind == static_cast<std::uint8_t>(ActorKind::Bullsquid) &&
+                    std::abs(fxToInt(s2.pos[0]) + 629) < 4 && std::abs(fxToInt(s2.pos[1]) + 386) < 4)
+                {
+                    squid = k;
+                    highest = s2.pos[2];
+                }
+            }
+        }
+        check(squid >= 0, "the teleporter makes its bullsquid");
+        if (squid >= 0)
+        {
+            std::printf("test_ai: c1a1c: the bullsquid made at %.0f is at %.0f three seconds on\n", highest / 4096.0,
+                        g.actors.states[squid].pos[2] / 4096.0);
+            check(g.actors.states[squid].pos[2] < highest - fxFromInt(200), "... which falls into the pit");
+        }
+    }
 } // namespace
 
 int main()
@@ -671,6 +835,8 @@ int main()
         testSquidAndCrab(dir);
         testHoundeyes(dir);
         testBarnacle(dir);
+        testC1a1fScripts(dir);
+        testC1a1cMakers(dir);
     }
     if (g_failures == 0)
         std::printf("test_ai: ok\n");

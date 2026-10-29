@@ -28,6 +28,7 @@
 
 #include <cstdint>
 
+#include "HlPlayerMove.hpp"
 #include "HlRelation.hpp"
 #include "HlSoundEnt.hpp"
 
@@ -109,27 +110,8 @@ namespace hldata
     inline constexpr std::uint32_t kCapFly = 1u << 15;
     inline constexpr std::uint32_t kCapDoorsGroup = kCapUse | kCapAutoDoors | kCapOpenDoors;
 
-    // DMG_* (cbase.h)
-    inline constexpr std::uint32_t kDmgGeneric = 0;
-    inline constexpr std::uint32_t kDmgCrush = 1u << 0;
-    inline constexpr std::uint32_t kDmgBullet = 1u << 1;
-    inline constexpr std::uint32_t kDmgSlash = 1u << 2;
-    inline constexpr std::uint32_t kDmgBurn = 1u << 3;
-    inline constexpr std::uint32_t kDmgFreeze = 1u << 4;
-    inline constexpr std::uint32_t kDmgFall = 1u << 5;
-    inline constexpr std::uint32_t kDmgBlast = 1u << 6;
-    inline constexpr std::uint32_t kDmgClub = 1u << 7;
-    inline constexpr std::uint32_t kDmgShock = 1u << 8;
-    inline constexpr std::uint32_t kDmgSonic = 1u << 9;
-    inline constexpr std::uint32_t kDmgEnergyBeam = 1u << 10;
-    inline constexpr std::uint32_t kDmgNeverGib = 1u << 12;
-    inline constexpr std::uint32_t kDmgAlwaysGib = 1u << 13;
-    inline constexpr std::uint32_t kDmgDrown = 1u << 14;
-    inline constexpr std::uint32_t kDmgAcid = 1u << 20;
-    inline constexpr std::uint32_t kDmgGibCorpse = kDmgCrush | kDmgFall | kDmgBlast | kDmgSonic | kDmgClub;
-    /// (Not the game's: "work it out from `bullet`", for monsterHurt's old
-    /// callers.)
-    inline constexpr std::uint32_t kDmgUnset = 0xFFFFFFFFu;
+    // (DMG_*, the kinds of hurt: HlPlayerMove.hpp, which the player's own
+    // hurt needs too.)
 
     // Activities (dlls/activity.h): what a clip is for. The numbers are the
     // game's, as the models have them.

@@ -211,6 +211,74 @@ namespace hldata
         bool onTarget = false;
     };
 
+    // DMG_* (cbase.h)
+    inline constexpr std::uint32_t kDmgGeneric = 0;
+    inline constexpr std::uint32_t kDmgCrush = 1u << 0;
+    inline constexpr std::uint32_t kDmgBullet = 1u << 1;
+    inline constexpr std::uint32_t kDmgSlash = 1u << 2;
+    inline constexpr std::uint32_t kDmgBurn = 1u << 3;
+    inline constexpr std::uint32_t kDmgFreeze = 1u << 4;
+    inline constexpr std::uint32_t kDmgFall = 1u << 5;
+    inline constexpr std::uint32_t kDmgBlast = 1u << 6;
+    inline constexpr std::uint32_t kDmgClub = 1u << 7;
+    inline constexpr std::uint32_t kDmgShock = 1u << 8;
+    inline constexpr std::uint32_t kDmgSonic = 1u << 9;
+    inline constexpr std::uint32_t kDmgEnergyBeam = 1u << 10;
+    inline constexpr std::uint32_t kDmgNeverGib = 1u << 12;
+    inline constexpr std::uint32_t kDmgAlwaysGib = 1u << 13;
+    inline constexpr std::uint32_t kDmgDrown = 1u << 14;
+    inline constexpr std::uint32_t kDmgParalyze = 1u << 15;
+    inline constexpr std::uint32_t kDmgNerveGas = 1u << 16;
+    inline constexpr std::uint32_t kDmgPoison = 1u << 17;
+    inline constexpr std::uint32_t kDmgRadiation = 1u << 18;
+    inline constexpr std::uint32_t kDmgDrownRecover = 1u << 19;
+    inline constexpr std::uint32_t kDmgAcid = 1u << 20;
+    inline constexpr std::uint32_t kDmgSlowBurn = 1u << 21;
+    inline constexpr std::uint32_t kDmgSlowFreeze = 1u << 22;
+    /// What hurts on over time (DMG_TIMEBASED).
+    inline constexpr std::uint32_t kDmgTimeBased = kDmgParalyze | kDmgNerveGas | kDmgPoison | kDmgRadiation |
+                                                   kDmgDrownRecover | kDmgAcid | kDmgSlowBurn | kDmgSlowFreeze;
+    inline constexpr std::uint32_t kDmgGibCorpse = kDmgCrush | kDmgFall | kDmgBlast | kDmgSonic | kDmgClub;
+    /// (Not the game's: "work it out from `bullet`", for monsterHurt's old
+    /// callers.)
+    inline constexpr std::uint32_t kDmgUnset = 0xFFFFFFFFu;
+
+    /// What the suit says of a hurt (the game's SetSuitUpdate lines, of
+    /// sentences.txt). A map's sentences begin with these, in this order
+    /// (the converter puts them there), so each is its own sentence number.
+    enum SuitLine : std::uint8_t
+    {
+        kSuitDmg0, ///< minor laceration
+        kSuitDmg1, ///< major laceration
+        kSuitDmg2, ///< internal bleeding
+        kSuitDmg3, ///< blood toxins
+        kSuitDmg4, ///< minor fracture
+        kSuitDmg5, ///< major fracture
+        kSuitDmg6, ///< blood loss
+        kSuitDmg7, ///< seek medical attention
+        kSuitDet0, ///< biohazard
+        kSuitDet1, ///< chemicals
+        kSuitDet2, ///< radiation
+        kSuitMed1, ///< automedic on
+        kSuitHeal7, ///< morphine
+        kSuitHlth2, ///< health critical
+        kSuitHlth3, ///< near death
+        kSuitLines
+    };
+    /// The sentences.txt names, by SuitLine.
+    inline constexpr const char *kSuitLineNames[kSuitLines] = {
+        "HEV_DMG0", "HEV_DMG1", "HEV_DMG2", "HEV_DMG3", "HEV_DMG4", "HEV_DMG5",  "HEV_DMG6",  "HEV_DMG7",
+        "HEV_DET0", "HEV_DET1", "HEV_DET2", "HEV_MED1", "HEV_HEAL7", "HEV_HLTH2", "HEV_HLTH3"};
+
+    /// The suit's lines to come (CSUITPLAYLIST), and how long before each
+    /// may be said again (its no-repeat time).
+    struct SuitVoice
+    {
+        std::int8_t queue[4] = {-1, -1, -1, -1};
+        std::int32_t waitMs = 0; ///< until the next may be said (SUITUPDATETIME)
+        std::int32_t againMs[kSuitLines] = {};
+    };
+
     struct PlayerState
     {
         fx origin[3] = {0, 0, 0};
@@ -243,6 +311,14 @@ namespace hldata
         bool hurtKnown = false;
         /// ... and the kinds of it the display shows (kHurt*).
         Unsaved<std::uint8_t> hurtKinds;
+        /// The armour's tenths, past `inv.armor` (the game's is a float:
+        /// it is worn down by four tenths of a hurt).
+        Unsaved<std::uint8_t> armorTenths;
+        /// What the suit has to say of what hurt them.
+        Unsaved<SuitVoice> suit;
+        /// Killed far enough below nothing to be in pieces (Killed's
+        /// GibMonster): set by the hurt, taken by whoever throws the pieces.
+        Unsaved<std::uint8_t> gib;
         /// How hard the world pulls them, in percent of sv_gravity (Xen's
         /// trigger_gravity); 0: all of it. Not saved here: it is kept with
         /// the game's switches (kGlobalPlayerGravity), which logicTick puts
@@ -288,6 +364,116 @@ namespace hldata
 
     /// Whether nothing may hurt the player (the god cheat).
     inline bool godMode(const PlayerState &player) { return player.cheats != nullptr && player.cheats->god; }
+
+    /// SetSuitUpdate: the suit is to say `line`, unless it has said it in
+    /// the last `againMs` (or has no room for more, or there is no suit).
+    inline void suitUpdate(PlayerState &player, int line, std::int32_t againMs)
+    {
+        SuitVoice &suit = player.suit.value;
+        if (!(player.inv.have & 1) || line < 0 || line >= kSuitLines || suit.againMs[line] > 0)
+            return;
+        for (std::int8_t &slot : suit.queue)
+        {
+            if (slot >= 0)
+                continue;
+            slot = static_cast<std::int8_t>(line);
+            suit.againMs[line] = againMs;
+            return;
+        }
+    }
+
+    /// CBasePlayer::TakeDamage: `amount` of the kind `type` (kDmg*). The
+    /// armour takes four fifths of what is not a fall or drowning, being worn
+    /// down by half of that; the rest, rounded down, is health. Then the
+    /// suit says what it was, as the game's does; and one who dies of it
+    /// below -40 is in pieces (`gib`). `from`: where it came from, if it came
+    /// from somewhere. `kinds`: what the display shows of it (kHurt*). What
+    /// came off their health.
+    inline std::int32_t playerTakeDamage(PlayerState &player, std::int32_t amount, std::uint32_t type = kDmgGeneric,
+                                         const fx *from = nullptr, std::uint8_t kinds = 0)
+    {
+        if (amount <= 0 || godMode(player) || player.health <= 0)
+            return 0;
+        player.hurt += amount;
+        player.hurtKnown = from != nullptr;
+        for (int i = 0; from != nullptr && i < 3; ++i)
+            player.hurtFrom[i] = from[i];
+        player.hurtKinds.value |= kinds;
+        // In tenths: the game's armour is a float, worn by 0.4 of a hurt.
+        std::int32_t taken10 = amount * 10;
+        std::int32_t armor10 = player.inv.armor * 10 + player.armorTenths.value;
+        if (armor10 > 0 && !(type & (kDmgFall | kDmgDrown)))
+        {
+            const std::int32_t cost10 = amount * 4;
+            if (cost10 > armor10)
+            {
+                taken10 -= armor10 * 2;
+                armor10 = 0;
+            }
+            else
+            {
+                armor10 -= cost10;
+                taken10 = amount * 2;
+            }
+            player.inv.armor = static_cast<std::int16_t>(armor10 / 10);
+            player.armorTenths.value = static_cast<std::uint8_t>(armor10 % 10);
+        }
+        const std::int32_t before = player.health;
+        const std::int32_t lost = taken10 / 10; // (floor: the cast the game calls critical)
+        player.health -= lost;
+        if (player.health <= 0)
+        {
+            // Killed: GIB_ALWAYS, or GIB_NORMAL below -40.
+            if ((type & kDmgAlwaysGib) || (player.health < -40 && !(type & kDmgNeverGib)))
+                player.gib.value = 1;
+            return lost;
+        }
+        if (lost <= 0)
+            return lost;
+        // How bad is it, doc? (On the health as it now is.)
+        const bool trivial = player.health > 75 || amount < 5;
+        const bool major = amount > 25;
+        const bool critical = player.health < 30;
+        constexpr std::int32_t k30Sec = 30000, k1Min = 60000, k5Min = 300000, k10Min = 600000, k30Min = 1800000;
+        if (!trivial || (type & kDmgTimeBased))
+        {
+            if ((type & kDmgClub) && major)
+                suitUpdate(player, kSuitDmg4, k30Sec);
+            if (type & (kDmgFall | kDmgCrush))
+                suitUpdate(player, major ? kSuitDmg5 : kSuitDmg4, k30Sec);
+            if ((type & kDmgBullet) && amount > 5)
+                suitUpdate(player, kSuitDmg6, k30Sec);
+            if (type & kDmgSlash)
+                suitUpdate(player, major ? kSuitDmg1 : kSuitDmg0, k30Sec);
+            if ((type & kDmgSonic) && major)
+                suitUpdate(player, kSuitDmg2, k1Min);
+            if (type & (kDmgPoison | kDmgParalyze))
+                suitUpdate(player, kSuitDmg3, k1Min);
+            if (type & kDmgAcid)
+                suitUpdate(player, kSuitDet1, k1Min);
+            if (type & kDmgNerveGas)
+                suitUpdate(player, kSuitDet0, k1Min);
+            if (type & kDmgRadiation)
+                suitUpdate(player, kSuitDet2, k1Min);
+        }
+        if (!trivial && major && before >= 75)
+        {
+            suitUpdate(player, kSuitMed1, k30Min);
+            suitUpdate(player, kSuitHeal7, k30Min);
+        }
+        if (!trivial && critical && before < 75)
+        {
+            if (player.health < 6)
+                suitUpdate(player, kSuitHlth3, k10Min);
+            else if (player.health < 20)
+                suitUpdate(player, kSuitHlth2, k10Min);
+            // (One time in four: the game's RANDOM_LONG(0, 3); here by the
+            // hurt so far, which is as good as chance.)
+            if ((player.hurt & 3) == 0 && before < 50)
+                suitUpdate(player, kSuitDmg7, k5Min);
+        }
+        return lost;
+    }
     /// How hard the world pulls (sv_gravity).
     inline fx gravityOf(const PlayerState &player) { return player.cheats != nullptr ? player.cheats->gravity : kGravity; }
     /// ... nor anything go for them (notarget).
@@ -408,10 +594,13 @@ namespace hldata
             return v < lo ? lo : (v > hi ? hi : v);
         }
 
-        /// Remove from `in` its component into the plane `normal`.
-        inline void clipVelocity(const fx *in, const std::int32_t *normal, fx *out)
+        /// Remove from `in` its component into the plane `normal` (times
+        /// `overbounce`, in hundredths: above 100 it bounces off).
+        inline void clipVelocity(const fx *in, const std::int32_t *normal, fx *out, int overbounce = 100)
         {
-            const fx backoff = dotNormal(in, normal);
+            fx backoff = dotNormal(in, normal);
+            if (overbounce != 100)
+                backoff = static_cast<fx>(static_cast<std::int64_t>(backoff) * overbounce / 100);
             for (int i = 0; i < 3; ++i)
             {
                 const fx change =
@@ -432,6 +621,16 @@ namespace hldata
             /// solid" is judged against (HlMovers.hpp says why brushes are
             /// left out of that question).
             const Hull &hull() const { return s.ducked ? world.crouched : world.standing; }
+
+            /// `v` times the player's own friction (pmove->friction: 1, less
+            /// in a func_friction), which scales what the keys can add as
+            /// well as what the ground takes away. At 0, as down c1a1c's lift
+            /// shaft, the keys do nothing at all.
+            fx byFriction(fx v) const
+            {
+                return s.slip.value == 0 ? v
+                                         : static_cast<fx>(static_cast<std::int64_t>(v) * (100 - s.slip.value) / 100);
+            }
             /// A move, against the world and every solid brush.
             Trace trace(const fx *from, const fx *to) const
             {
@@ -535,8 +734,7 @@ namespace hldata
                     s.underMs += ms;
                     if (s.underMs > 12000 && s.hurtMs <= 0)
                     {
-                        s.health -= godMode(s) ? 0 : s.drownStep;
-                        s.hurtKinds.value |= kHurtDrown;
+                        playerTakeDamage(s, s.drownStep, kDmgDrown, nullptr, kHurtDrown);
                         if (s.drownStep < 5)
                             ++s.drownStep;
                         s.hurtMs = 1000;
@@ -550,9 +748,10 @@ namespace hldata
                 if (s.waterLevel > 0 && s.hurtMs <= 0 &&
                     (s.waterType == kContentsLava || s.waterType == kContentsSlime))
                 {
-                    s.health -= godMode(s) ? 0 : (s.waterType == kContentsLava ? 10 : 4) * s.waterLevel;
                     // (The game's DMG_BURN and DMG_ACID.)
-                    s.hurtKinds.value |= s.waterType == kContentsLava ? kHurtBurn : kHurtAcid;
+                    const bool lava = s.waterType == kContentsLava;
+                    playerTakeDamage(s, (lava ? 10 : 4) * s.waterLevel, lava ? kDmgBurn : kDmgAcid, nullptr,
+                                     lava ? kHurtBurn : kHurtAcid);
                     s.hurtMs = 1000;
                 }
             }
@@ -585,7 +784,7 @@ namespace hldata
                 fx newSpeed = 0;
                 if (speed > 0)
                 {
-                    newSpeed = speed - scaleTime(speed * kFriction, dt);
+                    newSpeed = speed - byFriction(scaleTime(speed * kFriction, dt));
                     if (newSpeed < 0)
                         newSpeed = 0;
                     for (int i = 0; i < 3; ++i)
@@ -597,7 +796,7 @@ namespace hldata
                     const fx addSpeed = wishSpeed - newSpeed;
                     if (addSpeed > 0)
                     {
-                        fx accelSpeed = scaleTime(wishSpeed * kAccelerate, dt);
+                        fx accelSpeed = byFriction(scaleTime(wishSpeed * kAccelerate, dt));
                         if (accelSpeed > addSpeed)
                             accelSpeed = addSpeed;
                         for (int i = 0; i < 3; ++i)
@@ -681,8 +880,8 @@ namespace hldata
                 const fx addSpeed = cappedSpeed - dotQ12(s.velocity, wishDir);
                 if (addSpeed <= 0)
                     return;
-                fx accelSpeed = scaleTime(
-                    static_cast<fx>(clampFx(wishSpeed, 0, kMaxVelocity)) * accel, dt);
+                fx accelSpeed = byFriction(scaleTime(
+                    static_cast<fx>(clampFx(wishSpeed, 0, kMaxVelocity)) * accel, dt));
                 if (accelSpeed > addSpeed)
                     accelSpeed = addSpeed;
                 for (int i = 0; i < 3; ++i)
@@ -741,11 +940,15 @@ namespace hldata
                         planes[planeCount][i] = tr.normal[i];
                     ++planeCount;
 
-                    if (planeCount == 1 && !s.onGround)
+                    if (planeCount == 1 && (!s.onGround || s.slip.value != 0))
                     {
-                        // In the air, off the first thing hit: just slide.
+                        // In the air (or where it is slippery), off the first
+                        // thing hit: just slide -- or, off a wall where
+                        // friction is less, bounce back by as much less
+                        // (sv_bounce 1).
                         fx clipped[3];
-                        clipVelocity(original, planes[0], clipped);
+                        clipVelocity(original, planes[0], clipped,
+                                     planes[0][2] > kFloorNormalZ ? 100 : 100 + s.slip.value);
                         for (int i = 0; i < 3; ++i)
                             s.velocity[i] = original[i] = clipped[i];
                     }
@@ -965,13 +1168,21 @@ namespace hldata
                     const LadderVolume &ladder = world.ladders[i];
                     if (!ladder.active)
                         continue;
+                    // (Not the game's to the unit: a hair below its foot,
+                    // and -- to take hold, not to stay on -- 8 above its top.
+                    // The console's pad has no walk: one cannot step slowly
+                    // off a ledge onto a ladder whose top is just under it,
+                    // as c1a2b's shafts have, and at a run the ladder is
+                    // crossed before the drop reaches it.)
+                    const fx below = fxFromInt(1);
+                    const fx above = s.onLadder ? 0 : fxFromInt(8);
                     bool touching = true;
                     for (int a = 0; a < 3 && touching; ++a)
                     {
                         const fx half = (a == 2 ? detail::kPlayerHalfHeight[s.ducked ? 1 : 0]
                                                 : detail::kPlayerHalfWidth);
-                        touching = s.origin[a] + half >= ladder.mins[a] &&
-                                   s.origin[a] - half <= ladder.maxs[a];
+                        touching = s.origin[a] + half >= ladder.mins[a] - (a == 2 ? below : 0) &&
+                                   s.origin[a] - half <= ladder.maxs[a] + (a == 2 ? above : 0);
                     }
                     if (touching)
                         return i;

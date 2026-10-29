@@ -271,7 +271,8 @@ namespace hldata
             // extra[3]: bit 0 Fade From; with bit 31, the colour (RGB15) in
             // bits 8-23 (a map cooked before that is black).
             w.fadeFrom = (record.extra[3] & 1) != 0;
-            w.fadeMs = 0;
+            // (Bit 1: held black first -- a map that begins in the dark.)
+            w.fadeMs = w.fadeFrom && (record.extra[3] & 2) ? -static_cast<std::int32_t>(record.extra[1]) : 0;
             w.fadeWholeMs = static_cast<std::int32_t>(record.extra[0]);
             w.fadeHoldMs = static_cast<std::int32_t>(record.extra[1]);
             w.fadeDark = static_cast<std::uint8_t>(record.extra[2] > 255 ? 255 : record.extra[2]);
@@ -377,7 +378,7 @@ namespace hldata
             state.speed %= 1000;
             if (dealt > 0 && atPlayer)
             {
-                playerHurt(player, dealt, from);
+                playerHurt(player, dealt, from, kDmgEnergyBeam);
                 if (w.actors != nullptr)
                     w.actors->got |= kGotHurt;
             }
@@ -394,7 +395,7 @@ namespace hldata
                     const fx length = fxLength(d);
                     for (int k = 0; length > 0 && k < 3; ++k)
                         w.struckFrom[k] = static_cast<fx>((static_cast<std::int64_t>(d[k]) << 12) / length);
-                    logicStrike(w, player, taker, dealt);
+                    logicStrike(w, player, taker, dealt, kDmgEnergyBeam);
                 }
             }
             // Its sparks: now and then, at either end.
@@ -429,7 +430,7 @@ namespace hldata
         {
             w.fadeMs += ms;
             const std::int32_t whole = w.fadeWholeMs > 0 ? w.fadeWholeMs : 1;
-            const std::int32_t along = w.fadeMs >= whole ? whole : w.fadeMs;
+            const std::int32_t along = w.fadeMs >= whole ? whole : (w.fadeMs < 0 ? 0 : w.fadeMs);
             if (w.fadeFrom)
             {
                 w.fadeLevel = static_cast<std::uint8_t>(w.fadeDark * (whole - along) / whole);

@@ -66,6 +66,8 @@ namespace hlds
             blobOf(level.speech),
             blobOf(level.messages),
             blobOf(level.modelSounds),
+            blobOf(level.nodeMarks),
+            blobOf(level.nodeSpans),
         };
 
         SectionDir dir[kSectionCount];

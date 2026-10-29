@@ -715,7 +715,12 @@ namespace hldata
                 aiDamageTarget(c, hit, shotgun ? skillOf(c.w).plrBuckshot : skillOf(c.w).monster9mmARBullet, kDmgBullet | kDmgNeverGib,
                                static_cast<std::uint8_t>(group));
             }
-            const fx flash[3] = {gun[0] + dir[0] * 24, gun[1] + dir[1] * 24, gun[2] + dir[2] * 24};
+            // His arm aimed at it (SetBlending: the game's after the shot,
+            // here before, so that the flash is where this aim has it), and
+            // the flash at the muzzle, in his hands (attachment 0).
+            aiSetBlending(c, dir);
+            fx flash[3] = {gun[0] + dir[0] * 24, gun[1] + dir[1] * 24, gun[2] + dir[2] * 24};
+            actorAttachment(c.a, c.me, 0, flash);
             effectAdd(c.a, kEffectMuzzle, flash, nullptr, 0, 50);
             // (A casing out to his right, from a little behind the muzzle.)
             const fx breech[3] = {gun[0] - dir[0] * 24, gun[1] - dir[1] * 24, gun[2] - dir[2] * 24};

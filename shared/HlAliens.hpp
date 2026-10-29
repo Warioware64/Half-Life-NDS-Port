@@ -2905,7 +2905,7 @@ namespace hldata
             if (model == nullptr || model->header->hitboxCount == 0 || c.me.clip < 0)
                 return;
             static BoneMatrix bones[kModelMaxBones];
-            poseModel(*model, c.me.clip, c.me.frame, bones, nullptr);
+            poseModel(*model, c.me.clip, c.me.frame, bones, nullptr, c.me.blend.value);
             fx sine, cosine;
             fxSinCos(c.me.yaw, sine, cosine);
             // The player's middle, and their box's reach about it, in the

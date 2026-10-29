@@ -87,7 +87,9 @@ namespace hldata
         /// What it fires, if a trigger_changetarget has given it something
         /// else to (a name id); 0: the map's own (LogicRecord::target).
         std::uint16_t target = 0;
-        /// The damage a func_guntarget has taken this ride.
+        /// The damage a func_guntarget has taken this ride. For a
+        /// scripted_sequence that takes its actor at the start: non-zero once
+        /// it has (the game's CineThink takes it once, never again).
         std::int32_t hurt = 0;
     };
 
@@ -172,6 +174,10 @@ namespace hldata
         const PathCorner *corners = nullptr;
         const Brush *brushes = nullptr;
         int brushCount = 0;
+        /// The level's models, for the shapes of trigger volumes that are
+        /// not boxes (LogicRecord::pad); may be null.
+        Unsaved<const Model *> models;
+        Unsaved<int> modelCount;
 
         LogicState *states = nullptr;      ///< one per record
         BrushState *brushStates = nullptr; ///< one per brush
@@ -240,6 +246,13 @@ namespace hldata
         /// Which switched lights are off (a bit per style under
         /// kLightStyles): worked out each tick from the Light records.
         std::uint64_t stylesOff = 0;
+        /// The level's strings (its Strings section), for what is read from
+        /// them as the map goes: a light's pattern.
+        Unsaved<const char *> strings;
+        /// How each switched light (style 32 on) shines while it is on: its
+        /// pattern (lights.cpp's m_iszPattern), or null for steady. Worked
+        /// out each tick with stylesOff.
+        Unsaved<std::array<const char *, kLightStyles - 32>> stylePattern;
         fx struckFrom[3] = {0, 0, 0};
 
         /// One byte per path corner, the caller's: what has changed about a
@@ -601,6 +614,25 @@ namespace hldata
                     return false;
             }
             return true;
+        }
+
+        /// Whether the player is in a trigger volume: in its box, and -- for
+        /// one that is not a box -- with their origin inside its brush's
+        /// hull for their size, as the game's touch test has it
+        /// (SV_TouchLinks).
+        inline bool playerInVolume(const LogicWorld &w, const PlayerState &player, const LogicRecord &record)
+        {
+            const fx mins[3] = {fxFromInt(record.mins[0]), fxFromInt(record.mins[1]), fxFromInt(record.mins[2])};
+            const fx maxs[3] = {fxFromInt(record.maxs[0]), fxFromInt(record.maxs[1]), fxFromInt(record.maxs[2])};
+            if (!playerTouchesBox(player, mins, maxs, 0))
+                return false;
+            if (record.pad == 0 || w.models.value == nullptr || record.pad >= w.modelCount.value || w.world == nullptr)
+                return true;
+            const Model &model = w.models.value[record.pad];
+            const Hull &like = player.ducked ? w.world->crouched : w.world->standing;
+            const Hull shape{like.nodes, like.planes, like.planeTypes,
+                             player.ducked ? model.clipCrouched : model.clipStanding};
+            return hullPointContents(shape, shape.root, player.origin) == kContentsSolid;
         }
 
         /// Whether the player is in one of the volumes of the landmark
@@ -1389,20 +1421,19 @@ namespace hldata
 
     // ------------------------------------------------------------------ damage
 
-    /// Hurt the player (or, with a negative amount, heal them: never past
-    /// 100). Dying is the caller's to act on: it sees health at 0 or below.
-    /// `kinds`: what kinds of hurt it is that the display shows (kHurt*).
-    inline void logicHurt(PlayerState &player, std::int32_t amount, std::uint8_t kinds = 0)
+    /// Hurt the player, as playerTakeDamage (or, with a negative amount,
+    /// heal them: never past 100). Dying is the caller's to act on: it sees
+    /// health at 0 or below. `kinds`: what kinds of hurt it is that the
+    /// display shows (kHurt*); `type`: what kind it is (kDmg*).
+    inline void logicHurt(PlayerState &player, std::int32_t amount, std::uint8_t kinds = 0,
+                          std::uint32_t type = kDmgGeneric)
     {
-        if (amount > 0 && godMode(player))
-            return;
-        player.health -= amount;
         if (amount > 0)
         {
-            player.hurt += amount;
-            player.hurtKnown = false;
-            player.hurtKinds.value |= kinds;
+            playerTakeDamage(player, amount, type, nullptr, kinds);
+            return;
         }
+        player.health -= amount;
         if (player.health > 100)
             player.health = 100;
     }
@@ -1425,11 +1456,51 @@ namespace hldata
                     return;
                 state.hurt = 500;
             }
-            logicHurt(player, record.damage);
+            logicHurt(player, record.damage, 0, kDmgCrush);
+        }
+
+        /// What a breaking box had in it (its "spawnobject", a kind of item
+        /// in the record's pad): the item the converter kept where the box's
+        /// middle is at rest, put where its middle is now and let down to the
+        /// floor -- the game's Create at VecBModelOrigin, and the item's
+        /// DROP_TO_FLOOR.
+        inline void breakSpill(LogicWorld &w, const LogicRecord &record)
+        {
+            if (record.pad == 0 || record.brush == kNoBrush || record.brush >= w.brushCount || w.brushes == nullptr ||
+                w.actors == nullptr || w.actors->records == nullptr || w.world == nullptr)
+                return;
+            const Brush &brush = w.brushes[record.brush];
+            const BrushState &now = w.brushStates[record.brush];
+            fx rest[3], here[3];
+            for (int a = 0; a < 3; ++a)
+            {
+                rest[a] = fxFromInt(brush.mins[a] + brush.maxs[a]) / 2;
+                here[a] = rest[a] + now.pos[a] - brush.origin[a];
+            }
+            ActorWorld &a = *w.actors;
+            for (int slot = 0; slot < a.recordCount && slot < a.count; ++slot)
+            {
+                const ActorRecord &item = a.records[slot];
+                if (item.kind != static_cast<std::uint8_t>(ActorKind::Item) || !(item.flags & kActorDormant) ||
+                    item.item != record.pad || a.states[slot].active)
+                    continue;
+                // (Its bounds are whole units, rounded out: near enough.)
+                const fx d[3] = {item.origin[0] - rest[0], item.origin[1] - rest[1], item.origin[2] - rest[2]};
+                if (fxLength(d) > fxFromInt(4))
+                    continue;
+                actorSetup(a, slot, item, *w.world);
+                ActorState &spilled = a.states[slot];
+                spilled.flags &= static_cast<std::uint8_t>(~kActorDormant);
+                for (int k = 0; k < 3; ++k)
+                    spilled.pos[k] = here[k];
+                pointToFloor(*w.world, spilled.pos, fxFromInt(256));
+                actorPlaceBox(a, slot);
+                return;
+            }
         }
 
         /// It breaks: gone from the map, whoever stood on it left in the air,
-        /// and its targets fired.
+        /// what it had in it let out, and its targets fired.
         inline void breakIt(LogicWorld &w, PlayerState &player, int index, int depth)
         {
             const LogicRecord &record = w.records[index];
@@ -1452,6 +1523,7 @@ namespace hldata
                 }
                 logicSetBrushActive(w, record.brush, false);
             }
+            breakSpill(w, record);
             logicUseTargets(w, player, index, kUseToggle, depth);
         }
 
@@ -1667,7 +1739,11 @@ namespace hldata
     /// A blow from the player: `damage` off what the thing can take, and it
     /// breaks when that runs out. Nothing happens to what only its name can
     /// break, or to the glass that never does.
-    inline void logicStrike(LogicWorld &w, PlayerState &player, int index, std::int32_t damage)
+    /// A blow of `damage`, of the kind `type` (kDmg*), to what breaks (or a
+    /// gun target, a button target). `byPlayer`: the player's own -- the
+    /// only blow that breaks what one crowbar blow breaks.
+    inline void logicStrike(LogicWorld &w, PlayerState &player, int index, std::int32_t damage,
+                            std::uint32_t type = kDmgGeneric, bool byPlayer = false)
     {
         const LogicRecord &record = w.records[index];
         LogicState &state = w.states[index];
@@ -1684,14 +1760,21 @@ namespace hldata
         if (state.dead || !detail::isBreakable(record) || (record.flags & kLogicTriggerOnly) ||
             record.extra[1] == 7)
             return;
+        // CBreakable::TakeDamage: the crowbar's blow does twice (breakables
+        // take double from it), a poisoned dart a tenth; and one marked to
+        // break at a crowbar's blow does, at the player's.
+        if (type & kDmgClub)
+            damage *= 2;
+        if (type & kDmgPoison)
+            damage /= 10;
+        if ((record.flags & kLogicInstant) && byPlayer && (type & kDmgClub))
+            damage = 0x7FFFFF;
         if (w.sharing && w.struckCount < 8)
         {
             w.struck[w.struckCount * 2] = static_cast<std::int16_t>(index);
             w.struck[w.struckCount * 2 + 1] = static_cast<std::int16_t>(damage > 32000 ? 32000 : damage);
             ++w.struckCount;
         }
-        if (record.flags & kLogicInstant)
-            damage = 0x7FFFFF;
         // state.phase holds the damage taken so far (a box that is pushed
         // keeps its own count apart from where it is).
         std::int32_t &taken = record.kind == static_cast<std::uint8_t>(LogicKind::Pushable)
@@ -2336,6 +2419,39 @@ namespace hldata
         /// shortest of a few ways tried in order -- up first, then sideways,
         /// a little further each time. What a rider is owed when the car
         /// they are in has moved onto them.
+        /// Whether the player, where they are, is inside something other than
+        /// brush `index`: the world, or another brush. (A trace from inside a
+        /// brush passes out of it: the brushes are asked one by one.)
+        inline bool playerStuckBesides(LogicWorld &w, const PlayerState &player, int index)
+        {
+            const bool was = w.movers[index].solid;
+            w.movers[index].solid = false;
+            moverReachSet(*w.world, index);
+            const Trace here = traceAll(*w.world, player.ducked, player.origin, player.origin);
+            w.movers[index].solid = was;
+            moverReachSet(*w.world, index);
+            if (here.startSolid)
+                return true;
+            for (int m = 0; m < w.brushCount; ++m)
+            {
+                if (m == index || !w.movers[m].solid || !w.brushStates[m].active)
+                    continue;
+                // (Only what stands still: what moves too -- a tram's doors,
+                // which go after the tram itself each tick -- would hold up
+                // what carries them.)
+                const std::uint16_t logic = w.brushes[m].logic;
+                if (logic != kNoLogic && logic < w.recordCount)
+                {
+                    const auto kind = static_cast<LogicKind>(w.records[logic].kind);
+                    if (kind != LogicKind::Breakable && kind != LogicKind::WallToggle && kind != LogicKind::Pushable)
+                        continue;
+                }
+                if (playerInsideBrush(w, player, m))
+                    return true;
+            }
+            return false;
+        }
+
         inline void pushOutOfBrush(LogicWorld &w, PlayerState &player, int index)
         {
             static constexpr std::int8_t kWays[6][3] = {{0, 0, 1},  {1, 0, 0}, {-1, 0, 0},
@@ -2347,7 +2463,8 @@ namespace hldata
                 {
                     for (int a = 0; a < 3; ++a)
                         player.origin[a] = from[a] + way[a] * reach;
-                    if (!playerInsideBrush(w, player, index))
+                    // (Out of it, and into nothing else.)
+                    if (!playerInsideBrush(w, player, index) && !playerStuckBesides(w, player, index))
                         return;
                 }
             }
@@ -2364,7 +2481,7 @@ namespace hldata
         /// anything the car does not), and where the brush does not turn
         /// they are moved by the very same amount, so that where they stand
         /// in it does not change by a hair however long the ride.
-        inline void carryBrush(LogicWorld &w, PlayerState &player, int index, const fx *pos,
+        inline bool carryBrush(LogicWorld &w, PlayerState &player, int index, const fx *pos,
                                std::uint16_t yaw)
         {
             const BrushState &state = w.brushStates[index];
@@ -2376,6 +2493,13 @@ namespace hldata
             if (!rider && (w.brushes[index].flags & kBrushRoams) && w.movers[index].solid)
                 rider = playerAboard(w, player, index);
             const auto turn = static_cast<std::int16_t>(yaw - state.angles[kYaw]);
+            const fx stood[3] = {player.origin[0], player.origin[1], player.origin[2]};
+            // (Only what the move itself puts them into: one already a hair
+            // into a wall where they stand is not held up by it.)
+            // (Not a car one rides inside, turned with it round its own
+            // origin: its walls are its own to hold them.)
+            const bool checked = rider && w.movers[index].solid && !(w.brushes[index].flags & kBrushRoams);
+            const bool stuckBefore = checked && playerStuckBesides(w, player, index);
             if (rider)
             {
                 fx x = player.origin[0] - state.pos[0];
@@ -2400,8 +2524,47 @@ namespace hldata
             }
             const std::uint16_t angles[3] = {0, yaw, 0};
             logicPlaceBrushTurned(w, index, pos, angles);
+            if (checked && !stuckBefore)
+            {
+                // Carried into something (a lift into a ceiling): it cannot
+                // take them there, and is blocked by them (SV_PushMove).
+                if (playerStuckBesides(w, player, index))
+                {
+                    for (int a = 0; a < 3; ++a)
+                        player.origin[a] = stood[a];
+                    if (turn != 0)
+                        w.viewTurn -= turn;
+                    return true;
+                }
+            }
             if (w.movers[index].solid && playerInsideBrush(w, player, index))
+            {
                 pushOutOfBrush(w, player, index);
+                // Nowhere to put them: it is blocked by them.
+                return playerInsideBrush(w, player, index);
+            }
+            return false;
+        }
+
+        /// Back where it was (a blocked pusher does not move: SV_PushMove).
+        inline void brushPutBack(LogicWorld &w, int index, const fx *pos, std::uint16_t yaw)
+        {
+            const std::uint16_t angles[3] = {0, yaw, 0};
+            logicPlaceBrushTurned(w, index, pos, angles);
+        }
+
+        /// The player, in the way of what moves or touching what hurts, is
+        /// shoved off it at `speed` (Q12 units a second), away from its
+        /// middle.
+        inline void shoveFromBrush(LogicWorld &w, PlayerState &player, int index, fx speed)
+        {
+            const MoverHull &hull = w.movers[index];
+            const fx d[3] = {player.origin[0] - (hull.mins[0] + hull.maxs[0]) / 2,
+                             player.origin[1] - (hull.mins[1] + hull.maxs[1]) / 2,
+                             player.origin[2] - (hull.mins[2] + hull.maxs[2]) / 2};
+            const fx length = fxLength(d);
+            for (int a = 0; a < 3 && length > 0; ++a)
+                player.velocity[a] = static_cast<fx>((static_cast<std::int64_t>(d[a]) * speed) / length);
         }
 
         /// Which way a track train at `pos` on the stretch leaving `node`
@@ -2466,6 +2629,27 @@ namespace hldata
             w.heard->add(w.sounds[index].stop, at, 127, kRadiusLarge);
         }
 
+        /// CFuncTrackTrain::Blocked: one who rides it is lifted (as much as
+        /// its speed, up to 50); anyone else is shoved off at its "dmg", and
+        /// crushed by as much.
+        inline void trackTrainBlocked(LogicWorld &w, PlayerState &player, int index)
+        {
+            const LogicRecord &record = w.records[index];
+            const LogicState &state = w.states[index];
+            if (player.onGround && player.groundMover == static_cast<int>(record.brush))
+            {
+                fx lift = state.speed < 0 ? -state.speed : state.speed;
+                if (lift > fxFromInt(50))
+                    lift = fxFromInt(50);
+                if (player.velocity[2] == 0)
+                    player.velocity[2] += lift;
+                return;
+            }
+            shoveFromBrush(w, player, record.brush, fxFromInt(record.damage));
+            if (record.damage > 0)
+                logicHurt(player, record.damage, 0, kDmgCrush);
+        }
+
         inline void trackTrainTick(LogicWorld &w, PlayerState &player, int index, int ms)
         {
             const LogicRecord &record = w.records[index];
@@ -2502,10 +2686,19 @@ namespace hldata
                     for (int a = 0; a < 3; ++a)
                         to[a] = pos[a] + static_cast<fx>((static_cast<std::int64_t>(left[a]) * step) /
                                                          distance);
-                    carryBrush(w, player, record.brush, to, brush.angles[kYaw]);
+                    if (carryBrush(w, player, record.brush, to, brush.angles[kYaw]))
+                    {
+                        brushPutBack(w, record.brush, pos, brush.angles[kYaw]);
+                        trackTrainBlocked(w, player, index);
+                    }
                     return;
                 }
-                carryBrush(w, player, record.brush, ahead, brush.angles[kYaw]);
+                if (carryBrush(w, player, record.brush, ahead, brush.angles[kYaw]))
+                {
+                    brushPutBack(w, record.brush, pos, brush.angles[kYaw]);
+                    trackTrainBlocked(w, player, index);
+                    return;
+                }
                 state.speed = 0;
                 trainBrakes(w, index);
                 std::uint16_t last = node;
@@ -2531,7 +2724,12 @@ namespace hldata
             for (int a = 0; a < 3; ++a)
                 to[a] = pos[a] + static_cast<fx>(
                                      (static_cast<std::int64_t>(ahead[a] - pos[a]) * share) / 1000);
-            carryBrush(w, player, record.brush, to, yaw);
+            if (carryBrush(w, player, record.brush, to, yaw))
+            {
+                brushPutBack(w, record.brush, pos, brush.angles[kYaw]);
+                trackTrainBlocked(w, player, index);
+                return;
+            }
 
             if (next != node)
             {
@@ -2888,9 +3086,11 @@ namespace hldata
                 // halves of c1a1's guard the laser cuts -- is put on the
                 // floor under the mark itself, as the game puts it there: a
                 // person's box by a wall would rest on the ledge beside it.)
-                if (actor.kind == static_cast<std::uint8_t>(ActorKind::Generic) ||
-                    actor.kind == static_cast<std::uint8_t>(ActorKind::Furniture) ||
-                    actor.kind == static_cast<std::uint8_t>(ActorKind::Cycler))
+                if (actorCentred(actor))
+                    actorToFloorAs(*w.world, actor, fxFromInt(18), fxFromInt(36));
+                else if (actor.kind == static_cast<std::uint8_t>(ActorKind::Generic) ||
+                         actor.kind == static_cast<std::uint8_t>(ActorKind::Furniture) ||
+                         actor.kind == static_cast<std::uint8_t>(ActorKind::Cycler))
                     pointToFloor(*w.world, actor.pos, fxFromInt(36));
                 else if (actor.kind != static_cast<std::uint8_t>(ActorKind::Pose) &&
                          actor.kind != static_cast<std::uint8_t>(ActorKind::Sitter))
@@ -2961,6 +3161,9 @@ namespace hldata
                 actor.ai = kAiDead;
                 actor.flags &= static_cast<std::uint8_t>(~kActorSolid);
                 actor.velocity[0] = actor.velocity[1] = actor.velocity[2] = 0;
+                // (The body stays only if the map says so; else it fades.)
+                if (!(record.pad & kScriptLeaveCorpse))
+                    corpseFadeStart(actor);
             }
             else if (actor.kind == static_cast<std::uint8_t>(ActorKind::Furniture) ||
                      actor.kind == static_cast<std::uint8_t>(ActorKind::Pose))
@@ -2971,6 +3174,11 @@ namespace hldata
             else if (actor.kind == static_cast<std::uint8_t>(ActorKind::Sitter))
             {
                 actorRest(actor); // (in his chair: not let down to the floor)
+            }
+            else if (actorCentred(actor))
+            {
+                actorRest(actor);
+                actorToFloorAs(*w.world, actor, fxFromInt(18), fxFromInt(256));
             }
             else
             {
@@ -3021,7 +3229,7 @@ namespace hldata
             // every second.
             if (state.phase == kScriptIdle)
             {
-                if (!state.running && !(record.flags & kLogicStartOpen))
+                if (!state.running && (!(record.flags & kLogicStartOpen) || state.hurt != 0))
                     return;
                 state.timer -= ms;
                 if (state.timer > 0)
@@ -3050,6 +3258,7 @@ namespace hldata
                 }
                 state.travel[0] = 0;
                 state.timer = -1;
+                state.hurt = 1;
                 return;
             }
             ActorState &actor = w.actors->states[state.bits];
@@ -3072,7 +3281,7 @@ namespace hldata
                         actor.pos[a] = actor.target[a];
                     // A mark is often drawn a little above the floor it
                     // means.
-                    actorToFloor(*w.world, actor, fxFromInt(18), fxFromInt(36));
+                    actorToFloorAs(*w.world, actor, fxFromInt(18), fxFromInt(36));
                     actor.yaw = static_cast<std::uint16_t>(record.speed);
                     if (!scriptIsAi(record))
                         scriptDelayStart(w, index, false);
@@ -3105,7 +3314,7 @@ namespace hldata
                 actor.yaw = fxAtan2Turns(d[1], d[0]);
                 actor.pos[0] += static_cast<fx>((static_cast<std::int64_t>(d[0]) * step) / distance);
                 actor.pos[1] += static_cast<fx>((static_cast<std::int64_t>(d[1]) * step) / distance);
-                if (!actorToFloor(*w.world, actor, fxFromInt(18), fxFromInt(36)))
+                if (!actorToFloorAs(*w.world, actor, fxFromInt(18), fxFromInt(36)))
                     actor.pos[2] += static_cast<fx>(
                         (static_cast<std::int64_t>(actor.target[2] - actor.pos[2]) * step) / distance);
                 return;
@@ -3144,6 +3353,41 @@ namespace hldata
             {
                 if (actor.scriptPhase == kActorMoving)
                     scriptDelayStart(w, index, false);
+                // CineCleanup, for a scene that has a clip to play: the
+                // actor is put where its body is in the clip it is in (its
+                // root bone; a sitter's is in front of the wall he leans
+                // on), unless that is less than 8 away, and let down to the
+                // floor -- back where it was if that is in something.
+                const ModelView *model = actorModel(*w.actors, actor);
+                if (record.extra[1] != 0 && !(record.pad & kScriptNoScriptMovement) && model != nullptr &&
+                    actor.clip >= 0 && actor.ai < 5 && w.world != nullptr)
+                {
+                    static BoneMatrix bones[kModelMaxBones];
+                    poseModel(*model, actor.clip, actor.frame, bones, nullptr, actor.blend.value);
+                    fx sine, cosine;
+                    fxSinCos(actor.yaw, sine, cosine);
+                    const fx root[2] = {actor.pos[0] + fxMul(bones[0].t[0], cosine) - fxMul(bones[0].t[1], sine),
+                                        actor.pos[1] + fxMul(bones[0].t[0], sine) + fxMul(bones[0].t[1], cosine)};
+                    const fx d[3] = {root[0] - actor.pos[0], root[1] - actor.pos[1], 0};
+                    if (fxLength(d) >= fxFromInt(8))
+                    {
+                        const fx was[3] = {actor.pos[0], actor.pos[1], actor.pos[2]};
+                        actor.pos[0] = root[0];
+                        actor.pos[1] = root[1];
+                        const fx from[3] = {actor.pos[0], actor.pos[1], actor.pos[2] + fxFromInt(36 + 1)};
+                        const fx to[3] = {actor.pos[0], actor.pos[1], actor.pos[2] + fxFromInt(36 - 256)};
+                        const Trace tr = traceHull(w.world->standing, from, to);
+                        if (tr.startSolid || tr.allSolid)
+                        {
+                            for (int k = 0; k < 3; ++k)
+                                actor.pos[k] = was[k];
+                        }
+                        else if (tr.fraction < kFractionOne)
+                        {
+                            actor.pos[2] = tr.endPos[2] - fxFromInt(36);
+                        }
+                    }
+                }
                 actor.script = -1;
                 actor.scriptPhase = kActorFree;
                 if (actor.ai < 5)
@@ -3362,7 +3606,18 @@ namespace hldata
             fx pos[3];
             for (int a = 0; a < 3; ++a)
                 pos[a] = state.base[a] + static_cast<fx>((static_cast<std::int64_t>(state.travel[a]) * phase) >> kFractionShift);
-            carryBrush(w, player, record.brush, pos, platYaw(record, phase));
+            const BrushState &was = w.brushStates[record.brush];
+            const fx from[3] = {was.pos[0], was.pos[1], was.pos[2]};
+            const std::uint16_t fromYaw = was.angles[kYaw];
+            if (carryBrush(w, player, record.brush, pos, platYaw(record, phase)))
+            {
+                // CFuncPlat::Blocked: one point of crushing, and back the way
+                // it came.
+                brushPutBack(w, record.brush, from, fromYaw);
+                logicHurt(player, 1, 0, kDmgCrush);
+                state.move = up ? MoveState::GoingDown : MoveState::GoingUp;
+                return;
+            }
             state.phase = phase;
             if (phase == (up ? kFractionOne : 0))
             {
@@ -3382,7 +3637,7 @@ namespace hldata
         /// travel[0] how far round it is from where it began, `speed` how
         /// fast it turns, travel[1] the most it may (all Q8 of the record's
         /// units); bits 1 while it goes back to where it began.
-        inline void pendulumTick(LogicWorld &w, int index, int ms)
+        inline void pendulumTick(LogicWorld &w, PlayerState &player, int index, int ms)
         {
             const LogicRecord &record = w.records[index];
             LogicState &state = w.states[index];
@@ -3429,6 +3684,20 @@ namespace hldata
             std::uint16_t angles[3] = {0, 0, 0};
             angles[record.extra[0] % 3] = static_cast<std::uint16_t>(at >> 8);
             logicPlaceBrushTurned(w, record.brush, state.base, angles);
+            // What it swings into is pushed out of its way; and what it
+            // touches, its "dmg" hurts by how fast it goes -- dmg * speed /
+            // 100, in degrees a second -- and throws (CPendulum::Touch).
+            const bool inside = w.movers[record.brush].solid && playerInsideBrush(w, player, record.brush);
+            if (inside)
+                pushOutOfBrush(w, player, record.brush);
+            if (record.damage > 0 && (inside || player.touchedMover == static_cast<int>(record.brush)))
+            {
+                const std::int64_t degrees = (static_cast<std::int64_t>(speed < 0 ? -speed : speed) * 360 / 65536) >> 8;
+                const int hurt = static_cast<int>(record.damage * degrees / 100);
+                shoveFromBrush(w, player, record.brush, fxFromInt(hurt));
+                if (hurt > 0)
+                    logicHurt(player, hurt, 0, kDmgCrush);
+            }
         }
 
         /// A wheel turned by hand, a frame on: round at its speed, to its end;
@@ -3485,7 +3754,7 @@ namespace hldata
             logicMoveBrushTo(w, record.brush, pos);
         }
 
-        inline void rotatingTick(LogicWorld &w, const PlayerState &player, int index, int ms)
+        inline void rotatingTick(LogicWorld &w, PlayerState &player, int index, int ms)
         {
             const LogicRecord &record = w.records[index];
             LogicState &state = w.states[index];
@@ -3532,10 +3801,31 @@ namespace hldata
             logicPlaceBrushTurned(w, record.brush, state.base, angles);
             if (playerInsideBrush(w, player, record.brush))
             {
-                // Blocked: it does not turn this frame.
+                // Blocked: it does not turn this frame, and its "dmg" crushes
+                // (CFuncRotating::Blocked) -- and one that hurts by its touch
+                // hurts by how fast it goes, and throws them off (HurtTouch:
+                // a tenth of its degrees a second).
                 angles[axis] = before;
                 logicPlaceBrushTurned(w, record.brush, state.base, angles);
+                if (record.damage > 0)
+                    logicHurt(player, record.damage, 0, kDmgCrush);
+                if (record.flags & kLogicTouch)
+                {
+                    const fx speed = state.speed < 0 ? -state.speed : state.speed;
+                    const int hurt = static_cast<int>((static_cast<std::int64_t>(speed) * 360 + 32768) / 65536 / 10);
+                    shoveFromBrush(w, player, record.brush, fxFromInt(hurt));
+                    if (hurt > 0)
+                        logicHurt(player, hurt, 0, kDmgCrush);
+                }
                 return;
+            }
+            if ((record.flags & kLogicTouch) && player.touchedMover == static_cast<int>(record.brush))
+            {
+                const fx speed = state.speed < 0 ? -state.speed : state.speed;
+                const int hurt = static_cast<int>((static_cast<std::int64_t>(speed) * 360 + 32768) / 65536 / 10);
+                shoveFromBrush(w, player, record.brush, fxFromInt(hurt));
+                if (hurt > 0)
+                    logicHurt(player, hurt, 0, kDmgCrush);
             }
             state.bits = angles[axis];
         }
@@ -4540,7 +4830,7 @@ namespace hldata
             else if (kind == LogicKind::PlatRot)
                 detail::platTick(w, player, i, ms);
             else if (kind == LogicKind::Pendulum)
-                detail::pendulumTick(w, i, ms);
+                detail::pendulumTick(w, player, i, ms);
             else if (kind == LogicKind::Pushable)
                 detail::pushableTick(w, player, i, ms);
             else if (kind == LogicKind::Script)
@@ -4571,7 +4861,7 @@ namespace hldata
                     const std::int32_t blow = fxToInt(fxLength(player.velocity)) / 100;
                     if (blow >= static_cast<std::int32_t>(record.extra[0]) - state.phase)
                     {
-                        logicHurt(player, blow / 4);
+                        logicHurt(player, blow / 4, 0, kDmgSlash);
                         detail::breakIt(w, player, i, 0);
                     }
                 }
@@ -4598,12 +4888,7 @@ namespace hldata
                      kind == LogicKind::TriggerTeleport || kind == LogicKind::TriggerGravity ||
                      kind == LogicKind::Friction)
             {
-                const fx mins[3] = {fxFromInt(record.mins[0]), fxFromInt(record.mins[1]),
-                                    fxFromInt(record.mins[2])};
-                const fx maxs[3] = {fxFromInt(record.maxs[0]), fxFromInt(record.maxs[1]),
-                                    fxFromInt(record.maxs[2])};
-                const bool inside = detail::playerTouchesBox(player, mins, maxs, 0) &&
-                                    logicMasterAllows(w, i);
+                const bool inside = detail::playerInVolume(w, player, record) && logicMasterAllows(w, i);
                 if (kind == LogicKind::TriggerHurt)
                 {
                     // Half a second's worth every half second. state.phase
@@ -4611,7 +4896,8 @@ namespace hldata
                     state.phase -= ms;
                     if (inside && !state.running && state.phase <= 0)
                     {
-                        logicHurt(player, static_cast<std::int32_t>(record.extra[0]) / 2, hurtKindsOf(record.extra[1]));
+                        logicHurt(player, static_cast<std::int32_t>(record.extra[0]) / 2, hurtKindsOf(record.extra[1]),
+                                  record.extra[1]);
                         state.phase = 500;
                         if (record.target != 0 && !(state.bits & 1))
                         {
@@ -4707,10 +4993,15 @@ namespace hldata
         for (int i = 0; i < w.recordCount; ++i)
         {
             const LogicRecord &record = w.records[i];
-            if (record.kind != static_cast<std::uint8_t>(LogicKind::Light) || record.extra[0] >= kLightStyles)
+            if (record.kind != static_cast<std::uint8_t>(LogicKind::Light) || record.extra[0] >= kLightStyles ||
+                record.extra[0] < 32)
                 continue;
             const std::uint64_t bit = std::uint64_t(1) << record.extra[0];
-            w.stylesOff = (w.states[i].bits & 1) ? (w.stylesOff | bit) : (w.stylesOff & ~bit);
+            const bool off = (w.states[i].bits & 1) != 0;
+            w.stylesOff = off ? (w.stylesOff | bit) : (w.stylesOff & ~bit);
+            // (On, it shines by its pattern, if it has one: CLight::Use.)
+            w.stylePattern.value[record.extra[0] - 32] =
+                !off && record.extra[1] != 0 && w.strings.value != nullptr ? w.strings.value + record.extra[1] : nullptr;
         }
 
         // 5. What each brush shows of its textures, and the conveyors.

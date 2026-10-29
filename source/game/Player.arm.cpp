@@ -212,7 +212,7 @@ namespace hlrt
                 viewLand(view, speed);
                 if (const int cost = fallDamage(speed))
                 {
-                    gameApi.hurtPlayer(state, cost);
+                    gameApi.hurtPlayer(state, cost, hldata::kDmgFall);
                     game.heard.add(CommonSound::FallPain, nullptr);
                     // (A fall that kills: the game's splat too.)
                     if (state.health <= 0)

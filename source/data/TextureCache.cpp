@@ -8,6 +8,7 @@
 #include <nds.h>
 
 #include "Global.hpp"
+#include "data/CardRead.hpp"
 #include "HlTexture.hpp"
 #include "HlTextureStream.hpp"
 #include "data/LevelFile.hpp"
@@ -230,7 +231,7 @@ namespace hlrt
         if (ok)
         {
             const std::size_t rest = static_cast<std::size_t>(size) - sizeof(header);
-            ok = rest <= capacity && std::fread(body, 1, rest, file) == rest;
+            ok = rest <= capacity && cardRead(body, rest, file) == rest;
         }
         std::fclose(file);
         return ok;

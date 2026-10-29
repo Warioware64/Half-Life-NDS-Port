@@ -268,6 +268,55 @@ namespace
         // this size by itself.)
         check(worstTurn < 0.02 && worstPlace < 2.0, "a bone set by hand is where the game puts it");
     }
+
+    /// A guard's shooting blends between two poses by his aim's pitch (the
+    /// game's SetBlending): both are cooked, and the pose between is where
+    /// the game has it -- his gun's muzzle (attachment 0) low for an aim at
+    /// the floor, level, and high, as the original model has it.
+    void checkAimBlend(const std::string &dir)
+    {
+        MdlFile mdl;
+        std::string error;
+        CookedModel cooked;
+        ModelCookReport report;
+        std::vector<std::uint8_t> bytes;
+        if (!mdl.load(dir + "/models/barney.mdl", error) || !cookModel(mdl, {"shootgun"}, cooked, report, error) ||
+            !writeModel(cooked, bytes, error))
+        {
+            check(false, "the guard's shooting cooks");
+            return;
+        }
+        std::vector<std::uint32_t> aligned((bytes.size() + 3) / 4);
+        std::memcpy(aligned.data(), bytes.data(), bytes.size());
+        ModelView view;
+        if (!view.open(reinterpret_cast<const std::uint8_t *>(aligned.data()), static_cast<std::uint32_t>(bytes.size())))
+        {
+            check(false, "the guard's model opens");
+            return;
+        }
+        const ModelClip &clip = view.clips[0];
+        check(clip.blends == 2 && clip.blendLow == -50 && clip.blendHigh == 50,
+              "his shooting has two poses, for an aim 50 degrees down and 50 up");
+        std::vector<BoneMatrix> pose(mdl.bones.size());
+        const double want[3][3] = {{20.7, -2.1, 31.9}, {28.7, -1.4, 59.3}, {12.2, -0.7, 84.4}};
+        const int blends[3] = {0, 128, 255};
+        double worst = 0;
+        for (int k = 0; k < 3; ++k)
+        {
+            poseModel(view, 0, 0, pose.data(), nullptr, blends[k]);
+            fx at[3];
+            attachmentPoint(view, pose.data(), 0, at);
+            for (int a = 0; a < 3; ++a)
+                worst = std::max(worst, std::fabs(at[a] / 4096.0 - want[k][a]));
+            std::printf("test_anim: barney.mdl shootgun at blend %d: muzzle %.1f %.1f %.1f\n", blends[k],
+                        at[0] / 4096.0, at[1] / 4096.0, at[2] / 4096.0);
+        }
+        check(worst < 1.5, "his muzzle is where the original's is, aimed down, level and up");
+        // The setting for an aim, as SetBlending makes it.
+        check(clipBlend(clip, 0) == 127 && clipBlend(clip, 9102) == 255 &&
+                  clipBlend(clip, -16384) == 0,
+              "a level aim is the middle, 50 degrees up the top, straight down the bottom");
+    }
 } // namespace
 
 int main()
@@ -293,6 +342,7 @@ int main()
     checkModel(dir, "v_9mmar.mdl", {"longidle", "idle1", "shoot", "grenade", "reload", "deploy"});
     checkModel(dir, "v_357.mdl", {"idle1", "idle2", "idle3", "fidget1", "fire1", "reload", "draw"});
     checkModel(dir, "zombie.mdl", {"idle1", "walk"});
+    checkAimBlend(dir);
     checkModel(dir, "forklift.mdl", {"idle2", "drive"});
 
     // A body falling (the game's 2001 and 2002): somewhere in a scientist's

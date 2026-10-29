@@ -13,10 +13,61 @@
 using namespace hldata;
 using namespace hldstest;
 
+namespace
+{
+    /// The pipeline's timing (arm7/source/Pipeline.arm.cpp), as it runs: the
+    /// channels play the output ring a sample a tick at `rate`; block b (64
+    /// samples) is captured by the end of it, then -- when the ARM7's loop
+    /// gets to it -- written `lead` samples ahead. The loop is held up for
+    /// `stallMs` (a read from the card, on a DSi the ARM7's), and blocks
+    /// more than lead/64 - 1 late are thrown away and the rings emptied.
+    /// How many samples the speakers play that were not written in time
+    /// (an old round of the ring, or the emptied silence: a crackle).
+    int lateSamples(int lead, int rate, double stallMs)
+    {
+        const int block = AudioLink::kPipelineBlock;
+        const double sample = 1000.0 / rate; // ms
+        const double stallAt = 100.0;        // (some way in)
+        // When each block is written: as soon as captured, unless the loop is
+        // held then, when all of those due are done as it comes back.
+        int late = 0;
+        for (int b = 0; b < 4000; ++b)
+        {
+            const double captured = (b + 1) * block * sample;
+            double done = captured;
+            if (captured >= stallAt && captured < stallAt + stallMs)
+                done = stallAt + stallMs;
+            // (More blocks due at once than it is ahead: thrown away.)
+            const int due = static_cast<int>((done - captured) / (block * sample)) + 1;
+            const bool flushed = due > lead / block - 1;
+            // Its samples are played from b*64 + lead on.
+            const double played = (b * block + lead) * sample;
+            if (flushed || done > played)
+                late += block;
+        }
+        return late;
+    }
+} // namespace
+
 int main()
 {
     static AudioLink link;
     std::memset(&link, 0, sizeof(link));
+
+    // The pipeline's lead, against what the card holds it up for: a read
+    // of 8 KB (data/CardRead.hpp's pieces) at a DSi's 2 MB a second, 4 ms;
+    // half again for the commands about it.
+    {
+        const double piece = 1000.0 * 8 * 1024 / (2 * 1024 * 1024) * 1.5;
+        const int high = lateSamples(AudioLink::kPipelineLead, 47605, piece);
+        const int standard = lateSamples(AudioLink::kPipelineLead, 32728, piece);
+        const int before = lateSamples(256, 47605, piece);
+        std::printf("test_audiolink: a %.1f ms read: %d samples late at 47605 Hz, %d at 32728 (%d with the old lead)\n",
+                    piece, high, standard, before);
+        check(high == 0 && standard == 0, "the pipeline's lead outlasts a read of a piece from the card, at either rate");
+        check(before > 0, "... which the lead it had before did not");
+        check(AudioLink::kOutRing >= 2 * AudioLink::kPipelineLead, "... and its rings hold that lead twice over");
+    }
 
     // In order, and a full ring refuses.
     {

@@ -148,11 +148,14 @@ namespace hlrt
         world.ladderCount = ladderCount;
 
         logic.records = view.logic;
+        logic.strings.value = view.strings;
         logic.recordCount = static_cast<int>(view.logicCount);
         logic.aux = view.logicAux;
         logic.corners = view.corners;
         logic.brushes = view.brushes;
         logic.brushCount = static_cast<int>(view.brushCount);
+        logic.models.value = view.models;
+        logic.modelCount.value = static_cast<int>(view.modelCount);
         logic.states = states_;
         logic.brushStates = brushStates_;
         logic.movers = movers_;
@@ -844,7 +847,7 @@ namespace hlrt
         // vertices they reach are worked out again, in the level's own
         // stream -- which is what is drawn from.
         if (level.view.lightPatchCount != 0 &&
-            lightStyleValues(Global::vblanks() / 6, logic.stylesOff, styleValues_))
+            lightStyleValues(Global::vblanks() / 6, logic.stylesOff, styleValues_, logic.stylePattern.value.data()))
         {
             lightPatchApply(level.view.lightPatches, level.view.lightPatchCount, styleValues_,
                             const_cast<std::uint32_t *>(level.view.gxStream));

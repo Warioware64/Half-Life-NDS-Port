@@ -65,6 +65,87 @@ namespace hlrt
         constexpr int kRoomLeast = 8;
         int misses = 0;
         int sp = 0;
+        // One surface met, through a leaf that lists it or a node it lies on:
+        // taken, if it faces the eye and is in view and there is room for it.
+        // False when there is no more room at all: the walk ends.
+        auto take = [&](const std::uint32_t s) -> bool
+        {
+            // (`s`: the surface; false: the walk is over -- out of room.)
+            std::uint32_t &word = chosen_[s >> 5];
+            const std::uint32_t bit = 1u << (s & 31);
+            if (word & bit)
+                return true; // already taken through another leaf
+
+            const Surface &surface = view.surfaces[s];
+            const std::uint32_t planeIndex = surface.planeRef & kSurfacePlaneMask;
+            const fx side =
+                planeDistance(view.planes[planeIndex], view.planeTypes[planeIndex], eye);
+            // A face on the plane's front is seen from in front; the back
+            // flag turns that round.
+            if ((surface.planeRef & kSurfacePlaneBack) ? side >= 0 : side <= 0)
+                return true;
+            if (sphereOutside(planes, surface.center, surface.radius))
+                return true;
+            if (detail != 0)
+            {
+                const std::int32_t depth = ((surface.center[0] - eyeAt[0]) * forward[0] +
+                                            (surface.center[1] - eyeAt[1]) * forward[1] +
+                                            (surface.center[2] - eyeAt[2]) * forward[2]) >>
+                                           12;
+                // (Never what is near: a wall at arm's length with a hole in
+                // it is worse than any far thing missing.)
+                if (depth > kDetailNearest && depth > static_cast<std::int32_t>(surface.radius) * detail)
+                {
+                    // (Counted once, though it is met in every leaf it
+                    // is part of.)
+                    std::uint32_t &seen = skipped_[s >> 5];
+                    if (!(seen & bit))
+                    {
+                        seen |= bit;
+                        ++dropped;
+                        droppedPolygons += surface.polygons;
+                        droppedVertices += surface.vertices;
+                    }
+                    return true;
+                }
+            }
+
+            if (polygons + surface.polygons > polygonBudget ||
+                vertices + surface.vertices > vertexBudget)
+            {
+                // Out of room: everything still on the stack is farther
+                // away than this. The first one marks where the view is
+                // cut (where the fog has to be whole); after it, only what
+                // still fits.
+                if (!stats_.budgetHit)
+                {
+                    stats_.budgetHit = true;
+                    const std::int32_t depth = ((surface.center[0] - eyeAt[0]) * forward[0] +
+                                                (surface.center[1] - eyeAt[1]) * forward[1] +
+                                                (surface.center[2] - eyeAt[2]) * forward[2]) >>
+                                               12;
+                    stats_.cutDistance = depth - surface.radius;
+                }
+                ++stats_.surfacesCut;
+                if (++misses >= kMissesMost || polygonBudget - polygons < kRoomLeast ||
+                    vertexBudget - vertices < kRoomLeast * 3)
+                {
+                    return false;
+                }
+                return true;
+            }
+            misses = 0;
+            word |= bit;
+            polygons += surface.polygons;
+            vertices += surface.vertices;
+            ++surfaces;
+            return true;
+        };
+        // (On a DSi, the game's own rule as well: a node gone through has its
+        // surfaces drawn, whether or not a leaf that can be seen lists them --
+        // what is seen through the gap of c1a1's broken sign.)
+        const bool nodeSurfaces = nodeSurfaces_ && view.nodeSpans != nullptr;
+
         walkStack[sp++] = static_cast<std::int16_t>(view.models[0].headNode);
         while (sp > 0)
         {
@@ -76,6 +157,19 @@ namespace hlrt
                 const Node &node = view.nodes[index];
                 if (boxOutside(planes, node.mins, node.maxs))
                     continue;
+                if (nodeSurfaces)
+                {
+                    const NodeSpan &span = view.nodeSpans[index];
+                    const std::uint16_t *mark = view.nodeMarks + span.first;
+                    bool room = true;
+                    for (int m = span.count; m > 0 && room; --m, ++mark)
+                        room = take(*mark);
+                    if (!room)
+                    {
+                        sp = 0;
+                        continue;
+                    }
+                }
                 const fx d = planeDistance(view.planes[node.plane], view.planeTypes[node.plane], eye);
                 const int nearSide = d >= 0 ? 0 : 1;
                 // Far first, so the near side is popped first.
@@ -95,76 +189,11 @@ namespace hlrt
             const std::uint16_t *mark = view.marks + leaf.firstMark;
             for (int m = leaf.markCount; m > 0; --m, ++mark)
             {
-                const std::uint32_t s = *mark;
-                std::uint32_t &word = chosen_[s >> 5];
-                const std::uint32_t bit = 1u << (s & 31);
-                if (word & bit)
-                    continue; // already taken through another leaf
-
-                const Surface &surface = view.surfaces[s];
-                const std::uint32_t planeIndex = surface.planeRef & kSurfacePlaneMask;
-                const fx side =
-                    planeDistance(view.planes[planeIndex], view.planeTypes[planeIndex], eye);
-                // A face on the plane's front is seen from in front; the back
-                // flag turns that round.
-                if ((surface.planeRef & kSurfacePlaneBack) ? side >= 0 : side <= 0)
-                    continue;
-                if (sphereOutside(planes, surface.center, surface.radius))
-                    continue;
-                if (detail != 0)
+                if (!take(*mark))
                 {
-                    const std::int32_t depth = ((surface.center[0] - eyeAt[0]) * forward[0] +
-                                                (surface.center[1] - eyeAt[1]) * forward[1] +
-                                                (surface.center[2] - eyeAt[2]) * forward[2]) >>
-                                               12;
-                    // (Never what is near: a wall at arm's length with a hole in
-                    // it is worse than any far thing missing.)
-                    if (depth > kDetailNearest && depth > static_cast<std::int32_t>(surface.radius) * detail)
-                    {
-                        // (Counted once, though it is met in every leaf it
-                        // is part of.)
-                        std::uint32_t &seen = skipped_[s >> 5];
-                        if (!(seen & bit))
-                        {
-                            seen |= bit;
-                            ++dropped;
-                            droppedPolygons += surface.polygons;
-                            droppedVertices += surface.vertices;
-                        }
-                        continue;
-                    }
+                    sp = 0;
+                    break;
                 }
-
-                if (polygons + surface.polygons > polygonBudget ||
-                    vertices + surface.vertices > vertexBudget)
-                {
-                    // Out of room: everything still on the stack is farther
-                    // away than this. The first one marks where the view is
-                    // cut (where the fog has to be whole); after it, only what
-                    // still fits.
-                    if (!stats_.budgetHit)
-                    {
-                        stats_.budgetHit = true;
-                        const std::int32_t depth = ((surface.center[0] - eyeAt[0]) * forward[0] +
-                                                    (surface.center[1] - eyeAt[1]) * forward[1] +
-                                                    (surface.center[2] - eyeAt[2]) * forward[2]) >>
-                                                   12;
-                        stats_.cutDistance = depth - surface.radius;
-                    }
-                    ++stats_.surfacesCut;
-                    if (++misses >= kMissesMost || polygonBudget - polygons < kRoomLeast ||
-                        vertexBudget - vertices < kRoomLeast * 3)
-                    {
-                        sp = 0;
-                        break;
-                    }
-                    continue;
-                }
-                misses = 0;
-                word |= bit;
-                polygons += surface.polygons;
-                vertices += surface.vertices;
-                ++surfaces;
             }
         }
         stats_.surfaces = surfaces;

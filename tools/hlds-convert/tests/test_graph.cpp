@@ -282,6 +282,10 @@ namespace
         check(gap < fxFromInt(128 + 24), "he comes to where the player is, by the nodes");
         check(gap > fxFromInt(40), "... and no nearer than a stride or two");
         const fx face[3] = {sci.pos[0] + fxFromInt(48), sci.pos[1], sci.pos[2] + fxFromInt(60)};
+        // (Up to him: the game's USE reaches 64 from where the player is.)
+        g.player.origin[0] = face[0];
+        g.player.origin[1] = face[1];
+        g.player.origin[2] = sci.pos[2] + kStandingFeet;
         check(personUse(g.logic, g.player, face, forward) && sci.ai == kPersonIdle, "USE again, and he stays");
     }
 } // namespace

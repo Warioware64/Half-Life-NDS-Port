@@ -52,7 +52,7 @@
 namespace hldata
 {
     inline constexpr char kLevelMagic[4] = {'H', 'L', 'D', 'S'};
-    inline constexpr std::uint16_t kLevelVersion = 43;
+    inline constexpr std::uint16_t kLevelVersion = 44;
     /// The oldest level format this build reads.
     inline constexpr std::uint16_t kLevelMinVersion = 28;
     /// The oldest build that can read what it writes. (32: what the people
@@ -69,7 +69,9 @@ namespace hldata
     /// chargers' own sounds, which it does not play -- do not raise it. 43:
     /// a body falling among the common sounds, and the view models a map
     /// was not cooked with, named in its models to be loaded when needed.)
-    inline constexpr std::uint16_t kLevelMinReader = 43;
+    /// 44: each node's own surfaces (NodeMarks, NodeSpans), as two sections
+    /// a build before does not know of.
+    inline constexpr std::uint16_t kLevelMinReader = 44;
     /// The oldest level format whose saves are still read.
     /// 26 -> 27 added multiplayer fields, 27 -> 28 added texture table fields,
     /// 28 -> 29 a func_train's global name (extra[3], 0 before: read as
@@ -159,6 +161,11 @@ namespace hldata
         Speech,
         Messages,   ///< MessageRecord: what the map writes on the screen (env_message)
         ModelSounds, ///< ModelSound: the sounds the map's models make as they move, by name
+        /// u16: surface indices, grouped per render-tree node: the surfaces
+        /// that lie on each node's plane (the BSP's node.firstface), which
+        /// the game draws whenever the node is gone through.
+        NodeMarks,
+        NodeSpans, ///< NodeSpan, parallel to Nodes: each node's run of NodeMarks
         Count
     };
     inline constexpr int kSectionCount = static_cast<int>(Section::Count);
@@ -224,6 +231,14 @@ namespace hldata
         std::uint16_t parent; ///< kNoParent at the root
     };
     inline constexpr std::uint16_t kNoParent = 0xFFFF;
+
+    /// A node's own surfaces: `count` of NodeMarks from `first`.
+    struct NodeSpan
+    {
+        std::uint16_t first;
+        std::uint16_t count;
+    };
+    static_assert(sizeof(NodeSpan) == 4);
 
     struct Leaf
     {
@@ -827,7 +842,10 @@ namespace hldata
         std::int16_t maxs[3];
         std::uint16_t damage;     ///< what a blocked door does to what blocks it
         /// For an Ambient: how fast its sound is played, in percent of how
-        /// it was recorded (0: as it was).
+        /// it was recorded (0: as it was). For a trigger volume (TriggerHurt,
+        /// TriggerPush, TriggerTeleport, TriggerGravity, Friction) whose
+        /// brush is not a plain box: its model, into Models, whose hull the
+        /// player's origin has to be in as well (0: the box is all of it).
         std::uint16_t pad;
         /// For a trigger_auto or a multisource: the hash of a global state
         /// that has to be ON for it to work; 0 = none.
@@ -1054,6 +1072,11 @@ namespace hldata
     inline constexpr std::uint8_t kActorWaitScript = kActorAuto;
     inline constexpr std::uint8_t kActorLeader = 32;
     inline constexpr std::uint8_t kActorWaitSeen = 64;
+    /// A monster_generic whose origin is the middle of its body, not its
+    /// feet: the game gives holo.mdl and player.mdl the player's box
+    /// (genericmonster.cpp) -- the hazard course's hologram. (Its bit is a
+    /// soldier's and a tripmine's for other things.)
+    inline constexpr std::uint8_t kActorCentred = kActorAuto;
     inline constexpr std::uint8_t kActorGag = 128;
 
     // What a soldier carries (ActorRecord::item, the low 8 bits): the
@@ -1556,6 +1579,8 @@ namespace hldata
         case Section::Speech:     return 2;
         case Section::Messages:   return sizeof(MessageRecord);
         case Section::ModelSounds: return sizeof(ModelSound);
+        case Section::NodeMarks:  return 2;
+        case Section::NodeSpans:  return sizeof(NodeSpan);
         default:                  return 0;
         }
     }

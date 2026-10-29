@@ -14,6 +14,7 @@
 
 #include "HlLevelReader.hpp"
 #include "HlPlayerMove.hpp"
+#include "HlWalk.hpp"
 #include "TestBspBuilder.hpp"
 #include "hlds/Cooker.hpp"
 
@@ -468,6 +469,117 @@ namespace
         sim.run(20);
         check(!sim.s.stuck && sim.x() < -40, "overlapped by a brush, the player can walk out");
     }
+
+    /// The world's tree, for what asks it (walkBottom): the walking tests.
+    void withTree(World &w)
+    {
+        w.move.nodes = w.view.nodes;
+        w.move.leaves = w.view.leaves;
+        w.move.headNode = w.view.models[0].headNode;
+    }
+
+    /// Steps of `dx` from `feet` until one is refused, or `most` are made.
+    int stepUntilStopped(const World &w, fx *feet, fx dx, int most)
+    {
+        int made = 0;
+        while (made < most && walkStep(w.move, nullptr, -1, kWalkStanding, feet, dx, 0))
+            ++made;
+        return made;
+    }
+
+    // SV_CheckBottom: a walker does not stand over an edge, its middle or
+    // a corner more than a stair above what is under it; a stair is no edge.
+    void testCheckBottom()
+    {
+        World w;
+        BoxRoom room;
+        room.brushes = {
+            slab(-128, 0, 0, 0, 128, 64),   // 0: a platform 64 high, its edge at x = 0
+            slab(40, -128, 0, 128, 0, 16),  // 1: a step 16 high, from x = 40
+        };
+        room.maxs[2] = 256; // (room to stand up on the platform)
+        build(w, room);
+        check(w.ok, "the edges room");
+        if (!w.ok)
+            return;
+        withTree(w);
+
+        // Out along the platform to its edge: stopped with every corner on
+        // it (its middle 16 in), not hanging over the drop.
+        fx feet[3] = {fxFromInt(-60), fxFromInt(64), fxFromInt(64)};
+        const int made = stepUntilStopped(w, feet, fxFromInt(4), 40);
+        std::printf("test_movers: walked to x = %.2f of a ledge at x = 0\n", toUnits(feet[0]));
+        check(made > 0 && toUnits(feet[0]) > -20 && toUnits(feet[0]) <= -16 + 0.01,
+              "a walker stops at a ledge with all of its feet on it");
+        check(std::fabs(toUnits(feet[2]) - 64) < 0.1, "... still standing on it");
+
+        // Hung over it already (put there): it may move, as the engine's
+        // FL_PARTIALGROUND lets it, to get off it; back on, the edge holds
+        // it again.
+        fx over[3] = {fxFromInt(-8), fxFromInt(64), fxFromInt(64)};
+        check(walkStep(w.move, nullptr, -1, kWalkStanding, over, -fxFromInt(4), 0) &&
+                  walkStep(w.move, nullptr, -1, kWalkStanding, over, -fxFromInt(4), 0) &&
+                  toUnits(over[0]) < -15.9,
+              "over the edge, it can step back onto the platform");
+        check(!walkStep(w.move, nullptr, -1, kWalkStanding, over, fxFromInt(4), 0),
+              "... and then not off it again");
+
+        // On the world's floor it walks, and a 16-unit stair is no edge: up
+        // onto the step and along it.
+        fx floor[3] = {fxFromInt(-60), fxFromInt(-60), 0};
+        stepUntilStopped(w, floor, fxFromInt(4), 40);
+        check(toUnits(floor[0]) > 99 && std::fabs(toUnits(floor[2]) - 16) < 0.1,
+              "a walker crosses the floor and climbs a 16-unit step");
+        // And back down it, straddling it on the way.
+        stepUntilStopped(w, floor, -fxFromInt(4), 40);
+        check(toUnits(floor[0]) < 0 && std::fabs(toUnits(floor[2])) < 0.1, "... and steps down off it");
+    }
+
+    // walkTick's turning: told where to put the way it is going, it leaves
+    // the turn to whoever asked (a monster, at its yaw speed); otherwise it
+    // turns the walker itself, a turn a second.
+    void testWalkerTurn()
+    {
+        World w;
+        build(w, BoxRoom());
+        check(w.ok, "the empty room");
+        if (!w.ok)
+            return;
+        withTree(w);
+        for (int asked = 1; asked >= 0; --asked)
+        {
+            ActorState walker;
+            walker.active = true;
+            walker.pos[0] = fxFromInt(-60);
+            walker.pos[1] = fxFromInt(60);
+            walker.yaw = 0; // facing +x; it is going to -y
+            ActorWorld a;
+            a.states = &walker;
+            a.count = 1;
+            const fx dest[3] = {fxFromInt(-60), fxFromInt(-80), 0};
+            std::uint16_t ideal = 12345;
+            int worst = 0;
+            for (int n = 0; n < 30; ++n)
+            {
+                const std::uint16_t before = walker.yaw;
+                walkTick(a, w.move, 0, kWalkStanding, dest, fxFromInt(100), 33, nullptr, fxFromInt(16),
+                         fxFromInt(72), false, asked ? &ideal : nullptr);
+                const int turned = static_cast<std::int16_t>(walker.yaw - before);
+                worst = std::max(worst, turned < 0 ? -turned : turned);
+            }
+            check(toUnits(walker.pos[1]) < 30, "the walker walks");
+            if (asked)
+            {
+                check(walker.yaw == 0, "given an ideal yaw, walkTick does not turn the walker");
+                check(ideal == 49152, "... and puts the way it is going there");
+            }
+            else
+            {
+                check(worst > 0 && worst <= 65536 * 33 / 1000, "otherwise it turns it, a turn a second at most");
+                check(static_cast<std::int16_t>(walker.yaw - 49152) == 0, "... to face its way");
+            }
+        }
+    }
 } // namespace
 
 int main()
@@ -475,6 +587,8 @@ int main()
     testTraces();
     testAgainstReference();
     testWalking();
+    testCheckBottom();
+    testWalkerTurn();
     if (g_failures == 0)
         std::printf("test_movers: ok\n");
     return g_failures == 0 ? 0 : 1;

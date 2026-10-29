@@ -32,6 +32,8 @@ namespace hlds
         std::vector<hldata::Node> nodes;
         std::vector<hldata::Leaf> leaves;
         std::vector<std::uint16_t> marks;
+        std::vector<std::uint16_t> nodeMarks;      ///< Section::NodeMarks
+        std::vector<hldata::NodeSpan> nodeSpans;   ///< Section::NodeSpans
         std::vector<std::uint8_t> vis;
         std::vector<hldata::Surface> surfaces;
         std::vector<std::uint32_t> gxStream;

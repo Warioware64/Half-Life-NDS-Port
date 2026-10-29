@@ -250,11 +250,14 @@ namespace hldstest
         g.move.ladderCount = ladderCount;
 
         g.logic.records = v.logic;
+        g.logic.strings.value = v.strings;
         g.logic.recordCount = static_cast<int>(v.logicCount);
         g.logic.aux = v.logicAux;
         g.logic.corners = v.corners;
         g.logic.brushes = v.brushes;
         g.logic.brushCount = static_cast<int>(v.brushCount);
+        g.logic.models.value = v.models;
+        g.logic.modelCount.value = static_cast<int>(v.modelCount);
         g.logic.states = g.states.data();
         g.logic.brushStates = g.brushStates.data();
         g.logic.movers = g.movers.data();

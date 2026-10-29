@@ -10,6 +10,7 @@
 #include <cctype>
 #include <array>
 #include <cmath>
+#include <iterator>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -87,6 +88,35 @@ namespace hlds
 
     namespace
     {
+        /// For a trigger volume whose brush is not one plain box: its model,
+        /// for the game's touch test -- the player's origin inside the
+        /// brush's own hull, not just their box in its bounds (a slab lying
+        /// along a slope, as down c1a1c's lift shaft, has bounds that fill
+        /// the whole shaft). 0 for a box, where the bounds say it all.
+        std::uint16_t shapedVolume(const BspFile &bsp, const BspModel *model)
+        {
+            if (model == nullptr || model->origin[0] != 0 || model->origin[1] != 0 || model->origin[2] != 0)
+                return 0;
+            const int index = static_cast<int>(model - bsp.models.data());
+            // A box is six axial clip nodes; anything else is a shape.
+            int nodes = 0;
+            bool axial = true;
+            std::vector<std::int32_t> open{bsp.clipHullRoot(index, 1)};
+            while (!open.empty() && nodes <= 6)
+            {
+                const std::int32_t at = open.back();
+                open.pop_back();
+                if (at < 0 || at >= static_cast<std::int32_t>(bsp.clipNodes.size()))
+                    continue;
+                ++nodes;
+                const BspClipNode &node = bsp.clipNodes[static_cast<std::size_t>(at)];
+                axial = axial && bsp.planes[static_cast<std::size_t>(node.plane)].type < 3;
+                open.push_back(node.children[0]);
+                open.push_back(node.children[1]);
+            }
+            return nodes <= 6 && axial ? 0 : static_cast<std::uint16_t>(index);
+        }
+
         std::string lowered(std::string_view text)
         {
             std::string out(text);
@@ -160,6 +190,32 @@ namespace hlds
             {"item_security", ItemKind::Security, "models/w_security.mdl"},
             {"item_airtank", ItemKind::Airtank, "models/w_oxygen.mdl"},
         };
+
+        /// What a func_breakable or func_pushable leaves when it breaks: its
+        /// "spawnobject", an index into the game's own list
+        /// (CBreakable::pSpawnObjects). Null for none, or one not lying about
+        /// in this port.
+        const ItemClass *spawnObjectOf(const Entity &entity)
+        {
+            static const char *const kSpawnObjects[] = {
+                nullptr,           "item_battery",   "item_healthkit",   "weapon_9mmhandgun", "ammo_9mmclip",
+                "weapon_9mmar",    "ammo_9mmar",     "ammo_argrenades",  "weapon_shotgun",    "ammo_buckshot",
+                "weapon_crossbow", "ammo_crossbow",  "weapon_357",       "ammo_357",          "weapon_rpg",
+                "ammo_rpgclip",    "ammo_gaussclip", "weapon_handgrenade", "weapon_tripmine", "weapon_satchel",
+                "weapon_snark",    "weapon_hornetgun"};
+            const std::string cls = lowered(entity.className());
+            if (cls != "func_breakable" && cls != "func_pushable")
+                return nullptr;
+            const long object = std::lround(numberKey(entity, "spawnobject"));
+            if (object <= 0 || object >= static_cast<long>(std::size(kSpawnObjects)))
+                return nullptr;
+            for (const ItemClass &item : kItemClasses)
+            {
+                if (std::string(item.cls) == kSpawnObjects[object])
+                    return &item;
+            }
+            return nullptr;
+        }
 
         /// One of the people (talkmonster.cpp's): given chosen clips, not
         /// every one their model has.
@@ -702,6 +758,28 @@ namespace hlds
         return count;
     }
 
+    void addStartDark(std::vector<Entity> &entities)
+    {
+        bool dark = false;
+        for (const Entity &entity : entities)
+            dark = dark || (entity.className() == "worldspawn" && numberKey(entity, "startdark") != 0);
+        if (!dark)
+            return;
+        // A map that begins in the dark (worldspawn's "startdark": the
+        // game's v_dark) is black as it starts, and the picture comes up
+        // out of it -- held four and a half seconds, then a second and a
+        // half (the client's fade with the game's title): a fade from black
+        // that holds first, set off once as the map begins.
+        Entity fade;
+        fade.pairs = {{"classname", "env_fade"},  {"targetname", "__startdark"}, {"duration", "1.5"},
+                      {"holdtime", "4.5"},       {"renderamt", "255"},          {"spawnflags", "1"},
+                      {"_holdfirst", "1"}};
+        Entity start;
+        start.pairs = {{"classname", "trigger_auto"}, {"target", "__startdark"}, {"spawnflags", "1"}};
+        entities.push_back(fade);
+        entities.push_back(start);
+    }
+
     void addCasingNeeds(bool playerArmed, std::vector<ModelNeed> &needs)
     {
         bool brass = playerArmed;
@@ -903,6 +981,12 @@ namespace hlds
             if (lowered(entity.className()) == "monster_barney")
                 add(needOf("models/w_9mmhandgun.mdl"), "idle");
         }
+        // ... and what breaks open to give something.
+        for (const Entity &entity : entities)
+        {
+            if (const ItemClass *item = spawnObjectOf(entity))
+                add(needOf(item->file), item->kind == ItemKind::Tripmine ? "ground" : "idle");
+        }
         if (aliens)
             needOf("models/agibs.mdl").firstSequence = true;
         // (What an alien grunt's gun sends, and a monstermaker's snark --
@@ -915,8 +999,10 @@ namespace hlds
             if (info.is && info.kind == ActorKind::Snark)
                 add(needOf("models/w_squeak.mdl"), "run");
         }
-        if (people)
-            needOf("models/hgibs.mdl").firstSequence = true;
+        // (A person's pieces: every map has the player, who may be blown
+        // apart.)
+        (void)people;
+        needOf("models/hgibs.mdl").firstSequence = true;
         // What the scripts have their actors do: an actor by name, or every
         // actor of a class.
         for (const Entity &script : entities)
@@ -1197,6 +1283,19 @@ namespace hlds
             sentenceIds[name] = static_cast<int>(out.sentences.size() - 1);
             return sentenceIds[name];
         };
+        // The suit's lines first, in SuitLine's order, so that each is its
+        // own sentence number (a book without one: an empty line kept in its
+        // place).
+        for (int line = 0; line < kSuitLines; ++line)
+        {
+            if (sentenceIndex(kSuitLineNames[line]) != line)
+            {
+                out.sentences.resize(static_cast<std::size_t>(line));
+                SentenceRecord none{};
+                none.firstWord = static_cast<std::uint16_t>(out.sentenceWords.size());
+                out.sentences.push_back(none);
+            }
+        }
         std::vector<LogicSound> heard; // parallel to out.records
 
         std::map<std::string, std::uint16_t> nameIds;
@@ -1757,8 +1856,9 @@ namespace hlds
                 record.speed = fxFromDouble(numberKey(entity, "speed", 100));
                 if (record.speed <= 0)
                     record.speed = fxFromInt(100);
-                record.damage = static_cast<std::uint16_t>(
-                    std::clamp(numberKey(entity, "dmg", 2), 0.0, 65535.0));
+                // (None, or none said: two -- CFuncTrain::Spawn's.)
+                const double dmg = numberKey(entity, "dmg");
+                record.damage = static_cast<std::uint16_t>(std::clamp(dmg == 0 ? 2.0 : dmg, 0.0, 65535.0));
                 // The point of the brush that visits each corner: its middle.
                 for (int a = 0; a < 3; ++a)
                     record.move[a] =
@@ -1840,6 +1940,11 @@ namespace hlds
                     make = true;
                     record.kind = static_cast<std::uint8_t>(LogicKind::Light);
                     record.extra[0] = static_cast<std::uint32_t>(style);
+                    // How it shines while it is on (its "pattern": the
+                    // game's letters, a to z, ten a second).
+                    const std::string pattern(entity.value("pattern"));
+                    if (!pattern.empty())
+                        record.extra[1] = stringOffset(pattern);
                     if (spawnflags & 1)
                         record.flags |= kLogicStartOpen;
                 }
@@ -1918,6 +2023,8 @@ namespace hlds
                 record.extra[2] = (spawnflags & 16) ? 1u : 0u; // (stopped, it goes back)
                 if (spawnflags & 1)
                     record.flags |= kLogicStartOpen;
+                // What it does to whoever it swings into (CPendulum::Touch).
+                record.damage = static_cast<std::uint16_t>(std::clamp(numberKey(entity, "dmg"), 0.0, 65535.0));
             }
             else if (cls == "env_beverage")
             {
@@ -1952,6 +2059,9 @@ namespace hlds
                     record.flags |= kLogicSelfDriven;
                 if (spawnflags & 4)
                     record.flags |= kLogicForwardOnly;
+                // How hard it shoves what is in its way, and hurts it
+                // (CFuncTrackTrain::Blocked).
+                record.damage = static_cast<std::uint16_t>(std::clamp(numberKey(entity, "dmg"), 0.0, 65535.0));
                 trainCorner = trackNode(entity.value("target"));
             }
             else if ((cls == "func_trackautochange" || cls == "func_trackchange") &&
@@ -1994,6 +2104,10 @@ namespace hlds
                     record.flags |= kLogicStartOpen;
                 if (spawnflags & 16)
                     record.flags |= kLogicToggle;
+                // 32: it hurts whatever touches it, by how fast it turns
+                // (SF_BRUSH_HURT, HurtTouch).
+                if (spawnflags & 32)
+                    record.flags |= kLogicTouch;
                 record.damage = static_cast<std::uint16_t>(
                     std::clamp(numberKey(entity, "dmg"), 0.0, 65535.0));
             }
@@ -2035,6 +2149,10 @@ namespace hlds
                 }
                 if (spawnflags & 256)
                     record.flags |= kLogicInstant;
+                // What it leaves when it breaks (an item kept where it is:
+                // below, with the actors).
+                if (const ItemClass *item = spawnObjectOf(entity))
+                    record.pad = static_cast<std::uint16_t>(item->kind);
             }
             else if ((cls == "trigger_hurt" || cls == "trigger_push" || cls == "trigger_teleport" ||
                       cls == "trigger_gravity") &&
@@ -2044,6 +2162,7 @@ namespace hlds
                 // (Flag 8 on a trigger_hurt and 2 on a teleport: not for the
                 // player. On a trigger_push 2 is something else: it starts
                 // switched off.)
+                record.pad = shapedVolume(bsp, model);
                 for (int a = 0; a < 3; ++a)
                 {
                     record.mins[a] = static_cast<std::int16_t>(
@@ -2165,6 +2284,7 @@ namespace hlds
                 // ground has in it.)
                 make = true;
                 record.kind = static_cast<std::uint8_t>(LogicKind::Friction);
+                record.pad = shapedVolume(bsp, model);
                 record.extra[0] = static_cast<std::uint32_t>(
                     std::clamp(std::lround(numberKey(entity, "modifier", 100)), 0L, 100L));
                 for (int a = 0; a < 3; ++a)
@@ -2904,6 +3024,10 @@ namespace hlds
                         colour |= static_cast<std::uint32_t>(std::clamp(std::lround(rgb[k]), 0L, 255L) >> 3) << (5 * k);
                 }
                 record.extra[3] = static_cast<std::uint32_t>(spawnflags & 1) | colour << 8 | 0x80000000u;
+                // (Bit 1: a fade from that is held before it lifts -- the
+                // dark a map begins in: addStartDark.)
+                if (numberKey(entity, "_holdfirst") != 0)
+                    record.extra[3] |= 2;
             }
             else if (cls == "multi_manager")
             {
@@ -3293,6 +3417,14 @@ namespace hlds
                 if (info.xen == XenPlant::Light)
                     actor.target = nameId(entity.value("target"));
             }
+            // (A monster_generic of the player's own shape: its origin is its
+            // middle -- genericmonster.cpp gives it the player's box.)
+            if (info.kind == ActorKind::Generic)
+            {
+                const std::string file = lowered(entity.value("model"));
+                if (file == "models/holo.mdl" || file == "models/player.mdl")
+                    actor.flags |= kActorCentred;
+            }
             if (info.kind == ActorKind::Grunt)
             {
                 // His head and his gun are by what he carries (the model's
@@ -3582,6 +3714,36 @@ namespace hlds
             item.flags = kActorDormant;
             item.light = 24;
             item.item = static_cast<std::uint32_t>(ItemKind::Glock);
+            out.actors.push_back(item);
+        }
+        // (... and what a box or a crate has in it, where its middle is at
+        // rest: HlLogic.hpp's breakIt finds it by that, and puts it where
+        // the box then is -- the game's Create at VecBModelOrigin.)
+        for (const Entity &entity : entities)
+        {
+            const ItemClass *what = spawnObjectOf(entity);
+            const std::string text(entity.value("model"));
+            const int index = text.size() >= 2 && text[0] == '*' ? std::atoi(text.c_str() + 1) : 0;
+            if (what == nullptr || index <= 0 || index >= static_cast<int>(bsp.models.size()))
+                continue;
+            std::string file = what->file;
+            file = file.substr(file.find('/') + 1);
+            file = file.substr(0, file.rfind('.'));
+            const auto found = std::find(models.begin(), models.end(), file);
+            if (found == models.end())
+                continue;
+            const BspModel &model = bsp.models[index];
+            double origin[3] = {0, 0, 0};
+            entity.vec3("origin", origin);
+            ActorRecord item{};
+            item.model = static_cast<std::uint16_t>(found - models.begin());
+            for (int a = 0; a < 3; ++a)
+                item.origin[a] = fxFromDouble(origin[a] + (double(model.mins[a]) + model.maxs[a]) / 2);
+            item.kind = static_cast<std::uint8_t>(ActorKind::Item);
+            item.clip = nameHash(what->kind == ItemKind::Tripmine ? "ground" : "idle");
+            item.flags = kActorDormant;
+            item.light = 24;
+            item.item = static_cast<std::uint32_t>(what->kind);
             out.actors.push_back(item);
         }
 

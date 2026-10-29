@@ -268,6 +268,40 @@ namespace
 
     int grey8(std::uint16_t colour) { return (colour & 31) << 3; }
 
+    /// Faces of one texture whose mappings put them thousands of texels
+    /// apart (c1a1's broken sign: tilted slats, the same picture on each):
+    /// cooked together they do not fit 12.4, so each is moved by its own
+    /// whole repeats -- every vertex's coordinates within range, and each
+    /// the same place on the texture as before.
+    void testFarApartTexture()
+    {
+        MeshFace near = face({{0, 0, 20}, {0, 16, 20}, {16, 16, 20}, {16, 0, 20}});
+        MeshFace far = face({{32, 0, 20}, {32, 16, 20}, {48, 16, 20}, {48, 0, 20}});
+        for (FacePoint &p : far.points)
+            p.t += 7936; // (124 repeats of 64 texels on)
+        for (FacePoint &p : near.points)
+            p.t -= 4000;
+        const BuiltSurface s = buildGroupSurface({&near, &far}, TextureSize{64, 64}, 64, 64);
+        std::vector<GxRun> runs;
+        std::string error;
+        check(decodeGxStream(s.words.data(), s.words.size(), runs, error), "the far-apart group decodes");
+        check(!s.texCoordsClamped, "faces of one texture far apart on it are not clamped");
+        bool same = true;
+        for (const GxRun &run : runs)
+        {
+            for (const GxVertex &v : run.vertices)
+            {
+                // Its place on the texture, as it was: y (a corner's t
+                // before the move) the same within a repeat.
+                const double y = v.y / static_cast<double>(1 << hldata::kVertexShift);
+                const double t = v.t / 16.0;
+                const double wanted = std::fmod(std::fmod(y - (v.x / double(1 << hldata::kVertexShift) < 24 ? 4000 : -7936), 64) + 64, 64);
+                same = same && std::fabs(std::fmod(std::fmod(t, 64) + 64, 64) - wanted) < 0.1;
+            }
+        }
+        check(same, "... and each vertex is the same place on the texture as before");
+    }
+
     void testRules()
     {
         // Two flat-lit squares side by side: one quad, with the two points on
@@ -659,6 +693,7 @@ namespace
 int main()
 {
     testRules();
+    testFarApartTexture();
     testMaps();
     if (g_failures == 0)
         std::printf("test_mesh: ok\n");

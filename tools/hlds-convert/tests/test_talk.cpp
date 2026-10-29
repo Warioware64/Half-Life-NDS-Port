@@ -1188,6 +1188,90 @@ namespace
             }
         }
     }
+    /// c1a1b's sitting scientist: USEd from where he sits (a step short of
+    /// the trigger that starts his scene), he follows -- and walking on
+    /// through that trigger does not take him back to his chair. Led to the
+    /// retinal scanner, its scene takes him and the armoury's door opens.
+    void testSittingScientist(const char *dir)
+    {
+        auto game = load(dir, "c1a1b");
+        if (!game)
+            return;
+        Game &g = *game;
+        const std::uint16_t id = nameIdOfHash(g.view.nameHashes, g.view.nameCount, nameHash("sitting_scientist"));
+        int sci = -1;
+        for (int i = 0; id != 0 && i < g.actors.count; ++i)
+            sci = g.actors.states[i].name == id ? i : sci;
+        check(sci >= 0, "c1a1b's sitting scientist");
+        if (sci < 0)
+            return;
+        ActorState &him = g.actors.states[sci];
+        g.player.health = 100;
+        auto standAt = [&](int x, int y, int z)
+        {
+            ActorState probe;
+            probe.pos[0] = fxFromInt(x);
+            probe.pos[1] = fxFromInt(y);
+            probe.pos[2] = fxFromInt(z);
+            actorToFloor(g.move, probe, fxFromInt(16), fxFromInt(128));
+            g.player.origin[0] = probe.pos[0];
+            g.player.origin[1] = probe.pos[1];
+            g.player.origin[2] = probe.pos[2] + kStandingFeet;
+            g.player.velocity[0] = g.player.velocity[1] = g.player.velocity[2] = 0;
+        };
+        standAt(627, -1260, -60);
+        for (int t = 0; t < 60; ++t)
+            tick(g);
+        check(him.script >= 0, "he sits, held by his scene");
+        standAt(627, -1233, -60);
+        for (int t = 0; t < 30 && him.ai != 1; ++t)
+        {
+            use(g, sci);
+            tick(g);
+        }
+        check(him.ai == 1 && him.script < 0, "USEd from beside his chair, he follows");
+        // On through the trigger his scene starts by, and away.
+        bool sat = false;
+        for (int t = 0; t < 30 * 4; ++t)
+        {
+            standAt(609, t < 30 ? -1207 : -1300, -60);
+            tick(g);
+            sat = sat || him.script >= 0;
+        }
+        check(!sat && him.ai == 1, "... and his scene does not take him back when the player walks on");
+        // To the retinal scanner: its scene takes him there, and the door
+        // opens.
+        const std::uint16_t doorName = nameIdOfHash(g.view.nameHashes, g.view.nameCount, nameHash("retinal_scanner_door"));
+        int door = -1;
+        for (std::uint32_t i = 0; i < g.view.logicCount; ++i)
+            door = g.view.logic[i].name == doorName && (g.view.logic[i].kind == static_cast<std::uint8_t>(LogicKind::Door) ||
+                                                        g.view.logic[i].kind == static_cast<std::uint8_t>(LogicKind::DoorRotating))
+                       ? static_cast<int>(i)
+                       : door;
+        check(door >= 0, "the retinal scanner's door");
+        // (Down the corridor, the G-man the player sees there walks off and
+        // is gone -- his scene, "watch", as the player passes.)
+        logicFire(g.logic, g.player, nameIdOfHash(g.view.nameHashes, g.view.nameCount, nameHash("watch")), -1, kUseToggle, 0);
+        for (int t = 0; t < 30 * 15; ++t)
+            tick(g);
+        // (The player goes on to the scanner, in its trigger; he follows.)
+        standAt(136, -650, -40);
+        bool opened = false;
+        for (int t = 0; t < 30 * 60 && !opened; ++t)
+        {
+            tick(g);
+            if (std::getenv("HLDS_DEBUG_SCI") && t % 30 == 0)
+            {
+                const AiMonster *m = aiFind(g.actors, sci);
+                std::printf("  t=%d him %.0f %.0f ai %d script %d sched %s\n", t, him.pos[0] / 4096.0, him.pos[1] / 4096.0,
+                            him.ai, him.script, m != nullptr && m->schedule != nullptr ? m->schedule->name : "-");
+            }
+            opened = door >= 0 && g.states[door].move != MoveState::AtBottom;
+        }
+        std::printf("test_talk: c1a1b: the scientist led to the scanner (at %.0f %.0f): door %s\n", him.pos[0] / 4096.0,
+                    him.pos[1] / 4096.0, opened ? "open" : "shut");
+        check(opened, "led to the retinal scanner, he opens the armoury's door");
+    }
 } // namespace
 
 int main()
@@ -1217,6 +1301,7 @@ int main()
         testTramGuardFromSave(valve, 1000);
         testTramGuardFromSave(valve, 5000);
         testFollow(valve);
+        testSittingScientist(valve);
         testGuard(valve);
         testGuardFights(valve);
         testScriptSync(valve);

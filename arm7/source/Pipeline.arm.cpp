@@ -32,8 +32,8 @@ namespace hlaudio
     namespace
     {
         constexpr int kRing = AudioLink::kOutRing; ///< samples (a power of two)
-        constexpr int kBlock = 64;
-        constexpr int kLead = 256; ///< 4 blocks: 7.8 ms (5.4 at the high quality)
+        constexpr int kBlock = AudioLink::kPipelineBlock;
+        constexpr int kLead = AudioLink::kPipelineLead; ///< 8 blocks: 15.6 ms (10.8 at the high quality)
 
         /// The two rates: sound-clock ticks a sample, the rate, and how many
         /// samples to one of the room's reverb (about 11 kHz either way).

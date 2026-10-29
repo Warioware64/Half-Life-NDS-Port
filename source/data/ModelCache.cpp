@@ -8,6 +8,7 @@
 #include <string>
 
 #include "Global.hpp"
+#include "data/CardRead.hpp"
 #include "data/LevelFile.hpp"
 #include "data/TextureCache.hpp"
 #include "data/VramWriter.hpp"
@@ -39,7 +40,7 @@ namespace hlrt
             if (length > 0 && length <= kMaxModelBytes &&
                 global.heapHeadroom() >= static_cast<std::size_t>(length) + spare)
                 block = static_cast<std::uint8_t *>(std::malloc(static_cast<std::size_t>(length)));
-            const bool got = block != nullptr && std::fread(block, 1, static_cast<std::size_t>(length), file) ==
+            const bool got = block != nullptr && cardRead(block, static_cast<std::size_t>(length), file) ==
                                                      static_cast<std::size_t>(length);
             std::fclose(file);
             if (!got)

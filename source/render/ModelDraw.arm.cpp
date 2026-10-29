@@ -86,6 +86,7 @@ namespace hlrt
             int clip = 0;
             std::uint32_t frame = 0;
             std::int32_t controls[2] = {0, 0}; ///< what its bone controllers are set to
+            int blend = 0;                     ///< where between a blending clip's poses
             std::uint32_t used = 0;
             BoneMatrix bones[kModelMaxBones];
         };
@@ -115,7 +116,7 @@ namespace hlrt
         {
             if (slot.id == id && slot.model == modelIndex && slot.clip == actor.clip &&
                 slot.frame == frame && slot.controls[0] == controls[0] &&
-                slot.controls[1] == controls[1])
+                slot.controls[1] == controls[1] && slot.blend == actor.blend.value)
             {
                 slot.used = ++posedClock;
                 return slot.bones;
@@ -131,11 +132,12 @@ namespace hlrt
         slot.frame = frame;
         slot.controls[0] = controls[0];
         slot.controls[1] = controls[1];
+        slot.blend = actor.blend.value;
         slot.used = ++posedClock;
         const int bones = model.header->boneCount;
         if (actor.clip >= 0)
         {
-            poseModel(model, actor.clip, frame, slot.bones, controlled ? controls : nullptr);
+            poseModel(model, actor.clip, frame, slot.bones, controlled ? controls : nullptr, actor.blend.value);
         }
         else
         {

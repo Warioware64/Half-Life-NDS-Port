@@ -200,7 +200,7 @@ namespace hldata
             if (player.health > 0 && playerTouchesBox(player, mins, maxs, 0))
             {
                 hit = true;
-                logicHurt(player, kXenTreeDamage);
+                logicHurt(player, kXenTreeDamage, 0, kDmgCrush | kDmgSlash);
                 player.velocity[0] += shove[0];
                 player.velocity[1] += shove[1];
             }

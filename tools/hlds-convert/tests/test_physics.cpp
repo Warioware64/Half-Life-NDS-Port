@@ -353,6 +353,16 @@ namespace
         }
         std::printf("test_physics: half a second's stop slides %.1f units, %.1f on a puddle\n", slid[0], slid[1]);
         check(slid[1] > slid[0] * 2, "the ground that holds them less lets them slide on");
+
+        // Where it holds them not at all (modifier 0, c1a1c's lift shaft)
+        // the keys cannot get them going either: what they add is scaled
+        // by the same friction.
+        sim = spawn(w);
+        sim.run(30);
+        sim.s.slip.value = 100;
+        sim.cmd.forward = 1;
+        sim.run(15);
+        check(sim.speed2d() == 0, "friction 0: the keys add nothing");
     }
 
     void testJump()

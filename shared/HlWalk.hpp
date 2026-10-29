@@ -464,6 +464,76 @@ namespace hldata
                 own->active = was;
             return t;
         }
+
+        /// The floor under (x, y) between `top` and `bottom`, as a point
+        /// falls (the engine's MOVE_NOMONSTERS: the world and the brushes,
+        /// no actors): into `z`; false if there is none that near. A brush
+        /// is taken as its box -- what monsters stand on is.
+        inline bool floorUnder(const MoveWorld &world, fx x, fx y, fx top, fx bottom, fx &z)
+        {
+            const fx from[3] = {x, y, top}, to[3] = {x, y, bottom};
+            std::int32_t hit = kFractionOne;
+            bool found = !lineThrough(world, world.headNode, 0, kFractionOne, from, to, hit, 0);
+            z = found ? top - static_cast<fx>((static_cast<std::int64_t>(top - bottom) * hit) >> kFractionShift)
+                      : bottom;
+            const int ux = x >> kFxShift, uy = y >> kFxShift;
+            for (int m = 0; m < world.moverCount; ++m)
+            {
+                if (world.reach != nullptr)
+                {
+                    // (Whole units, rounded outwards: never "no" for a yes.)
+                    const MoverReach &r = world.reach[m];
+                    if (ux < r.lo[0] || ux > r.hi[0] || uy < r.lo[1] || uy > r.hi[1] || r.hi[2] < (z >> kFxShift) ||
+                        r.lo[2] > (top >> kFxShift) + 1)
+                        continue;
+                }
+                const MoverHull &mover = world.movers[m];
+                if (!mover.solid || x < mover.mins[0] || x > mover.maxs[0] || y < mover.mins[1] ||
+                    y > mover.maxs[1] || mover.mins[2] > top)
+                    continue;
+                // (Begun inside it: stopped where it began.)
+                const fx at = mover.maxs[2] < top ? mover.maxs[2] : top;
+                if (at >= z && at >= bottom)
+                {
+                    z = at;
+                    found = true;
+                }
+            }
+            return found;
+        }
+
+        /// SV_CheckBottom: whether a walker `half` wide with its feet at
+        /// `feet` stands on something -- its middle on a floor within a
+        /// stair of its feet, and no corner more than a stair below that.
+        /// Corners all over solid world are let through at once, which is
+        /// most of the time. (A world with no tree has nothing to ask: yes.)
+        inline bool walkBottom(const MoveWorld &world, const fx *feet, fx half)
+        {
+            if (world.nodes == nullptr)
+                return true;
+            bool solid = true;
+            for (int k = 0; k < 4 && solid; ++k)
+            {
+                const fx p[3] = {feet[0] + (k & 1 ? half : -half), feet[1] + (k & 2 ? half : -half),
+                                 feet[2] - fxFromInt(1)};
+                solid = world.leaves[worldLeaf(world, p)].contents == kContentsSolid;
+            }
+            if (solid)
+                return true;
+            const fx top = feet[2] + kStepSize, bottom = feet[2] - kStepSize;
+            fx mid;
+            if (!floorUnder(world, feet[0], feet[1], top, bottom, mid))
+                return false;
+            for (int k = 0; k < 4; ++k)
+            {
+                fx z;
+                if (!floorUnder(world, feet[0] + (k & 1 ? half : -half), feet[1] + (k & 2 ? half : -half), top,
+                                bottom, z) ||
+                    mid - z > kStepSize)
+                    return false;
+            }
+            return true;
+        }
     } // namespace detail
 
     inline constexpr int kWalkStanding = 0;
@@ -476,9 +546,10 @@ namespace hldata
     ///
     /// `hull` is the size: kWalkStanding, kWalkCrouched, or kWalkLarge --
     /// which goes as a standing person does, but only to where something 64
-    /// units across has room in the world (the game's large hull).
+    /// units across has room in the world (the game's large hull). `half`
+    /// is half its width for what it stands on (0: the hull's own).
     HL_HOT bool walkStep(const MoveWorld &world, const ActorWorld *a, int index, int hull,
-                         fx *feet, fx dx, fx dy)
+                         fx *feet, fx dx, fx dy, fx half = 0)
     {
         const bool small = hull == kWalkCrouched;
         const fx lift = small ? kCrouchedFeet : kStandingFeet;
@@ -495,6 +566,14 @@ namespace hldata
         const Trace drop = detail::walkerTrace(world, a, index, small, along, down);
         if (drop.startSolid || drop.fraction >= kFractionOne)
             return false; // nothing to stand on: it does not walk off edges
+        // Nor over them (SV_CheckBottom) -- unless it is over one already:
+        // then, as the engine's FL_PARTIALGROUND lets it, it may move, and
+        // so get off it.
+        if (half == 0)
+            half = hull == kWalkLarge ? fxFromInt(32) : fxFromInt(16);
+        const fx landed[3] = {drop.endPos[0], drop.endPos[1], drop.endPos[2] - lift};
+        if (!detail::walkBottom(world, landed, half) && detail::walkBottom(world, feet, half))
+            return false;
         if (hull == kWalkLarge && world.large.nodes != nullptr)
         {
             // Room for its width there? (If it has none where it is, it is
@@ -505,9 +584,9 @@ namespace hldata
                 hullPointContents(world.large, world.large.root, here) != kContentsSolid)
                 return false;
         }
-        feet[0] = drop.endPos[0];
-        feet[1] = drop.endPos[1];
-        feet[2] = drop.endPos[2] - lift;
+        feet[0] = landed[0];
+        feet[1] = landed[1];
+        feet[2] = landed[2];
         return true;
     }
 
@@ -520,7 +599,7 @@ namespace hldata
         int pause = 0;
         for (int n = 0; n <= steps; ++n)
         {
-            thinkPoint(pause, 6); // (three hull traces a step)
+            thinkPoint(pause, 5); // (three hull traces a step, and its footing)
             const fx d[3] = {to[0] - at[0], to[1] - at[1], 0};
             const fx distance = fxLength(d);
             if (distance <= kWalkStep)
@@ -841,6 +920,10 @@ namespace hldata
     /// being `half` wide and `height` tall. Uses the actor's thinkMs,
     /// stuckMs, goal and node fields.
     ///
+    /// `idealYaw`, if given, is where the way it is going is put, for the
+    /// caller to turn it at its own pace (a monster: aiTurnTick, at its
+    /// yaw speed); with none it turns itself, a turn a second.
+    ///
     /// `still` says `dest` does not move (a mark, not a player): then a
     /// straight walk is looked for from further off, since it need be found
     /// only once -- the plan is made again only on reaching a node or on
@@ -849,11 +932,11 @@ namespace hldata
     // (In the game library, the engine's own, in ITCM: game/GameApi.hpp.)
     int walkTick(ActorWorld &a, const MoveWorld &world, int index, int small, const fx *dest,
                         fx speed, int ms, const PlayerState *player, fx half, fx height,
-                        bool still = false);
+                        bool still = false, std::uint16_t *idealYaw = nullptr);
 #else
     HL_HOT int walkTick(ActorWorld &a, const MoveWorld &world, int index, int small, const fx *dest,
                         fx speed, int ms, const PlayerState *player, fx half, fx height,
-                        bool still = false)
+                        bool still = false, std::uint16_t *idealYaw = nullptr)
     {
         ActorState &actor = a.states[index];
         actor.thinkMs -= ms;
@@ -919,7 +1002,10 @@ namespace hldata
         }
         if (distance < fxFromInt(4))
             return kWalkMoved;
-        detail::faceTo(actor, d[0], d[1], ms, 65536); // a turn a second
+        if (idealYaw != nullptr)
+            *idealYaw = fxAtan2Turns(d[1], d[0]);
+        else
+            detail::faceTo(actor, d[0], d[1], ms, 65536); // a turn a second
         fx step = static_cast<fx>((static_cast<std::int64_t>(speed) * ms) / 1000);
         if (step > distance)
             step = distance;
@@ -928,11 +1014,11 @@ namespace hldata
         fx feet[3] = {actor.pos[0], actor.pos[1], actor.pos[2]};
         // The whole step, or what of it one way or the other can be made
         // (sliding along what is in the way).
-        bool moved = walkStep(world, &a, index, small, feet, dx, dy);
+        bool moved = walkStep(world, &a, index, small, feet, dx, dy, half);
         if (!moved && dx != 0)
-            moved = walkStep(world, &a, index, small, feet, dx, 0);
+            moved = walkStep(world, &a, index, small, feet, dx, 0, half);
         if (!moved && dy != 0)
-            moved = walkStep(world, &a, index, small, feet, 0, dy);
+            moved = walkStep(world, &a, index, small, feet, 0, dy, half);
         // Not into the player: it stops in front of them.
         if (moved && player != nullptr && detail::boxInPlayer(*player, feet, half, height))
             moved = false;

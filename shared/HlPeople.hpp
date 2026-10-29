@@ -16,15 +16,18 @@ namespace hldata
     inline constexpr std::uint8_t kPersonFlee = 2; ///< (saves from before: taken as idle)
 
     /// USE, from `eye` along `forward` (Q12, unit): the scientist or guard
-    /// in front of the player within arm's reach is USEd (FollowerUse). True
-    /// if there was one.
+    /// the player would USE is USEd (FollowerUse). True if there was one.
+    /// As PlayerUse picks it: one whose box comes within 64 of the player
+    /// (PLAYER_SEARCH_RADIUS), the line from the eye to its middle -- less
+    /// its own half size, each way (UTIL_ClampVectorToBox) -- within the
+    /// narrow view (0.7), and of those the most nearly ahead.
     inline bool personUse(LogicWorld &w, PlayerState &player, const fx *eye, const fx *forward)
     {
         if (w.actors == nullptr)
             return false;
         ActorWorld &a = *w.actors;
         int best = -1;
-        fx bestD = fxFromInt(88);
+        fx bestDot = fxFromDouble(0.7);
         for (int i = 0; i < a.count; ++i)
         {
             const ActorState &actor = a.states[i];
@@ -32,22 +35,35 @@ namespace hldata
                 (actor.kind != static_cast<std::uint8_t>(ActorKind::Scientist) &&
                  actor.kind != static_cast<std::uint8_t>(ActorKind::Guard)))
                 continue;
-            // (Across the floor: the player looks level, and a person's
-            // middle is well below their eyes. Within arm's reach, more or
-            // less faced, and on the same floor.)
-            const fx to[3] = {actor.pos[0] - eye[0], actor.pos[1] - eye[1], 0};
-            const fx up = actor.pos[2] + fxFromInt(36) - eye[2];
-            const fx distance = fxLength(to);
-            const fx flat[3] = {forward[0], forward[1], 0};
-            const fx facing = fxLength(flat);
-            const std::int64_t ahead = static_cast<std::int64_t>(to[0]) * forward[0] +
-                                       static_cast<std::int64_t>(to[1]) * forward[1];
-            if (up > fxFromInt(72) || up < -fxFromInt(72) || facing <= 0)
+            fx lo[3], hi[3];
+            targetBox(actor, lo, hi);
+            // (In the sphere: its box's nearest point to the player.)
+            fx nearest[3];
+            for (int k = 0; k < 3; ++k)
+            {
+                const fx p = player.origin[k];
+                nearest[k] = (p < lo[k] ? lo[k] - p : (p > hi[k] ? p - hi[k] : 0));
+            }
+            if (fxLength(nearest) > fxFromInt(64))
                 continue;
-            if (distance < bestD && ahead * 10 > (static_cast<std::int64_t>(distance) * facing * 7))
+            fx los[3];
+            for (int k = 0; k < 3; ++k)
+            {
+                const fx half = (hi[k] - lo[k]) / 2;
+                const fx v = (lo[k] + hi[k]) / 2 - eye[k];
+                los[k] = v > half ? v - half : (v < -half ? v + half : 0);
+            }
+            const fx length = fxLength(los);
+            if (length <= 0)
+                continue; // (the eye within its box: nothing to say which way)
+            const fx dot = static_cast<fx>((static_cast<std::int64_t>(los[0]) * forward[0] +
+                                            static_cast<std::int64_t>(los[1]) * forward[1] +
+                                            static_cast<std::int64_t>(los[2]) * forward[2]) /
+                                           length);
+            if (dot > bestDot)
             {
                 best = i;
-                bestD = distance;
+                bestDot = dot;
             }
         }
         if (best < 0)

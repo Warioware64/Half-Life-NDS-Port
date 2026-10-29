@@ -109,8 +109,16 @@ namespace hldata
         static constexpr std::uint32_t kEnds = 32;     ///< a power of two
         static constexpr int kVoices = 16;
         /// The pipeline's output rings (samples; a power of two), which
-        /// channels 1 and 3 play round.
-        static constexpr int kOutRing = 512;
+        /// channels 1 and 3 play round -- and its capture rings, as long.
+        /// Room for its lead and then some: on a DSi the ARM7 also reads the
+        /// card, and nothing of the sound is done while it does.
+        static constexpr int kOutRing = 2048;
+        /// A block of the pipeline's (samples), and how far ahead of where
+        /// the channels are playing each is written: 8 blocks -- 15.6 ms at
+        /// 32728 Hz, 10.8 at 47605. Held up longer than that less a block, it
+        /// empties the rings and goes on (Pipeline.arm.cpp).
+        static constexpr int kPipelineBlock = 64;
+        static constexpr int kPipelineLead = 512;
         /// The send to the DSi's DSP (Enhanced): the dry mix in one
         /// channel, a quarter of 47605 Hz (a power of two).
         static constexpr int kSendRing = 2048;

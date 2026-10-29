@@ -92,6 +92,11 @@ namespace hlds
         int flags = 0; ///< kMdlSequence*
         int frameCount = 0;
         int blendCount = 0;
+        /// What the first blend goes by (kMdlMotion*: 8, XR, for an aim's
+        /// pitch) and over what, in degrees: blend 0 at blendStart, the last
+        /// at blendEnd (the game's SetBlending).
+        int blendType = 0;
+        float blendStart = 0, blendEnd = 0;
         int activity = 0;
         int actWeight = 0; ///< how often it is chosen among those for its activity
         /// How far the whole sequence carries the model, in its own space:
@@ -193,9 +198,10 @@ namespace hlds
         bool load(const std::filesystem::path &path, std::string &error);
 
         /// The whole of a sequence: frameCount * bones.size() poses, a frame
-        /// after another, bones in order. (Blend 0 only: the sequences that
-        /// blend are aiming and shooting, which nothing here does yet.)
-        bool decode(int sequence, std::vector<MdlPose> &out, std::string &error) const;
+        /// after another, bones in order -- of its blend `blend` (the
+        /// sequences that blend are aiming and shooting: one pose for each
+        /// end of the aim).
+        bool decode(int sequence, std::vector<MdlPose> &out, std::string &error, int blend = 0) const;
 
         int sequenceByName(const std::string &label) const; ///< case-insensitive; -1 if none
         /// The sub-model of each body part that `body` selects.

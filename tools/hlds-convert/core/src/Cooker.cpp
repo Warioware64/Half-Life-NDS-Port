@@ -166,6 +166,7 @@ namespace hlds
         if (!parseEntities(bsp.entities, entities, error))
             return false;
         standInEntities(entities);
+        addStartDark(entities);
 
         // The cooked format indexes these with 16 bits.
         if (bsp.faces.size() > 0xFFFF || bsp.nodes.size() > 0x7FFF ||
@@ -742,6 +743,31 @@ namespace hlds
         if (level.marks.size() > 0xFFFF)
         {
             error = "the map has more leaf-to-surface marks than the cooked format holds";
+            return false;
+        }
+
+        // --- Each node's own surfaces: what lies on its plane (the BSP's
+        // node faces), which the game draws whenever it goes through the
+        // node -- whether or not a leaf that can be seen lists them.
+        level.nodeSpans.resize(bsp.nodes.size());
+        for (std::size_t i = 0; i < bsp.nodes.size(); ++i)
+        {
+            const BspNode &src = bsp.nodes[i];
+            NodeSpan &span = level.nodeSpans[i];
+            span.first = static_cast<std::uint16_t>(std::min<std::size_t>(level.nodeMarks.size(), 0xFFFF));
+            for (int f = src.firstFace; f < src.firstFace + src.faceCount; ++f)
+            {
+                if (f < 0 || f >= static_cast<int>(surfaceOfFace.size()) || surfaceOfFace[f] == kNone)
+                    continue;
+                const auto mark = static_cast<std::uint16_t>(surfaceOfFace[f]);
+                if (std::find(level.nodeMarks.begin() + span.first, level.nodeMarks.end(), mark) == level.nodeMarks.end())
+                    level.nodeMarks.push_back(mark);
+            }
+            span.count = static_cast<std::uint16_t>(level.nodeMarks.size() - span.first);
+        }
+        if (level.nodeMarks.size() > 0xFFFF)
+        {
+            error = "the map has more node-to-surface marks than the cooked format holds";
             return false;
         }
 

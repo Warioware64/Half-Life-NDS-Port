@@ -1775,6 +1775,126 @@ namespace
             check(g.states[free].running, "(the undamped one still swings)");
         }
     }
+
+    /// What crushes, as the game's Blocked() and Touch() have it: a lift
+    /// that carries the player into a ceiling does one point and goes back
+    /// down (CFuncPlat); a wheel held up by them crushes by its "dmg" each
+    /// frame (CFuncRotating); one marked to hurt by its touch hurts by its
+    /// speed and throws them off (HurtTouch); a pendulum by its "dmg" and its
+    /// speed (CPendulum::Touch). All of it through the armour.
+    void testMoversCrush()
+    {
+        MoveCommand idle;
+        {
+            BoxRoom room;
+            // 1: a lift the player stands on that goes 64 up (made at its
+            //    top: it starts at the bottom, on the floor); 2: a bar 100
+            //    above the floor it cannot carry them past.
+            room.brushes = {brush("func_plat", "\"height\" \"64\"\n\"speed\" \"100\"\n", -30, -30, 64, 30, 30, 72),
+                            brush("func_wall", "", -60, -60, 100, 60, 60, 110)};
+            Game g;
+            build(g, room);
+            check(g.ok, "lift room");
+            if (!g.ok)
+                return;
+            g.player.origin[0] = g.player.origin[1] = 0;
+            g.player.origin[2] = fxFromInt(8 + 36);
+            g.player.health = 100;
+            g.player.inv.armor = 0;
+            const int lift = g.recordOfModel(1);
+            // (Back at the bottom with them on it, it goes up again -- the
+            // game's plat does too: a point each time it is held.)
+            int blocks = 0, lost = 0;
+            bool everyTimeOne = true, highest = true;
+            for (int i = 0; i < 90; ++i)
+            {
+                const int before = g.player.health;
+                const MoveState was = g.states[lift].move;
+                g.frame(idle);
+                if (g.player.health < before)
+                {
+                    ++blocks;
+                    lost += before - g.player.health;
+                    everyTimeOne = everyTimeOne && before - g.player.health == 1 && was == MoveState::GoingUp &&
+                                   g.states[lift].move == MoveState::GoingDown;
+                }
+                highest = highest && g.player.origin[2] < fxFromInt(100 - 36 + 1);
+            }
+            std::printf("test_logic: a lift into a ceiling: held %d times, %d lost\n", blocks, lost);
+            check(blocks > 0 && everyTimeOne, "a lift that carries the player into a ceiling does one point and goes back");
+            check(highest, "... and the player is never pushed into it");
+        }
+        {
+            BoxRoom room;
+            // 1: a bar 60 long turning about (0, 0) at 90 a second, dmg 5;
+            //    the player stands in its sweep. 2: the same, marked to hurt
+            //    by its touch (32), and no dmg.
+            room.brushes = {brush("func_rotating", "\"spawnflags\" \"1\"\n\"speed\" \"90\"\n\"dmg\" \"5\"\n"
+                                                    "\"origin\" \"0 0 32\"\n",
+                                  -4, -4, 0, 64, 4, 64)};
+            Game g;
+            build(g, room);
+            check(g.ok, "wheel room");
+            if (!g.ok)
+                return;
+            g.player.origin[0] = fxFromInt(24);
+            g.player.origin[1] = fxFromInt(40);
+            g.player.origin[2] = fxFromInt(36);
+            g.player.health = 100;
+            g.player.inv.armor = 0;
+            for (int i = 0; i < 60; ++i)
+                g.frame(idle);
+            std::printf("test_logic: two seconds in a wheel's way (dmg 5): health %d\n", g.player.health);
+            check(g.player.health < 100 && (100 - g.player.health) % 5 == 0, "a wheel held up crushes by its dmg");
+        }
+        {
+            BoxRoom room;
+            room.brushes = {brush("func_rotating", "\"spawnflags\" \"33\"\n\"speed\" \"300\"\n"
+                                                    "\"origin\" \"0 0 32\"\n",
+                                  -4, -4, 0, 64, 4, 64)};
+            Game g;
+            build(g, room);
+            check(g.ok, "fan room");
+            if (!g.ok)
+                return;
+            g.player.origin[0] = fxFromInt(24);
+            g.player.origin[1] = fxFromInt(40);
+            g.player.origin[2] = fxFromInt(36);
+            g.player.health = 100;
+            g.player.inv.armor = 0;
+            bool thrown = false;
+            for (int i = 0; i < 30 && g.player.health == 100; ++i)
+            {
+                g.frame(idle);
+                thrown = thrown || g.player.velocity[0] != 0 || g.player.velocity[1] != 0;
+            }
+            std::printf("test_logic: in a hurting fan's way (300 a second): health %d\n", g.player.health);
+            check(g.player.health == 70 && thrown, "a fan that hurts by its touch hurts a tenth of its speed, and throws");
+        }
+        {
+            BoxRoom room;
+            // A pendulum swinging through where the player stands, dmg 50.
+            room.brushes = {brush("func_pendulum", "\"spawnflags\" \"1\"\n\"distance\" \"90\"\n\"speed\" \"90\"\n"
+                                                    "\"dmg\" \"50\"\n\"origin\" \"0 0 32\"\n",
+                                  -4, -4, 0, 64, 4, 64)};
+            Game g;
+            build(g, room);
+            check(g.ok, "pendulum room");
+            if (!g.ok)
+                return;
+            check(g.view.logic[g.recordOfModel(1)].damage == 50, "a pendulum's dmg is cooked");
+            g.player.origin[0] = fxFromInt(24);
+            g.player.origin[1] = fxFromInt(40);
+            g.player.origin[2] = fxFromInt(36);
+            g.player.health = 100;
+            g.player.inv.armor = 50;
+            for (int i = 0; i < 60 && g.player.health == 100; ++i)
+                g.frame(idle);
+            std::printf("test_logic: struck by a pendulum (dmg 50): health %d, armour %d\n", g.player.health,
+                        g.player.inv.armor);
+            check(g.player.health < 100 && g.player.inv.armor < 50, "a pendulum hurts what it swings into, through the armour");
+        }
+    }
 } // namespace
 
 int main()
@@ -1786,6 +1906,7 @@ int main()
     testTriggersAndWiring();
     testTrains();
     testLadders();
+    testMoversCrush();
     testRotatingDoors();
     testHingeDirections();
     testRotation();

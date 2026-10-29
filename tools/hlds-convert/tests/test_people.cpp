@@ -226,11 +226,34 @@ namespace
         check(facedAtShot, "... and fires facing it, his pistol in his hand");
         check(enemyOf(g, s.guard) == s.monster && guard.ai == kPersonIdle, "it is his enemy; he follows nobody for it");
 
-        // A round to each firing clip.
+        // A round to each firing clip -- its flash at his pistol's muzzle,
+        // in his hand as it is drawn, his arm aimed at what he shoots.
         shots0 = shots(g);
         const int health0 = monster.health;
+        double worstFlash = -1;
+        int blendAtShot = -1;
         for (int t = 0; t < 3000; t += 33)
+        {
+            const int before = shots(g);
             tick(s, s.away, s.there);
+            if (shots(g) == before)
+                continue;
+            fx muzzle[3];
+            if (!actorAttachment(g.actors, guard, 0, muzzle))
+                continue;
+            blendAtShot = guard.blend.value;
+            for (const Effect &e : g.actors.effects)
+            {
+                if (e.kind != kEffectMuzzle || e.leftMs < e.wholeMs - 40)
+                    continue;
+                const fx d[3] = {e.a[0] - muzzle[0], e.a[1] - muzzle[1], e.a[2] - muzzle[2]};
+                worstFlash = std::max(worstFlash, fxLength(d) / 4096.0);
+            }
+        }
+        std::printf("test_people: his flash is %.1f units from his muzzle at worst; his aim's blend %d\n", worstFlash,
+                    blendAtShot);
+        check(worstFlash >= 0 && worstFlash < 6, "his flash is at his pistol's muzzle");
+        check(blendAtShot > 60 && blendAtShot < 200, "... his arm aimed about level at what is about level");
         const int fired = shots(g) - shots0;
         std::printf("test_people: %d rounds in three seconds; the zombie has taken %d\n", fired, health0 - monster.health);
         check(fired >= 2 && fired <= 12, "he fires a round to each firing clip");

@@ -102,17 +102,17 @@ namespace hldata
         return hlEngine.traceAll(world, crouched, start, end);
     }
     void poseModel(const ModelView &model, int clip, std::uint32_t frame, BoneMatrix *out,
-                   const std::int32_t *controls)
+                   const std::int32_t *controls, int blend)
     {
-        hlEngine.poseModel(model, clip, frame, out, controls);
+        hlEngine.poseModel(model, clip, frame, out, controls, blend);
     }
     std::uint32_t actorAdvance(const ActorWorld &a, ActorState &actor, int ms)
     {
         return hlEngine.actorAdvance(a, actor, ms);
     }
     int walkTick(ActorWorld &a, const MoveWorld &world, int index, int small, const fx *dest, fx speed, int ms,
-                 const PlayerState *player, fx half, fx height, bool still)
+                 const PlayerState *player, fx half, fx height, bool still, std::uint16_t *idealYaw)
     {
-        return hlEngine.walkTick(a, world, index, small, dest, speed, ms, player, half, height, still);
+        return hlEngine.walkTick(a, world, index, small, dest, speed, ms, player, half, height, still, idealYaw);
     }
 } // namespace hldata

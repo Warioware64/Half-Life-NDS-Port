@@ -293,6 +293,9 @@ namespace hlds
                 seq.linearMovement[a] = r.f32(at + 76 + a * 4);
             seq.blendCount = r.i32(at + 120);
             seq.animOffset = static_cast<std::uint32_t>(r.i32(at + 124));
+            seq.blendType = r.i32(at + 128);
+            seq.blendStart = r.f32(at + 136);
+            seq.blendEnd = r.f32(at + 144);
             seq.group = r.i32(at + 156);
             if (seq.frameCount < 1 || seq.frameCount > 4096 || seq.group < 0 ||
                 seq.group >= groupCount || eventCount < 0 || eventCount > 256)
@@ -428,7 +431,7 @@ namespace hlds
         return true;
     }
 
-    bool MdlFile::decode(int sequence, std::vector<MdlPose> &out, std::string &error) const
+    bool MdlFile::decode(int sequence, std::vector<MdlPose> &out, std::string &error, int blend) const
     {
         out.clear();
         if (sequence < 0 || sequence >= static_cast<int>(sequences.size()))
@@ -437,16 +440,23 @@ namespace hlds
             return false;
         }
         const MdlSequence &seq = sequences[sequence];
+        if (blend < 0 || blend >= std::max(1, seq.blendCount))
+        {
+            error = "no such blend";
+            return false;
+        }
         const std::vector<std::uint8_t> &bytes = seq.group == 0 ? main_ : groups_[seq.group];
         Reader r{bytes};
         const std::size_t boneCount = bones.size();
+        // (Each blend's six offsets a bone follow the one before's.)
+        const std::size_t blendOffset = static_cast<std::size_t>(blend) * boneCount * 12;
         out.resize(static_cast<std::size_t>(seq.frameCount) * boneCount);
 
         for (std::size_t b = 0; b < boneCount; ++b)
         {
             // Six offsets per bone, each from the start of this bone's six;
             // 0 for a channel the sequence does not animate.
-            const std::size_t anim = seq.animOffset + b * 12;
+            const std::size_t anim = seq.animOffset + blendOffset + b * 12;
             for (int channel = 0; channel < 6; ++channel)
             {
                 const std::uint16_t offset = r.u16(anim + channel * 2);

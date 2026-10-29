@@ -37,7 +37,7 @@
 namespace hldata
 {
     inline constexpr char kModelMagic[4] = {'H', 'L', 'M', 'D'};
-    inline constexpr std::uint16_t kModelVersion = 5;
+    inline constexpr std::uint16_t kModelVersion = 6;
     /// A model comes at up to this many levels of detail: 0 the finest the
     /// file has, each after it of fewer triangles. A level's error is how
     /// far it is from the model as the game has it, in sixteenths of a
@@ -145,7 +145,7 @@ namespace hldata
         /// when its clip is done. (0 in models converted before it was kept:
         /// read as before.)
         std::int16_t endUp;
-        std::uint32_t firstTrack; ///< boneCount tracks from here, a bone each
+        std::uint32_t firstTrack; ///< boneCount tracks from here, a bone each (of each blend)
         /// How far one run of the clip carries the model along its own
         /// forward, left and up (Q12 units): a walk's stride. The animation
         /// itself stays where it is.
@@ -156,6 +156,14 @@ namespace hldata
         /// converted before held how far it went from the first frame: near
         /// enough the same.)
         fx endOffset[2];
+        /// Two for a clip that blends between two poses by the aim's pitch
+        /// (a guard's or a soldier's shooting): the second's tracks follow
+        /// the first's. One for every other. `blendLow` and `blendHigh` are
+        /// the pitch of each, in degrees (the game's SetBlending).
+        std::uint8_t blends;
+        std::uint8_t pad;
+        std::int8_t blendLow;
+        std::int8_t blendHigh;
     };
     inline std::uint8_t clipActivity(const ModelClip &clip)
     {
@@ -282,7 +290,7 @@ namespace hldata
     static_assert(sizeof(ModelHitbox) == 16);
     static_assert(sizeof(ModelHeader) == 64);
     static_assert(sizeof(ModelBatch) == 48);
-    static_assert(sizeof(ModelClip) == 40);
+    static_assert(sizeof(ModelClip) == 44);
     static_assert(sizeof(ModelTrack) == 16);
     static_assert(sizeof(ModelKey) == 6);
     static_assert(sizeof(ModelEvent) == 8);
@@ -396,8 +404,9 @@ namespace hldata
             }
             for (int i = 0; i < h->clipCount; ++i)
             {
-                if (c[i].frameCount == 0 || c[i].fps == 0 ||
-                    static_cast<std::uint64_t>(c[i].firstTrack) + h->boneCount > h->trackCount ||
+                if (c[i].frameCount == 0 || c[i].fps == 0 || c[i].blends == 0 || c[i].blends > 2 ||
+                    static_cast<std::uint64_t>(c[i].firstTrack) + std::uint64_t{h->boneCount} * c[i].blends >
+                        h->trackCount ||
                     static_cast<std::uint32_t>(c[i].firstEvent) + c[i].eventCount > h->eventCount)
                     return false;
             }

@@ -34,7 +34,8 @@ namespace
             return hldata::thinkRunOne(w);
         },
         .thinkClear = [](hldata::ThinkQueue &q) { hldata::thinkClear(q); },
-        .hurtPlayer = [](hldata::PlayerState &player, std::int32_t amount) { hldata::logicHurt(player, amount); },
+        .hurtPlayer = [](hldata::PlayerState &player, std::int32_t amount, std::uint32_t type)
+        { hldata::logicHurt(player, amount, 0, type); },
         .killAllOfKind = [](hldata::LogicWorld &w, hldata::ActorKind kind) { return hldata::killAllOfKind(w, kind); },
         .netStart = [](hldata::NetMatch &match, hldata::LogicWorld &w, hldata::PlayerState &player, int firstActor,
                        int model, const hldata::NetSpawn *spawns, int spawnCount, std::uint32_t seed) {

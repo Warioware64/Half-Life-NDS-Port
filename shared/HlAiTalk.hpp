@@ -550,7 +550,17 @@ namespace hldata
         inline void startFollowing(AiCtx &c, std::int16_t leader)
         {
             if (c.me.script >= 0)
-                detail::scriptCancel(c.w, c.player, c.me.script);
+            {
+                // A scene that was only holding him in its idle, never told
+                // to play, is over with: what would start it later (c1a1b's
+                // sitting scientist, his trigger a step past where he is
+                // USEd) must not take the one now following back to it.
+                const int script = c.me.script;
+                const bool unplayed = script < c.w.recordCount && !c.w.states[script].running;
+                detail::scriptCancel(c.w, c.player, script);
+                if (unplayed && c.me.script < 0)
+                    c.w.states[script].dead = true;
+            }
             if (c.m.enemy != kAiNone)
                 c.m.idealState = kStateAlert;
             c.m.targetEnt = leader;

@@ -47,11 +47,11 @@ namespace hldata
     HL_FIELDS(BrushState, 6);
     HL_FIELDS(LogicState, 12);
     HL_FIELDS(LogicEvent, 6);
-    HL_FIELDS(LogicWorld, 68);
+    HL_FIELDS(LogicWorld, 72);
     HL_FIELDS(Hull, 4);
     HL_FIELDS(MoverHull, 10);
     HL_FIELDS(LadderVolume, 3);
-    HL_FIELDS(ActorState, 70);
+    HL_FIELDS(ActorState, 71);
     HL_FIELDS(Projectile, 6);
     HL_FIELDS(Effect, 8);
     HL_FIELDS(Gib, 10);
@@ -59,7 +59,7 @@ namespace hldata
     HL_FIELDS(Piece, 14);
     HL_FIELDS(ActorWorld, 42);
     HL_FIELDS(Inventory, 12);
-    HL_FIELDS(PlayerState, 37);
+    HL_FIELDS(PlayerState, 40);
     HL_FIELDS(ViewState, 8);
     HL_FIELDS(WeaponState, 25);
     HL_FIELDS(LampState, 2);

@@ -223,6 +223,9 @@ namespace hlrt
         std::uint16_t *nodeFrame_ = nullptr; ///< vis stamp per node
         std::uint16_t *leafFrame_ = nullptr; ///< vis stamp per leaf
         std::uint32_t *chosen_ = nullptr;    ///< one bit per surface
+        /// On a DSi: a node gone through has its own surfaces drawn too (the
+        /// game's rule: NodeMarks), not only those its seen leaves list.
+        bool nodeSurfaces_ = false;
         std::uint32_t *skipped_ = nullptr;   ///< ... of those left out as small and far
         /// On a DSi: where a pass's surfaces are put together as one display
         /// list, which its other DMA (NDMA) feeds to the geometry engine

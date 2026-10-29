@@ -185,7 +185,57 @@ namespace hldata
                 pos[i] = static_cast<fx>(p) << (kFxShift - kModelPosShift);
             }
         }
+
+        /// `quat` and `pos` taken `mix` (Q12) of the way to the same bone of
+        /// the other pose, `track` (the game's StudioSlerpBones).
+        inline void blendPose(const ModelTrack &track, const ModelKey *keys, KeySpans &spans, std::int32_t mix,
+                              std::int32_t *quat, fx *pos)
+        {
+            std::int32_t q[4];
+            fx p[3];
+            sampleTrack(track, keys, spans, q, p);
+            std::int32_t dot = 0;
+            for (int i = 0; i < 4; ++i)
+                dot += quat[i] * q[i];
+            const std::int32_t sign = dot < 0 ? -1 : 1;
+            std::int64_t length2 = 0;
+            for (int i = 0; i < 4; ++i)
+            {
+                quat[i] += ((sign * q[i] - quat[i]) * mix) >> 12;
+                length2 += static_cast<std::int64_t>(quat[i]) * quat[i];
+            }
+            const auto length = static_cast<std::int32_t>(isqrt64(static_cast<std::uint64_t>(length2)));
+            if (length > 0)
+            {
+                // (Two poses of an aim are well within a right angle of each
+                // other, bone by bone: as sampleTrack's, this fits.)
+                const std::int32_t reciprocal = (1 << 28) / length;
+                for (int i = 0; i < 4; ++i)
+                    quat[i] = (quat[i] * reciprocal) >> 14;
+            }
+            for (int i = 0; i < 3; ++i)
+                pos[i] += static_cast<fx>((static_cast<std::int64_t>(p[i] - pos[i]) * mix) >> 12);
+        }
     } // namespace detail
+
+    /// The setting (0..255) of a blending clip's blend for an aim of
+    /// `pitch` (65536 to the circle, up positive): SetBlending's, for the
+    /// pitch blends the game's monsters have. 0 for a clip that does not
+    /// blend.
+    inline int clipBlend(const ModelClip &clip, std::int32_t pitch)
+    {
+        if (clip.blends < 2 || clip.blendLow == clip.blendHigh)
+            return 0;
+        // In degrees, Q8; the game's "ugly hack": a range written backwards
+        // turns the value round.
+        std::int32_t value = static_cast<std::int32_t>(
+            (static_cast<std::int64_t>(static_cast<std::int16_t>(pitch)) * 360 * 256 + 32768) >> 16);
+        const std::int32_t low = clip.blendLow * 256, high = clip.blendHigh * 256;
+        if (high < low)
+            value = -value;
+        const std::int32_t setting = 255 * (value - low) / (high - low);
+        return setting < 0 ? 0 : (setting > 255 ? 255 : setting);
+    }
 
     /// What a controller set to `value` comes to: kept within its travel,
     /// as the game's SetController keeps it. (There, a travel written
@@ -246,21 +296,32 @@ namespace hldata
     /// values, a turn as 65536 to the circle and a slide as units in Q12.
     /// As the game sets them, except that there a setting is kept as one
     /// byte: here it is as fine as it is given.
+    ///
+    /// `blend` is where between a blending clip's two poses it is (0 the
+    /// first, 255 the second: the game's pev->blending[0], clipBlend); a
+    /// clip with one pose has no use for it.
 #ifdef HL_DSL
     // (In the game library, the engine's own, in ITCM: game/GameApi.hpp.)
     void poseModel(const ModelView &model, int clip, std::uint32_t frame, BoneMatrix *out,
-                          const std::int32_t *controls = nullptr);
+                          const std::int32_t *controls = nullptr, int blend = 0);
 #else
     HL_HOT void poseModel(const ModelView &model, int clip, std::uint32_t frame, BoneMatrix *out,
-                          const std::int32_t *controls = nullptr)
+                          const std::int32_t *controls = nullptr, int blend = 0)
     {
         const int controllers = controls != nullptr ? model.header->controllerCount : 0;
         const ModelClip &c = model.clips[clip];
         const std::uint32_t lastFrame = c.frameCount - 1u;
         if (frame > (lastFrame << 8))
             frame = lastFrame << 8;
-        const ModelTrack *tracks = model.tracks + c.firstTrack;
         const int bones = model.header->boneCount;
+        // (A blend at either end is that end's pose alone.)
+        if (c.blends < 2 || blend < 0)
+            blend = 0;
+        else if (blend > 255)
+            blend = 255;
+        const ModelTrack *tracks = model.tracks + c.firstTrack + (blend == 255 ? bones : 0);
+        const ModelTrack *others = blend > 0 && blend < 255 ? model.tracks + c.firstTrack + bones : nullptr;
+        const std::int32_t mix = (blend << 12) / 255; // Q12, towards `others`
         detail::KeySpans spans;
         spans.frame = frame;
         spans.lastFrame = lastFrame;
@@ -269,6 +330,8 @@ namespace hldata
             std::int32_t quat[4];
             fx pos[3];
             detail::sampleTrack(tracks[b], model.keys, spans, quat, pos);
+            if (others != nullptr)
+                detail::blendPose(others[b], model.keys, spans, mix, quat, pos);
             std::int32_t local[9];
             detail::quatToMatrix(quat, local);
             for (int n = 0; n < controllers; ++n)

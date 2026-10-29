@@ -81,6 +81,10 @@ namespace hlds
     /// changed, here, before anything is cooked from it. Returns how many
     /// were. Other maps are left as they are.
     int standInEntities(std::vector<Entity> &entities);
+    /// A map that begins in the dark (worldspawn's "startdark") is given
+    /// what makes it so: a fade from black, held first, set off once as the
+    /// map begins.
+    void addStartDark(std::vector<Entity> &entities);
 
     /// A model a map needs, and the sequences of it the map plays.
     struct ModelNeed

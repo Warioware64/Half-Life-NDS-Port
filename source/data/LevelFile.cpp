@@ -1,4 +1,5 @@
 #include "data/LevelFile.hpp"
+#include "data/CardRead.hpp"
 
 #include "DebugLog.hpp"
 #include "Global.hpp"
@@ -76,7 +77,7 @@ namespace hlrt
             const std::uint32_t bytes = hldata::levelPieceBytes(size, piece);
             file = std::fopen(global.mapPath(name).c_str(), "rb");
             const bool read = file != nullptr &&
-                              std::fread(block_ + hldata::levelPieceStart(piece), 1, bytes, file) == bytes;
+                              cardRead(block_ + hldata::levelPieceStart(piece), bytes, file) == bytes;
             if (file != nullptr)
                 std::fclose(file);
             if (!read)

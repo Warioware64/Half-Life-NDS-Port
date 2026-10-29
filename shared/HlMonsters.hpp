@@ -313,29 +313,12 @@ namespace hldata
 
     // ------------------------------------------------------------- the player
 
-    /// A monster's blow. Armour takes four fifths of it, and half of what it
-    /// takes comes off the armour.
+    /// A monster's blow (`type`: what kind, kDmg*): playerTakeDamage's.
     /// `from`: where it came from, if it came from somewhere.
-    inline void playerHurt(PlayerState &player, int damage, const fx *from = nullptr)
+    inline void playerHurt(PlayerState &player, int damage, const fx *from = nullptr,
+                           std::uint32_t type = kDmgGeneric)
     {
-        if (damage > 0 && godMode(player))
-            return;
-        if (damage > 0)
-        {
-            player.hurt += damage;
-            player.hurtKnown = from != nullptr;
-            for (int i = 0; from != nullptr && i < 3; ++i)
-                player.hurtFrom[i] = from[i];
-        }
-        int taken = (damage * 4) / 5;
-        int cost = taken / 2;
-        if (cost > player.inv.armor)
-        {
-            cost = player.inv.armor;
-            taken = cost * 2;
-        }
-        player.inv.armor = static_cast<std::int16_t>(player.inv.armor - cost);
-        player.health -= damage - taken;
+        playerTakeDamage(player, damage, type, from);
     }
 
     namespace detail
@@ -507,7 +490,7 @@ namespace hldata
             const int hurt = share(player.origin);
             if (hurt > 0)
             {
-                playerHurt(player, hurt);
+                playerHurt(player, hurt, nullptr, kDmgBlast);
                 a.got |= kGotHurt;
             }
         }
@@ -574,7 +557,7 @@ namespace hldata
             if (shot.fraction > 0 && shot.mover != static_cast<std::int16_t>(record.brush) &&
                 stopped < reach - fxFromInt(8))
                 continue;
-            logicStrike(w, player, i, (damage * (radius - distance)) / radius);
+            logicStrike(w, player, i, (damage * (radius - distance)) / radius, kDmgBlast);
         }
     }
 
@@ -1079,13 +1062,39 @@ namespace hldata
                 state.speed = 500;
                 return;
             }
-            // Not on top of the player.
+            // Not on top of the player -- nor of anyone in the column under
+            // it, down to the floor (MakeMonster: "don't build a stack of
+            // monsters", 34 out each way).
             const ActorRecord &born = a.records[slot];
             const MonsterKind &kind = monsterKind(born.kind);
             if (touchesPlayer(player, born.origin, kind.half + fxFromInt(8), kind.height))
             {
                 state.speed = 500;
                 return;
+            }
+            {
+                const fx down[3] = {born.origin[0], born.origin[1], born.origin[2] - fxFromInt(2048)};
+                const Shot floor = traceShot(*w.world, born.origin, down);
+                const fx ground = born.origin[2] -
+                                  static_cast<fx>((static_cast<std::int64_t>(fxFromInt(2048)) * floor.fraction) >> kFractionShift);
+                const fx lo[3] = {born.origin[0] - fxFromInt(34), born.origin[1] - fxFromInt(34), ground};
+                const fx hi[3] = {born.origin[0] + fxFromInt(34), born.origin[1] + fxFromInt(34), born.origin[2]};
+                bool stacked = playerTouchesBox(player, lo, hi, 0);
+                for (int n = 0; n < a.count && !stacked; ++n)
+                {
+                    const ActorState &other = a.states[n];
+                    if (!other.active || !isMonster(other.kind))
+                        continue;
+                    fx olo[3], ohi[3];
+                    targetBox(other, olo, ohi);
+                    stacked = ohi[0] >= lo[0] && olo[0] <= hi[0] && ohi[1] >= lo[1] && olo[1] <= hi[1] &&
+                              ohi[2] >= lo[2] && olo[2] <= hi[2];
+                }
+                if (stacked)
+                {
+                    state.speed = 500;
+                    return;
+                }
             }
             actorSetup(a, slot, born, *w.world);
             a.states[slot].flags &= static_cast<std::uint8_t>(~kActorDormant);
@@ -1273,7 +1282,7 @@ namespace hldata
                 std::int64_t enter = 0;
                 if (lineEntersBox(from, to, lo, hi, enter))
                 {
-                    playerHurt(player, stomp, shot.pos);
+                    playerHurt(player, stomp, shot.pos, kDmgSonic);
                     a.got |= kGotHurt;
                     hit = kStompHitPlayer;
                 }
@@ -1646,7 +1655,7 @@ namespace hldata
                                 monsterHurt(w, target, kSnarkBite, false);
                             else
                             {
-                                playerHurt(player, kSnarkBite, shot.pos);
+                                playerHurt(player, kSnarkBite, shot.pos, kDmgSlash);
                                 a.got |= kGotHurt;
                             }
                             if (w.heard != nullptr)
@@ -1852,7 +1861,7 @@ namespace hldata
                     {
                         // (The player stung: hornet.cpp's monDmgHornet.)
                         shot.active = false;
-                        playerHurt(player, skillOf(w).hornetDmg, shot.pos);
+                        playerHurt(player, skillOf(w).hornetDmg, shot.pos, kDmgBullet);
                         a.got |= kGotHurt;
                         if (w.heard != nullptr)
                             w.heard->add(static_cast<CommonSound>(static_cast<int>(CommonSound::HornetHit1) + static_cast<int>(chance(a) % 3)),
@@ -1923,7 +1932,7 @@ namespace hldata
                     {
                         if (whom == a.count)
                         {
-                            playerHurt(player, damage, shot.pos);
+                            playerHurt(player, damage, shot.pos, type);
                             a.got |= kGotHurt;
                         }
                         else if (whom >= 0)
@@ -2450,7 +2459,7 @@ namespace hldata
                                   : actor.kind == static_cast<std::uint8_t>(ActorKind::Sentry)
                                       ? s.monster9mmARBullet
                                       : s.monster9mmBullet;
-                playerHurt(player, round > 0 ? round : kind.damage, eye);
+                playerHurt(player, round > 0 ? round : kind.damage, eye, kDmgBullet);
                 a.got |= kGotHurt;
             }
             fx at[3];
@@ -3243,11 +3252,112 @@ namespace hldata
 
     inline void xenTick(LogicWorld &w, PlayerState &player, int ms); // (HlXen.hpp)
 
+    namespace detail
+    {
+        /// CheckSuitUpdate: the suit's next line, once the last has had its
+        /// three and a half seconds (SUITUPDATETIME). The lines are the map's
+        /// first sentences (SuitLine).
+        inline void suitTick(LogicWorld &w, PlayerState &player, int ms)
+        {
+            SuitVoice &suit = player.suit.value;
+            for (std::int32_t &again : suit.againMs)
+                again = again > ms ? again - ms : 0;
+            if (suit.waitMs > 0)
+                suit.waitMs -= ms;
+            if (suit.waitMs > 0 || suit.queue[0] < 0 || player.health <= 0)
+                return;
+            if (w.heard != nullptr)
+                w.heard->add(static_cast<std::uint16_t>(suit.queue[0]), nullptr, 64, kRadiusEverywhere,
+                             kSoundSentence);
+            for (int i = 0; i < 3; ++i)
+                suit.queue[i] = suit.queue[i + 1];
+            suit.queue[3] = -1;
+            suit.waitMs = 3500;
+        }
+
+        /// The player in pieces (GibMonster: CGib::SpawnRandomGibs from
+        /// their box, a head among them), and the sound of it.
+        inline void playerGibs(LogicWorld &w, PlayerState &player)
+        {
+            player.gib.value = 0;
+            ActorWorld &a = *w.actors;
+            if (w.heard != nullptr)
+                w.heard->add(CommonSound::BodySplat, player.origin);
+            const int pieces = gibPieces(a, a.humanGibs);
+            if (pieces == 0)
+                return;
+            for (int n = 0; n < 4; ++n)
+            {
+                fx at[3], velocity[3];
+                for (int k = 0; k < 3; ++k)
+                {
+                    const fx span = k == 2 ? fxFromInt(72) : fxFromInt(32);
+                    at[k] = player.origin[k] - span / 2 + static_cast<fx>((static_cast<std::int64_t>(span) * (aiRandom(a) & 255)) >> 8);
+                    velocity[k] = fxFromInt(aiRandomLong(a, -100, 100)) * 7 / 10;
+                }
+                velocity[2] = fxFromInt(aiRandomLong(a, 200, 300)) * 7 / 10;
+                // (The first is the head: body 0 of the gibs.)
+                Gib &gib = gibAdd(a, a.humanGibs, n == 0 ? 0 : 1 + aiRandomLong(a, 0, pieces > 2 ? pieces - 2 : 0), at,
+                                  velocity, (6000 + aiRandomLong(a, 0, 2000)) * a.lifePercent / 100);
+                gib.yaw = static_cast<std::uint16_t>(aiRandom(a));
+                gib.spin = static_cast<std::int16_t>(40 + aiRandomLong(a, 0, 59));
+                effectAdd(a, kEffectBlood, at, nullptr, 0, 300);
+            }
+        }
+
+        /// CTriggerPush::Touch, for the monsters: a push that stays on
+        /// carries whoever stands in it along the ground at its speed (their
+        /// base velocity) -- c1a1c's crabs out from under the monstermakers
+        /// that drop them. (Upwards, and the pushes that go once, are the
+        /// player's.)
+        inline void monsterPushes(LogicWorld &w, int ms)
+        {
+            ActorWorld &a = *w.actors;
+            for (int i = 0; i < w.recordCount; ++i)
+            {
+                const LogicRecord &record = w.records[i];
+                const LogicState &state = w.states[i];
+                if (record.kind != static_cast<std::uint8_t>(LogicKind::TriggerPush) || state.running || state.dead ||
+                    (record.flags & kLogicFireOnce) || !logicMasterAllows(w, i))
+                    continue;
+                const fx dx = static_cast<fx>((static_cast<std::int64_t>(record.move[0]) * ms) / 1000);
+                const fx dy = static_cast<fx>((static_cast<std::int64_t>(record.move[1]) * ms) / 1000);
+                if (dx == 0 && dy == 0)
+                    continue;
+                for (int n = 0; n < a.count; ++n)
+                {
+                    ActorState &actor = a.states[n];
+                    if (!actor.active || !isMonster(actor.kind) || actor.ai >= kAiDying || actor.script >= 0 ||
+                        isTurret(actor.kind))
+                        continue;
+                    fx lo[3], hi[3];
+                    targetBox(actor, lo, hi);
+                    if (hi[0] < fxFromInt(record.mins[0]) || lo[0] > fxFromInt(record.maxs[0]) ||
+                        hi[1] < fxFromInt(record.mins[1]) || lo[1] > fxFromInt(record.maxs[1]) ||
+                        hi[2] < fxFromInt(record.mins[2]) || lo[2] > fxFromInt(record.maxs[2]))
+                        continue;
+                    fx feet[3] = {actor.pos[0], actor.pos[1], actor.pos[2]};
+                    if (walkStep(*w.world, &a, n, monsterHull(actor.kind), feet, dx, dy))
+                    {
+                        for (int k = 0; k < 3; ++k)
+                            actor.pos[k] = feet[k];
+                        actorPlaceBox(a, n);
+                    }
+                }
+            }
+        }
+    } // namespace detail
+
     inline void monstersTick(LogicWorld &w, PlayerState &player, int ms)
     {
         if (w.actors == nullptr || w.world == nullptr)
             return;
         ActorWorld &a = *w.actors;
+        detail::suitTick(w, player, ms);
+        if (player.gib.value != 0)
+            detail::playerGibs(w, player);
+        if (w.records != nullptr && w.states != nullptr)
+            detail::monsterPushes(w, ms);
         // (Looked at eight times a second: nothing stays in such a place
         // for less.)
         a.hurtLookMs -= ms;
@@ -3572,7 +3682,7 @@ namespace hldata
         static BoneMatrix bones[kModelMaxBones];
         std::int32_t controls[kModelControls];
         const bool controlled = actorControls(actor, controls);
-        poseModel(*model, actor.clip, actor.frame, bones, controlled ? controls : nullptr);
+        poseModel(*model, actor.clip, actor.frame, bones, controlled ? controls : nullptr, actor.blend.value);
         // Into the model's space: back through the way the actor is turned
         // (a turret under a ceiling is turned over as well: ModelDraw).
         fx sine, cosine;
@@ -3619,13 +3729,38 @@ namespace hldata
         return group;
     }
 
+    /// Where the actor's model's attachment `which` is in the world, posed as
+    /// it is drawn (the game's GetAttachment): a gun's muzzle, in the hand
+    /// that holds it. False if its model has no such.
+    inline bool actorAttachment(const ActorWorld &a, const ActorState &actor, int which, fx *out)
+    {
+        const ModelView *model = actorModel(a, actor);
+        if (model == nullptr || actor.clip < 0 || which >= model->header->attachmentCount)
+            return false;
+        static BoneMatrix bones[kModelMaxBones];
+        std::int32_t controls[kModelControls];
+        const bool controlled = actorControls(actor, controls);
+        poseModel(*model, actor.clip, actor.frame, bones, controlled ? controls : nullptr, actor.blend.value);
+        fx at[3];
+        if (!attachmentPoint(*model, bones, which, at))
+            return false;
+        fx sine, cosine;
+        fxSinCos(actor.yaw, sine, cosine);
+        out[0] = actor.pos[0] + fxMul(at[0], cosine) - fxMul(at[1], sine);
+        out[1] = actor.pos[1] + fxMul(at[0], sine) + fxMul(at[1], cosine);
+        out[2] = actor.pos[2] + at[2];
+        return true;
+    }
+
     /// What a shot along `dir` (Q12, unit) from `eye` lands on within
     /// `range` units, and hurts: a monster, or something that breaks. True
     /// if it hurt anything.
     inline bool fireLine(LogicWorld &w, PlayerState &player, const fx *eye, const fx *dir, int range,
                          int damage, bool bullet, bool mark = true, int *met = nullptr, int from = -1,
-                         fx *reached = nullptr)
+                         fx *reached = nullptr, std::uint32_t type = kDmgGeneric)
     {
+        if (type == kDmgGeneric && bullet)
+            type = kDmgBullet;
         if (met != nullptr)
             *met = kMetNothing;
         const fx end[3] = {eye[0] + dir[0] * range, eye[1] + dir[1] * range, eye[2] + dir[2] * range};
@@ -3691,7 +3826,7 @@ namespace hldata
             w.struckFrom[0] = dir[0];
             w.struckFrom[1] = dir[1];
             w.struckFrom[2] = dir[2];
-            logicStrike(w, player, taker, damage);
+            logicStrike(w, player, taker, damage, type, from < 0);
             if (met != nullptr)
                 *met = kMetThing;
             // Glass that takes it and stands (the marks are the
@@ -3894,7 +4029,7 @@ namespace hldata
             {
                 if (damage > 0)
                 {
-                    playerHurt(player, damage, barrel);
+                    playerHurt(player, damage, barrel, kDmgBullet);
                     a.got |= kGotHurt;
                 }
                 return;
@@ -4338,7 +4473,7 @@ namespace hldata
                                const fx *forward, int damage)
         {
             int met = kMetNothing;
-            fireLine(w, player, eye, forward, kCrowbarReach, damage, false, false, &met);
+            fireLine(w, player, eye, forward, kCrowbarReach, damage, false, false, &met, -1, nullptr, kDmgClub);
             const fx end[3] = {eye[0] + forward[0] * kCrowbarReach, eye[1] + forward[1] * kCrowbarReach,
                                eye[2] + forward[2] * kCrowbarReach};
             fx probe[3] = {eye[0] + forward[0] * (kCrowbarReach + 16), eye[1] + forward[1] * (kCrowbarReach + 16),
@@ -4402,7 +4537,7 @@ namespace hldata
                                 w.struckFrom[0] = forward[0];
                                 w.struckFrom[1] = forward[1];
                                 w.struckFrom[2] = forward[2];
-                                logicStrike(w, player, i, damage);
+                                logicStrike(w, player, i, damage, kDmgClub, true);
                                 met = kMetThing;
                             }
                         }
@@ -5265,7 +5400,7 @@ namespace hldata
                     // Too long: it goes off in the hand.
                     state.loading = 0;
                     state.loadMs = 0;
-                    playerHurt(player, 50);
+                    playerHurt(player, 50, nullptr, kDmgBlast);
                     if (w.actors != nullptr)
                         w.actors->got |= kGotHurt;
                     say(static_cast<CommonSound>(static_cast<int>(CommonSound::Electro4) + static_cast<int>(chance() % 3)));
@@ -5285,7 +5420,7 @@ namespace hldata
                 const int damage = 200 * charge / 4000 > 20 ? 200 * charge / 4000 : 20;
                 fx reached[3];
                 int met = kMetNothing;
-                fireLine(w, player, eye, forward, 8192, damage, false, true, &met, -1, reached);
+                fireLine(w, player, eye, forward, 8192, damage, false, true, &met, -1, reached, kDmgEnergyBeam);
                 beam(muzzle, reached, static_cast<std::uint16_t>(31 | 31 << 5 | 28 << 10), 6);
                 // Through a wall no thicker than what is left of it: a blast
                 // on the far side, the less for the thickness.
@@ -5338,7 +5473,7 @@ namespace hldata
                 {
                     fx reached[3];
                     int met = kMetNothing;
-                    fireLine(w, player, from, dir, 8192, damage, false, true, &met, -1, reached);
+                    fireLine(w, player, from, dir, 8192, damage, false, true, &met, -1, reached, kDmgEnergyBeam);
                     beam(start, reached, static_cast<std::uint16_t>(31 | 26 << 5 | 6 << 10), 3);
                     fx at[3], normal[3];
                     const fx past[3] = {reached[0] + dir[0] * 2, reached[1] + dir[1] * 2, reached[2] + dir[2] * 2};
@@ -5402,7 +5537,7 @@ namespace hldata
                         state.loadMs = 100;
                     ars->uranium = static_cast<std::int16_t>(ars->uranium - 1);
                     fx reached[3];
-                    fireLine(w, player, eye, forward, 2048, 14, false, false, nullptr, -1, reached);
+                    fireLine(w, player, eye, forward, 2048, 14, false, false, nullptr, -1, reached, kDmgEnergyBeam);
                     if (w.actors != nullptr)
                     {
                         Effect &e = effectAdd(*w.actors, kEffectBeam, muzzle, reached, 5, 120);

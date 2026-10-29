@@ -1372,7 +1372,7 @@ namespace hldata
                                       (hull.mins[2] + hull.maxs[2]) / 2};
                 const int dist = fxToInt(aiDist(center, c.me.pos));
                 if (dist < kMaxAttackRadius)
-                    logicStrike(c.w, c.player, r, full - (dist * full) / kMaxAttackRadius);
+                    logicStrike(c.w, c.player, r, full - (dist * full) / kMaxAttackRadius, kDmgSonic);
             }
         }
 

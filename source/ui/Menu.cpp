@@ -97,6 +97,7 @@ namespace hlrt
             kGameHalfLife, ///< NEW GAME's: the game itself
             kGameTraining, ///< ... the Hazard Course
             kGameUplink,   ///< ... Half-Life: Uplink
+            kNewSkill,     ///< ... and how hard (its value row)
         };
         struct Row
         {
@@ -108,7 +109,8 @@ namespace hlrt
                              {Kind::Button, kSaveGame, "SAVE GAME"}, {Kind::Button, kLoadGame, "LOAD GAME"},
                              {Kind::Button, kNewGame, "NEW GAME"},   {Kind::Button, kOptions, "OPTIONS"},
                              {Kind::Button, kAchievementsOpen, "ACHIEVEMENTS"},
-                             {Kind::Button, kCommand, "COMMAND"}};
+                             {Kind::Button, kCommand, "COMMAND"},
+                             {Kind::Button, kLeave, "QUIT TO MAIN MENU"}};
         const Row kTitleRows[] = {{Kind::Button, kContinue, "CONTINUE"},     {Kind::Button, kLoadGame, "LOAD GAME"},
                                   {Kind::Button, kNewGame, "NEW GAME"},       {Kind::Button, kMultiplayer, "MULTIPLAYER"},
                                   {Kind::Button, kOptions, "OPTIONS"},
@@ -136,12 +138,14 @@ namespace hlrt
                                   {Kind::Button, kSkillMedium, "MEDIUM"},
                                   {Kind::Button, kSkillHard, "DIFFICULT"},
                                   {Kind::Button, kBack, "BACK"}};
-        // Which game: the game itself, its Hazard Course, or Uplink (each
-        // only if it is on the card).
-        const Row kNewGameRows[] = {{Kind::Button, kGameHalfLife, "HALF-LIFE"},
-                                    {Kind::Button, kGameTraining, "HAZARD COURSE"},
-                                    {Kind::Button, kGameUplink, "UPLINK"},
-                                    {Kind::Button, kBack, "BACK"}};
+        // NEW GAME, as the game's own dialog has it: how hard, then which
+        // game -- its Training Room (the Hazard Course), the game itself,
+        // Uplink (each only if it is on the card) -- or not.
+        const Row kNewGameRows[] = {{Kind::Value, kNewSkill, "Difficulty"},
+                                    {Kind::Button, kGameTraining, "TRAINING ROOM"},
+                                    {Kind::Button, kGameHalfLife, "PLAY HALF-LIFE"},
+                                    {Kind::Button, kGameUplink, "PLAY UPLINK"},
+                                    {Kind::Button, kBack, "CANCEL"}};
         char question[40];
         const char *const kFirmName[kFirmActions] = {"off", "fire", "use", "jump", "alt fire"};
 
@@ -152,6 +156,8 @@ namespace hlrt
             int x, top, width, height, pitch;
         };
         constexpr Layout kMainLayout = {28, 32, 200, 18, 20};
+        // (The pause menu's nine: a little closer.)
+        constexpr Layout kPauseLayout = {28, 26, 200, 16, 18};
         constexpr Layout kOptionLayout = {8, 2, 240, 17, 19};
 
         /// What a slider slides, and between what (0..10, but the aim's
@@ -221,6 +227,8 @@ namespace hlrt
             hldata::LevelHeader header{};
             gameThere_[i] = Level::peekHeader(kFirst[i], header);
         }
+        if (skill_ < hldata::kSkillEasy || skill_ > hldata::kSkillHard)
+            skill_ = hldata::kSkillMedium;
         page_ = Page::NewGame;
         draw();
     }
@@ -1716,7 +1724,7 @@ namespace hlrt
         const bool main = big();
         int count = 0;
         const Row &item = rowsOf(static_cast<int>(page_), count)[row];
-        const Layout &at = main ? kMainLayout : kOptionLayout;
+        const Layout &at = main ? (page_ == Page::Main ? kPauseLayout : kMainLayout) : kOptionLayout;
         const int y = at.top + row * at.pitch;
         const FontView &font = touchCanvas.font(main ? kFontMedium : kFontSmall);
         const int textY = y + (at.height - font.height()) / 2;
@@ -1747,6 +1755,7 @@ namespace hlrt
                 std::snprintf(text, sizeof(text), "%s: %d minutes", item.label, netMinutes_);
             break;
         case kNetSkill:
+        case kNewSkill:
         {
             static const char *const kNames[] = {"easy", "medium", "difficult"};
             std::snprintf(text, sizeof(text), "%s: %s", item.label, kNames[(skill_ - 1) % 3]);
@@ -1763,7 +1772,7 @@ namespace hlrt
 
     int Menu::rowAt(int x, int y) const
     {
-        const Layout &at = big() ? kMainLayout : kOptionLayout;
+        const Layout &at = big() ? (page_ == Page::Main ? kPauseLayout : kMainLayout) : kOptionLayout;
         if (x < at.x || x >= at.x + at.width || y < at.top)
             return -1;
         const int row = (y - at.top) / at.pitch;
@@ -1803,17 +1812,15 @@ namespace hlrt
             }
             static const char *const kMaps[3] = {"", "t0a0", "hldemo1"};
             map_ = kMaps[which];
-            // (The Hazard Course is the same at any difficulty: begun at
-            // once.)
+            // (The Training Room is the same at any difficulty.)
             if (item.id == kGameTraining)
-            {
                 skill_ = hldata::kSkillMedium;
-                return Action::NewGame;
-            }
-            page_ = Page::Difficulty;
-            draw();
-            break;
+            return Action::NewGame;
         }
+        case kNewSkill:
+            skill_ = skill_ % hldata::kSkillHard + 1;
+            drawRow(row, false);
+            break;
         case kSkillEasy:
         case kSkillMedium:
         case kSkillHard:
@@ -1937,6 +1944,14 @@ namespace hlrt
                 netGame.start(netGame.maps()[netMap_ % netGame.maps().size()], netFrags_, netMinutes_, skill_);
             break;
         case kLeave:
+            // (Out of a game alone, to the title: asked first, as NEW GAME
+            // is -- what is not saved is lost.)
+            if (!netGame.playing() && !title_ && page_ == Page::Main)
+            {
+                asker_ = page_;
+                ask(Action::Leave, "QUIT TO MENU?");
+                break;
+            }
             return Action::Leave;
         default:
             break;

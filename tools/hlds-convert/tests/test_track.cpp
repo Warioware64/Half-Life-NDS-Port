@@ -136,6 +136,61 @@ namespace
               "having kept to the track all the way");
     }
 
+    /// CFuncTrackTrain::Blocked: a car that pins the player against a wall
+    /// shoves them off at its "dmg" and hurts them by as much -- and does
+    /// not go through them. (One it can push along, it pushes.)
+    void testTrainShoves()
+    {
+        BoxRoom room;
+        room.mins[0] = -400, room.maxs[0] = 400;
+        BrushBox car;
+        car.className = "func_tracktrain";
+        car.mins[0] = -20, car.mins[1] = -10, car.mins[2] = -4;
+        car.maxs[0] = 20, car.maxs[1] = 10, car.maxs[2] = 4;
+        car.keys = "\"targetname\" \"car\"\n\"origin\" \"0 0 0\"\n\"target\" \"a\"\n"
+                   "\"speed\" \"100\"\n\"height\" \"8\"\n\"wheels\" \"30\"\n\"spawnflags\" \"2\"\n\"dmg\" \"20\"\n";
+        room.brushes.push_back(car);
+        // A wall across the track at 200: the player stands against it.
+        BrushBox wall;
+        wall.className = "func_wall";
+        wall.mins[0] = 200, wall.mins[1] = -60, wall.mins[2] = 0;
+        wall.maxs[0] = 220, wall.maxs[1] = 60, wall.maxs[2] = 128;
+        room.brushes.push_back(wall);
+        room.extraEntities =
+            "{\n\"classname\" \"path_track\"\n\"targetname\" \"a\"\n\"target\" \"b\"\n"
+            "\"origin\" \"-300 0 16\"\n}\n"
+            "{\n\"classname\" \"path_track\"\n\"targetname\" \"b\"\n"
+            "\"origin\" \"300 0 16\"\n}\n";
+        Game g;
+        std::string error;
+        g.ok = g.bsp.parse(buildBoxRoom(room), error);
+        if (g.ok)
+            finish(g, nullptr);
+        check(g.ok, "shoving room cooks");
+        if (!g.ok)
+            return;
+        const int train = g.recordOfKind(LogicKind::TrackTrain);
+        const LogicRecord &rec = g.view.logic[train];
+        check(rec.damage == 20, "a track train's dmg is cooked");
+        g.player.origin[0] = fxFromInt(200 - 17);
+        g.player.origin[1] = 0;
+        g.player.origin[2] = fxFromInt(36);
+        g.player.health = 100;
+        g.player.inv.armor = 0;
+        logicFire(g.logic, g.player, rec.name, -1, kUseToggle, 0);
+        bool shoved = false;
+        for (int i = 0; i < 150 && g.player.health == 100; ++i)
+        {
+            g.frame();
+            shoved = shoved || g.player.velocity[0] != 0 || g.player.velocity[1] != 0;
+        }
+        const BrushState &at = g.brushStates[rec.brush];
+        std::printf("test_track: run into by a car of dmg 20: health %d, car at %.0f, player at %.0f\n",
+                    g.player.health, toUnits(at.pos[0]), toUnits(g.player.origin[0]));
+        check(g.player.health == 80 && shoved, "a car that pins the player shoves them and hurts by its dmg");
+        check(toUnits(at.pos[0]) + 20 <= toUnits(g.player.origin[0]) - 15.9, "... and has not gone through them");
+    }
+
     /// How the passenger behaves on a ride.
     enum class Passenger
     {
@@ -817,6 +872,80 @@ namespace
         }
     }
 
+    /// c1a1c's lift down the shaft (func_train "pl", diagonally down a rail).
+    /// Under its way lies a func_friction of modifier 0: a slab along the
+    /// slope, whose bounds fill the whole shaft. The game touches a brush
+    /// trigger only with the player's origin inside the brush's own hull,
+    /// so whoever rides the lift is never in it and walks about on it as on
+    /// any floor -- at every frame rate, without being thrown off it.
+    void testTheShaftLift(const char *dir)
+    {
+        for (int vblanks = 1; vblanks <= 4; ++vblanks)
+        {
+            auto game = std::make_unique<Game>();
+            std::string error;
+            if (!game->bsp.load(std::string(dir) + "/maps/c1a1c.bsp", error))
+                return;
+            finish(*game, nullptr);
+            Game &g = *game;
+            const int lift = recordNamed(g, "pl", LogicKind::Train);
+            check(lift >= 0, "c1a1c's lift down the shaft");
+            if (lift < 0)
+                return;
+            int slab = -1;
+            for (std::uint32_t i = 0; i < g.view.logicCount; ++i)
+                if (g.view.logic[i].kind == static_cast<std::uint8_t>(LogicKind::Friction))
+                    slab = static_cast<int>(i);
+            check(slab >= 0 && g.view.logic[slab].pad != 0, "its slab of no friction is cooked with its shape");
+            const LogicRecord &rec = g.view.logic[lift];
+            check(standOn(g, rec), "the player stands on it");
+            logicFire(g.logic, g.player, rec.name, -1, kUseToggle, 0);
+            const MoverHull &hull = g.movers[rec.brush];
+            int offLift = 0, frames = 0, slipped = 0;
+            long offFor = 0, longestOff = 0;
+            double lowest = 0;
+            double walked = 0;
+            for (long elapsed = 0; elapsed < 20000; elapsed += vblanks * 1000 / 60, ++frames)
+            {
+                // About the lift, to points well inside its edges.
+                MoveCommand cmd;
+                const int phase = static_cast<int>((elapsed / 800) % 4);
+                const fx to[2] = {(hull.mins[0] + hull.maxs[0]) / 2 + fxFromInt(phase == 0 ? 80 : (phase == 2 ? -80 : 0)),
+                                  (hull.mins[1] + hull.maxs[1]) / 2 + fxFromInt(phase == 1 ? 70 : (phase == 3 ? -70 : 0))};
+                const double dx = toUnits(to[0] - g.player.origin[0]), dy = toUnits(to[1] - g.player.origin[1]);
+                const double len = std::hypot(dx, dy);
+                if (len > 24)
+                {
+                    cmd.forward = 1;
+                    cmd.forwardXY[0] = static_cast<fx>(dx / len * kFxOne);
+                    cmd.forwardXY[1] = static_cast<fx>(dy / len * kFxOne);
+                    cmd.rightXY[0] = cmd.forwardXY[1];
+                    cmd.rightXY[1] = -cmd.forwardXY[0];
+                }
+                const fx before[2] = {g.player.origin[0], g.player.origin[1]};
+                logicTick(g.logic, g.player, (vblanks * 1000 + 30) / 60);
+                slipped += g.player.slip.value != 0;
+                const fx carried[2] = {g.player.origin[0] - before[0], g.player.origin[1] - before[1]};
+                monstersTick(g.logic, g.player, (vblanks * 1000 + 30) / 60);
+                playerMove(g.player, cmd, g.move, 1092 * vblanks);
+                g.drain();
+                walked += std::hypot(toUnits(g.player.origin[0] - before[0] - carried[0]),
+                                     toUnits(g.player.origin[1] - before[1] - carried[1]));
+                const bool off = !g.player.onGround || g.player.groundMover != static_cast<int>(rec.brush);
+                offLift += off;
+                offFor = off ? offFor + vblanks * 1000 / 60 : 0;
+                longestOff = std::max(longestOff, offFor);
+                lowest = std::min(lowest, toUnits(g.player.origin[2] - kStandingFeet - hull.maxs[2]));
+            }
+            std::printf("test_track: c1a1c's lift, %d vblank(s): %d of %d frames off it (at most %ld ms at a time, "
+                        "the hop off its raised strip), %d without friction, %.0f units walked on it\n",
+                        vblanks, offLift, frames, longestOff, slipped, walked);
+            check(slipped == 0, "riding c1a1c's shaft lift is not riding in its slab of no friction");
+            check(walked > 1000, "... the player walks about on it");
+            check(longestOff <= 250 && lowest > -4, "... and is never thrown off it");
+        }
+    }
+
     void testTheRide()
     {
         const char *dir = std::getenv("HLDS_VALVE_DIR");
@@ -838,6 +967,7 @@ namespace
         check(ride(dir, 2, Passenger::Idle, true), "... and with a save and a load on the way");
         testTheGuard(dir);
         testOnARail(dir);
+        testTheShaftLift(dir);
         for (const Lift &lift : kLifts)
         {
             testTheLift(dir, lift, false);
@@ -849,6 +979,7 @@ namespace
 int main()
 {
     testSyntheticTrack();
+    testTrainShoves();
     testDriving();
     testTheRide();
     if (g_failures == 0)

@@ -142,6 +142,11 @@ namespace hldata
         /// that clip is done -- an alien slave's zap on DIFFICULT (its
         /// framerate 1.5, which the next sequence puts back).
         Unsaved<std::int16_t> quickClip;
+        /// Where between its clip's two poses it is drawn, for a clip that
+        /// blends by the aim's pitch: 0..255, the game's pev->blending[0]
+        /// (HlAnim.hpp clipBlend). Set as it shoots; not kept in a save, the
+        /// next shot sets it again.
+        Unsaved<std::uint8_t> blend;
         std::uint8_t attack = 0;     ///< which of its kind's attacks it is making (kAttack*)
         std::uint8_t item = 0;       ///< ItemKind, for something to pick up
         std::uint16_t fires = 0;     ///< ... and the name id of what taking it fires
@@ -779,6 +784,54 @@ namespace hldata
     /// of grates (func_walls) over a pit. False, with the actor left where it
     /// is, if there is no ground in that reach or it stands where such a
     /// thing does not fit.
+    inline bool actorToFloor(const MoveWorld &world, ActorState &actor, fx up, fx down);
+
+    /// What is where it is put, not let down to a floor: a cycler, a Xen
+    /// plant, what hangs from a ceiling, a tripmine, what flies and what
+    /// swims.
+    inline bool actorStaysPut(std::uint8_t kind)
+    {
+        switch (static_cast<ActorKind>(kind))
+        {
+        case ActorKind::Cycler:
+        case ActorKind::Xen:
+        case ActorKind::Barnacle:
+        case ActorKind::Tripmine:
+        case ActorKind::Controller:
+        case ActorKind::Leech:
+        case ActorKind::Osprey:
+        case ActorKind::Ichthyosaur:
+        case ActorKind::Tentacle:
+        case ActorKind::Apache:
+        case ActorKind::Nihilanth:
+        case ActorKind::Boid:
+            return true;
+        default:
+            return isTurret(kind);
+        }
+    }
+
+    /// Whether the actor's origin is the middle of its body (kActorCentred).
+    inline bool actorCentred(const ActorState &actor)
+    {
+        return actor.kind == static_cast<std::uint8_t>(ActorKind::Generic) && (actor.flags & kActorCentred) != 0;
+    }
+
+    /// actorToFloor, for one whose origin may be the middle of it: its feet
+    /// 36 below are what come to the floor. (Not dropped -- left where it is
+    /// -- if there is no room: the hologram on its projector.)
+    inline bool actorToFloorAs(const MoveWorld &world, ActorState &actor, fx up, fx down)
+    {
+        if (!actorCentred(actor))
+            return actorToFloor(world, actor, up, down);
+        ActorState feet = actor;
+        feet.pos[2] -= fxFromInt(36);
+        if (!actorToFloor(world, feet, up, down))
+            return false;
+        actor.pos[2] = feet.pos[2] + fxFromInt(36);
+        return true;
+    }
+
     inline bool actorToFloor(const MoveWorld &world, ActorState &actor, fx up, fx down)
     {
         const fx from[3] = {actor.pos[0], actor.pos[1], actor.pos[2] + fxFromInt(36) + up};
@@ -861,22 +914,15 @@ namespace hldata
         // stay put; the rest come down in the box they walk about in.
         const bool point = record.kind == static_cast<std::uint8_t>(ActorKind::Pose) ||
                            record.kind == static_cast<std::uint8_t>(ActorKind::Furniture);
-        const bool stays = record.kind == static_cast<std::uint8_t>(ActorKind::Cycler) ||
-                           record.kind == static_cast<std::uint8_t>(ActorKind::Xen) ||
-                           record.kind == static_cast<std::uint8_t>(ActorKind::Barnacle) ||
-                           record.kind == static_cast<std::uint8_t>(ActorKind::Tripmine) ||
-                           // (What flies, and what swims, is where it is put.)
-                           record.kind == static_cast<std::uint8_t>(ActorKind::Controller) ||
-                           record.kind == static_cast<std::uint8_t>(ActorKind::Leech) ||
-                           record.kind == static_cast<std::uint8_t>(ActorKind::Osprey) ||
-                           record.kind == static_cast<std::uint8_t>(ActorKind::Ichthyosaur) ||
-                           record.kind == static_cast<std::uint8_t>(ActorKind::Tentacle) ||
-                           record.kind == static_cast<std::uint8_t>(ActorKind::Apache) ||
-                           record.kind == static_cast<std::uint8_t>(ActorKind::Nihilanth) ||
-                           record.kind == static_cast<std::uint8_t>(ActorKind::Boid) ||
-                           isTurret(record.kind);
+        const bool stays = actorStaysPut(record.kind);
         if (stays)
         {
+        }
+        else if (actorCentred(actor))
+        {
+            // (StartMonster: a unit up and DROP_TO_FLOOR, its box's middle
+            // where its origin is.)
+            actorToFloorAs(world, actor, fxFromInt(1), fxFromInt(256));
         }
         else if (point)
         {

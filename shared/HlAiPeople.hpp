@@ -678,6 +678,7 @@ namespace hldata
             const fx gun[3] = {c.me.pos[0], c.me.pos[1], c.me.pos[2] + fxFromInt(55)};
             fx dir[3];
             aiShootAtEnemy(c, gun, dir);
+            aiSetBlending(c, dir); // (his arm up or down at it)
             // (VECTOR_CONE_2DEGREES: its sine, Q12.)
             const fx cone = 71;
             fx right[3], up[3];
@@ -711,7 +712,11 @@ namespace hldata
                     bleed(c.w, hit, end, aim, false);
                 aiDamageTarget(c, hit, skillOf(c.w).monster9mmBullet, kDmgBullet | kDmgNeverGib, static_cast<std::uint8_t>(group)); // (BULLET_MONSTER_9MM)
             }
-            const fx flash[3] = {gun[0] + dir[0] * 24, gun[1] + dir[1] * 24, gun[2] + dir[2] * 24};
+            // The flash at his gun's muzzle, where his hand has it (the
+            // clip's 5001 event: attachment 0); the round left from his
+            // middle, as the game's does.
+            fx flash[3] = {gun[0] + dir[0] * 24, gun[1] + dir[1] * 24, gun[2] + dir[2] * 24};
+            actorAttachment(c.a, c.me, 0, flash);
             effectAdd(c.a, kEffectMuzzle, flash, nullptr, 0, 50);
             int shift = aiRandomLong(c.a, 0, 20);
             shift = shift > 10 ? 0 : shift - 5;

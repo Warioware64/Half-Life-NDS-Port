@@ -60,6 +60,8 @@ namespace hldata
         const ModelSound *modelSounds = nullptr;
         std::uint32_t modelSoundCount = 0;
         const std::uint16_t *marks = nullptr;
+        const std::uint16_t *nodeMarks = nullptr;
+        const NodeSpan *nodeSpans = nullptr;
         const std::uint8_t *vis = nullptr;
         const Surface *surfaces = nullptr;
         const std::uint32_t *gxStream = nullptr;
@@ -97,6 +99,7 @@ namespace hldata
         std::uint32_t nodeCount = 0;
         std::uint32_t leafCount = 0;
         std::uint32_t markCount = 0;
+        std::uint32_t nodeMarkCount = 0, nodeSpanCount = 0;
         std::uint32_t visSize = 0;
         std::uint32_t surfaceCount = 0;
         std::uint32_t gxWordCount = 0;
@@ -185,6 +188,8 @@ namespace hldata
         nodes = section<Node>(data, dir, Section::Nodes, nodeCount);
         leaves = section<Leaf>(data, dir, Section::Leaves, leafCount);
         marks = section<std::uint16_t>(data, dir, Section::Marks, markCount);
+        nodeMarks = section<std::uint16_t>(data, dir, Section::NodeMarks, nodeMarkCount);
+        nodeSpans = section<NodeSpan>(data, dir, Section::NodeSpans, nodeSpanCount);
         vis = section<std::uint8_t>(data, dir, Section::Vis, visSize);
         surfaces = section<Surface>(data, dir, Section::Surfaces, surfaceCount);
         gxStream = section<std::uint32_t>(data, dir, Section::GxStream, gxWordCount);
@@ -252,6 +257,19 @@ namespace hldata
         for (std::uint32_t i = 0; i < markCount; ++i)
         {
             if (marks[i] >= surfaceCount)
+                return LevelError::BadIndex;
+        }
+        // (One span a node, or none at all.)
+        if (nodeSpanCount != 0 && nodeSpanCount != nodeCount)
+            return LevelError::BadIndex;
+        for (std::uint32_t i = 0; i < nodeSpanCount; ++i)
+        {
+            if (static_cast<std::uint32_t>(nodeSpans[i].first) + nodeSpans[i].count > nodeMarkCount)
+                return LevelError::BadIndex;
+        }
+        for (std::uint32_t i = 0; i < nodeMarkCount; ++i)
+        {
+            if (nodeMarks[i] >= surfaceCount)
                 return LevelError::BadIndex;
         }
         for (std::uint32_t i = 0; i < surfaceCount; ++i)
@@ -471,6 +489,14 @@ namespace hldata
                 if (!ends)
                     return LevelError::BadIndex;
             }
+            // A trigger volume's shape is a model there is.
+            if ((r.kind == static_cast<std::uint8_t>(LogicKind::TriggerHurt) ||
+                 r.kind == static_cast<std::uint8_t>(LogicKind::TriggerPush) ||
+                 r.kind == static_cast<std::uint8_t>(LogicKind::TriggerTeleport) ||
+                 r.kind == static_cast<std::uint8_t>(LogicKind::TriggerGravity) ||
+                 r.kind == static_cast<std::uint8_t>(LogicKind::Friction)) &&
+                r.pad >= modelCount)
+                return LevelError::BadIndex;
             if (r.kind == static_cast<std::uint8_t>(LogicKind::Message) && r.extra[0] >= messageCount)
                 return LevelError::BadIndex;
             if (r.kind == static_cast<std::uint8_t>(LogicKind::Script) && r.extra[0] >= nameCount)

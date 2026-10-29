@@ -827,121 +827,139 @@ namespace hlds
             }
             clip.eventCount = static_cast<std::uint16_t>(out.events.size() - clip.firstEvent);
 
-            for (int b = 0; b < boneCount; ++b)
+            // Each bone's track of the clip: of its pose, or (an aim that
+            // blends by its pitch) of the pose at each end of the aim, the
+            // second's tracks after the first's.
+            auto cookTracks = [&](const std::vector<MdlPose> &blendPoses, bool first)
             {
-                std::vector<BoneFrame> frames(frameCount);
-                for (int f = 0; f < frameCount; ++f)
+                for (int b = 0; b < boneCount; ++b)
                 {
-                    const MdlPose &pose = poses[static_cast<std::size_t>(f) * boneCount + b];
-                    mdlAngleQuaternion(pose.rot, frames[f].quat);
-                    for (int a = 0; a < 3; ++a)
-                        frames[f].pos[a] = pose.pos[a];
-                    // The sequence's own travel is the entity's to make: the
-                    // bone that carries it stays put on those axes.
-                    if (b == seq.motionBone)
+                    std::vector<BoneFrame> frames(frameCount);
+                    for (int f = 0; f < frameCount; ++f)
                     {
+                        const MdlPose &pose = blendPoses[static_cast<std::size_t>(f) * boneCount + b];
+                        mdlAngleQuaternion(pose.rot, frames[f].quat);
                         for (int a = 0; a < 3; ++a)
+                            frames[f].pos[a] = pose.pos[a];
+                        // The sequence's own travel is the entity's to make: the
+                        // bone that carries it stays put on those axes.
+                        if (b == seq.motionBone)
                         {
-                            if (seq.motionType & (1 << a))
-                                frames[f].pos[a] = 0;
+                            for (int a = 0; a < 3; ++a)
+                            {
+                                if (seq.motionType & (1 << a))
+                                    frames[f].pos[a] = 0;
+                            }
+                        }
+                        // One turn, two quaternions: keep to the one nearer the
+                        // frame before, so that blends go the short way.
+                        if (f > 0)
+                        {
+                            double dot = 0;
+                            for (int i = 0; i < 4; ++i)
+                                dot += frames[f].quat[i] * frames[f - 1].quat[i];
+                            if (dot < 0)
+                            {
+                                for (int i = 0; i < 4; ++i)
+                                    frames[f].quat[i] = -frames[f].quat[i];
+                            }
                         }
                     }
-                    // One turn, two quaternions: keep to the one nearer the
-                    // frame before, so that blends go the short way.
-                    if (f > 0)
+                    if (first && b == 0 && frameCount > 0)
+                    {
+                        // (Where the root is at the end, as the game finds it:
+                        // the bone's own place, not how far it went.)
+                        for (int a = 0; a < 2; ++a)
+                            clip.endOffset[a] = fxFromDouble(frames[frameCount - 1].pos[a]);
+                        clip.endUp = static_cast<std::int16_t>(
+                            std::clamp(std::lround(frames[frameCount - 1].pos[2]), -32768L, 32767L));
+                    }
+
+                    // Turning and place are keyed apart, each at the largest
+                    // step that gives every frame back -- to within three quarters
+                    // of a degree, and
+                    // a quarter of a unit -- or as one key if it never changes.
+                    auto turnOff = [&](const BoneFrame &got, int f)
                     {
                         double dot = 0;
                         for (int i = 0; i < 4; ++i)
-                            dot += frames[f].quat[i] * frames[f - 1].quat[i];
-                        if (dot < 0)
-                        {
-                            for (int i = 0; i < 4; ++i)
-                                frames[f].quat[i] = -frames[f].quat[i];
-                        }
-                    }
-                }
-                if (b == 0 && frameCount > 0)
-                {
-                    // (Where the root is at the end, as the game finds it:
-                    // the bone's own place, not how far it went.)
-                    for (int a = 0; a < 2; ++a)
-                        clip.endOffset[a] = fxFromDouble(frames[frameCount - 1].pos[a]);
-                    clip.endUp = static_cast<std::int16_t>(
-                        std::clamp(std::lround(frames[frameCount - 1].pos[2]), -32768L, 32767L));
-                }
-
-                // Turning and place are keyed apart, each at the largest
-                // step that gives every frame back -- to within three quarters
-                // of a degree, and
-                // a quarter of a unit -- or as one key if it never changes.
-                auto turnOff = [&](const BoneFrame &got, int f)
-                {
-                    double dot = 0;
-                    for (int i = 0; i < 4; ++i)
-                        dot += got.quat[i] * frames[f].quat[i];
-                    return 2 * std::acos(std::min(1.0, std::fabs(dot))) * 180 / M_PI;
-                };
-                auto placeOff = [&](const BoneFrame &got, int f)
-                {
-                    double apart = 0;
-                    for (int i = 0; i < 3; ++i)
-                        apart = std::max(apart, std::fabs(got.pos[i] - frames[f].pos[i]));
-                    return apart;
-                };
-                auto chooseStep = [&](bool rotation)
-                {
-                    bool still = true;
-                    for (int f = 1; f < frameCount && still; ++f)
-                        still = rotation ? turnOff(frames[0], f) <= 0.5 : placeOff(frames[0], f) <= 0.1;
-                    if (still || frameCount == 1)
-                        return 0; // one key
-                    static const int kSteps[] = {16, 8, 6, 4, 3, 2};
-                    for (int candidate : kSteps)
+                            dot += got.quat[i] * frames[f].quat[i];
+                        return 2 * std::acos(std::min(1.0, std::fabs(dot))) * 180 / M_PI;
+                    };
+                    auto placeOff = [&](const BoneFrame &got, int f)
                     {
-                        if (candidate >= frameCount)
-                            continue;
-                        bool good = true;
-                        for (int f = 0; f < frameCount && good; ++f)
+                        double apart = 0;
+                        for (int i = 0; i < 3; ++i)
+                            apart = std::max(apart, std::fabs(got.pos[i] - frames[f].pos[i]));
+                        return apart;
+                    };
+                    auto chooseStep = [&](bool rotation)
+                    {
+                        bool still = true;
+                        for (int f = 1; f < frameCount && still; ++f)
+                            still = rotation ? turnOff(frames[0], f) <= 0.5 : placeOff(frames[0], f) <= 0.1;
+                        if (still || frameCount == 1)
+                            return 0; // one key
+                        static const int kSteps[] = {16, 8, 6, 4, 3, 2};
+                        for (int candidate : kSteps)
                         {
-                            const BoneFrame got = blendKeys(frames, candidate, f);
-                            good = rotation ? turnOff(got, f) <= 0.75 : placeOff(got, f) <= 0.25;
+                            if (candidate >= frameCount)
+                                continue;
+                            bool good = true;
+                            for (int f = 0; f < frameCount && good; ++f)
+                            {
+                                const BoneFrame got = blendKeys(frames, candidate, f);
+                                good = rotation ? turnOff(got, f) <= 0.75 : placeOff(got, f) <= 0.25;
+                            }
+                            if (good)
+                                return candidate;
                         }
-                        if (good)
-                            return candidate;
+                        return 1;
+                    };
+                    ModelTrack track{};
+                    const int last = frameCount - 1;
+                    const int rotStep = chooseStep(true);
+                    track.firstRot = static_cast<std::uint32_t>(out.keys.size());
+                    track.rotStep = static_cast<std::uint16_t>(std::max(1, rotStep));
+                    if (rotStep == 0)
+                    {
+                        out.keys.push_back(rotKey(frames[0]));
                     }
-                    return 1;
-                };
-                ModelTrack track{};
-                const int last = frameCount - 1;
-                const int rotStep = chooseStep(true);
-                track.firstRot = static_cast<std::uint32_t>(out.keys.size());
-                track.rotStep = static_cast<std::uint16_t>(std::max(1, rotStep));
-                if (rotStep == 0)
-                {
-                    out.keys.push_back(rotKey(frames[0]));
+                    else
+                    {
+                        for (int f = 0; f < last; f += rotStep)
+                            out.keys.push_back(rotKey(frames[f]));
+                        out.keys.push_back(rotKey(frames[last]));
+                    }
+                    track.rotCount = static_cast<std::uint16_t>(out.keys.size() - track.firstRot);
+                    const int posStep = chooseStep(false);
+                    track.firstPos = static_cast<std::uint32_t>(out.keys.size());
+                    track.posStep = static_cast<std::uint16_t>(std::max(1, posStep));
+                    if (posStep == 0)
+                    {
+                        out.keys.push_back(posKey(frames[0]));
+                    }
+                    else
+                    {
+                        for (int f = 0; f < last; f += posStep)
+                            out.keys.push_back(posKey(frames[f]));
+                        out.keys.push_back(posKey(frames[last]));
+                    }
+                    track.posCount = static_cast<std::uint16_t>(out.keys.size() - track.firstPos);
+                    out.tracks.push_back(track);
                 }
-                else
-                {
-                    for (int f = 0; f < last; f += rotStep)
-                        out.keys.push_back(rotKey(frames[f]));
-                    out.keys.push_back(rotKey(frames[last]));
-                }
-                track.rotCount = static_cast<std::uint16_t>(out.keys.size() - track.firstRot);
-                const int posStep = chooseStep(false);
-                track.firstPos = static_cast<std::uint32_t>(out.keys.size());
-                track.posStep = static_cast<std::uint16_t>(std::max(1, posStep));
-                if (posStep == 0)
-                {
-                    out.keys.push_back(posKey(frames[0]));
-                }
-                else
-                {
-                    for (int f = 0; f < last; f += posStep)
-                        out.keys.push_back(posKey(frames[f]));
-                    out.keys.push_back(posKey(frames[last]));
-                }
-                track.posCount = static_cast<std::uint16_t>(out.keys.size() - track.firstPos);
-                out.tracks.push_back(track);
+            };
+            cookTracks(poses, true);
+            clip.blends = 1;
+            if (seq.blendCount >= 2 && seq.blendType == kMdlMotionXR)
+            {
+                std::vector<MdlPose> other;
+                if (!mdl.decode(index, other, error, 1))
+                    return false;
+                cookTracks(other, false);
+                clip.blends = 2;
+                clip.blendLow = static_cast<std::int8_t>(std::clamp(std::lround(seq.blendStart), -128L, 127L));
+                clip.blendHigh = static_cast<std::int8_t>(std::clamp(std::lround(seq.blendEnd), -128L, 127L));
             }
             report.sourceFrames += frameCount * boneCount;
             out.clips.push_back(clip);

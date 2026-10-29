@@ -7,11 +7,13 @@
 //
 // Needs HLDS_VALVE_DIR.
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
 #include <vector>
 
+#include "HlLightStyle.hpp"
 #include "TestGame.hpp"
 
 using namespace hlds;
@@ -724,6 +726,222 @@ namespace
         check(sprites > 100 && beams > 40 && others > 60 && pictures == sprites + beams && missing == 0,
               "the maps' effects are cooked, each with a picture the map has");
     }
+    /// What a crate has in it (its "spawnobject"): c1a2a's two give a clip
+    /// of 9mm and a medical kit. Not there until it breaks; then where it
+    /// was, on the floor.
+    void testCrateDrops(const char *dir)
+    {
+        auto game = load(dir, "c1a2a");
+        if (!game)
+            return;
+        Game &g = *game;
+        const auto itemsOf = [&](std::uint32_t kind)
+        {
+            int n = 0;
+            for (int k = 0; k < g.actors.count && k < g.actors.recordCount; ++k)
+                n += g.actors.states[k].active && g.actors.records[k].kind == static_cast<std::uint8_t>(ActorKind::Item) &&
+                     g.actors.records[k].item == kind;
+            return n;
+        };
+        int crates = 0, spilled = 0, onFloor = 0;
+        for (std::uint32_t i = 0; i < g.view.logicCount; ++i)
+        {
+            const LogicRecord &r = g.view.logic[i];
+            if (r.kind != static_cast<std::uint8_t>(LogicKind::Breakable) || r.pad == 0 || r.brush == kNoBrush)
+                continue;
+            ++crates;
+            const int before = itemsOf(r.pad);
+            logicStrike(g.logic, g.player, static_cast<int>(i), 100000);
+            spilled += itemsOf(r.pad) == before + 1;
+            const Brush &b = g.view.brushes[r.brush];
+            const fx mid[2] = {fxFromInt(b.mins[0] + b.maxs[0]) / 2, fxFromInt(b.mins[1] + b.maxs[1]) / 2};
+            for (int k = 0; k < g.actors.count && k < g.actors.recordCount; ++k)
+            {
+                const ActorState &item = g.actors.states[k];
+                if (!item.active || g.actors.records[k].kind != static_cast<std::uint8_t>(ActorKind::Item) ||
+                    g.actors.records[k].item != r.pad)
+                    continue;
+                const fx d[3] = {item.pos[0] - mid[0], item.pos[1] - mid[1], 0};
+                onFloor += fxLength(d) < fxFromInt(2) && item.pos[2] <= fxFromInt(b.mins[2]) + fxFromInt(2);
+            }
+        }
+        std::printf("test_effects: c1a2a: %d crates with something in them; %d gave it, %d of those on the floor below\n",
+                    crates, spilled, onFloor);
+        check(crates == 2 && spilled == 2, "c1a2a's two crates with something in them give it when they break");
+        check(onFloor == 2, "... where the crate was, on the floor");
+    }
+    /// c1a1c's wooden boxes, at the crowbar's pace (crowbar.cpp: its full
+    /// 10 after a second's rest, then half while it swings on): breakables
+    /// take twice a crowbar's blow, so 45 is four blows, 60 five, 125 twelve.
+    void testCrateHits(const char *dir)
+    {
+        auto game = load(dir, "c1a1c");
+        if (!game)
+            return;
+        Game &g = *game;
+        int checked = 0, right = 0;
+        for (std::uint32_t i = 0; i < g.view.logicCount; ++i)
+        {
+            const LogicRecord &r = g.view.logic[i];
+            if (r.kind != static_cast<std::uint8_t>(LogicKind::Pushable) || !(r.flags & kLogicBreaks))
+                continue;
+            const int health = static_cast<int>(r.extra[0]);
+            const int want = health == 45 ? 4 : (health == 60 ? 5 : (health == 125 ? 12 : -1));
+            if (want < 0)
+                continue;
+            int blows = 0;
+            while (!g.states[i].dead && blows < 50)
+                logicStrike(g.logic, g.player, static_cast<int>(i), blows++ == 0 ? 10 : 5, kDmgClub, true);
+            ++checked;
+            right += blows == want;
+            if (blows != want)
+                std::printf("test_effects: c1a1c: a box of %d took %d blows (the game's %d)\n", health, blows, want);
+        }
+        std::printf("test_effects: c1a1c: %d wooden boxes broken by the crowbar, %d in the game's blows\n", checked, right);
+        check(checked >= 8 && right == checked, "c1a1c's boxes take the game's crowbar blows: 4, 5 and 12");
+    }
+    /// A light something switches shines by its pattern while it is on
+    /// (lights.cpp): c1a1f's freak_zombie_light, "az", dark and twice as
+    /// bright by turns, ten a second; off, dark.
+    void testLightPatterns(const char *dir)
+    {
+        auto game = load(dir, "c1a1f");
+        if (!game)
+            return;
+        Game &g = *game;
+        int light = -1;
+        for (std::uint32_t i = 0; i < g.view.logicCount; ++i)
+        {
+            const LogicRecord &r = g.view.logic[i];
+            if (r.kind == static_cast<std::uint8_t>(LogicKind::Light) && r.name != 0 &&
+                g.view.nameHashes[r.name] == nameHash("freak_zombie_light"))
+                light = static_cast<int>(i);
+        }
+        check(light >= 0, "c1a1f's freak_zombie_light");
+        if (light < 0)
+            return;
+        const int style = static_cast<int>(g.view.logic[light].extra[0]);
+        logicTick(g.logic, g.player, 33);
+        const auto value = [&](std::uint32_t tick)
+        { return lightStyleValue(style, tick, g.logic.stylesOff, g.logic.stylePattern.value.data()); };
+        std::printf("test_effects: c1a1f's freak_zombie_light (style %d): %d then %d\n", style, value(0), value(1));
+        check(value(0) == 0 && value(1) == 25 * kStyleWhole / 12, "on, a switched light shines by its pattern: a, z");
+        logicFire(g.logic, g.player, g.view.logic[light].name, -1, kUseToggle, 0);
+        logicTick(g.logic, g.player, 33);
+        check(value(0) == 0 && value(1) == 0, "... and off, it is dark");
+    }
+    /// c0a0 begins in the dark (its worldspawn's "startdark"): black from
+    /// the first moment -- not the tram for a third of a second, and then
+    /// black -- until the map's own fade (fade_in, at 0.3 s, which takes the
+    /// screen's one fade over) brings the picture up out of it.
+    void testStartDark(const char *dir)
+    {
+        auto game = load(dir, "c0a0");
+        if (!game)
+            return;
+        Game &g = *game;
+        int at[4] = {-1, -1, -1, -1};
+        const int when[4] = {200, 4500, 5400, 6200};
+        // (Before the map's own fade, at 0.3 s.)
+        int ms = 0;
+        for (int k = 0; k < 4; ++k)
+        {
+            while (ms < when[k])
+            {
+                logicTick(g.logic, g.player, 20);
+                monstersTick(g.logic, g.player, 20);
+                g.drain();
+                ms += 20;
+                if (std::getenv("HLDS_DEBUG_FADE") && ms % 200 == 0)
+                    std::printf("  %d ms: fading %d from %d ms %d whole %d level %d\n", ms, g.logic.fading, g.logic.fadeFrom,
+                                g.logic.fadeMs, g.logic.fadeWholeMs, g.logic.fadeLevel);
+            }
+            at[k] = g.logic.fadeLevel;
+        }
+        std::printf("test_effects: c0a0's dark: %d, %d, %d, %d (at 0.2, 4.5, 5.4 and 6.2 s)\n", at[0], at[1], at[2], at[3]);
+        check(at[0] == 255, "c0a0 begins black, from its first moment");
+        check(at[1] == 0 && at[3] == 0, "... and its own fade brings the picture up out of it");
+    }
+    /// The game's rule for what of the world is drawn, which the DSi keeps
+    /// (WorldDraw): a node gone through has its own surfaces drawn, whether
+    /// or not a seen leaf lists them. Through the gap of c1a1's broken sign
+    /// the box's far wall shows: listed by no leaf that can be seen from
+    /// where the player stands, but on a node that is gone through. And what
+    /// that costs, map by map, at worst (with no view cone, no facing: more
+    /// than it ever is).
+    void testNodeRule(const char *dir)
+    {
+        for (const char *map : {"c1a1", "c0a0", "c1a0", "c1a2"})
+        {
+            auto game = load(dir, map);
+            if (!game)
+                continue;
+            Game &g = *game;
+            const LevelView &v = g.view;
+            check(v.nodeSpans != nullptr && v.nodeSpanCount == v.nodeCount,
+                  "the level has its nodes' own surfaces");
+            const auto drawn = [&](int eyeLeaf, std::vector<char> &byLeaf, std::vector<char> &byNode)
+            {
+                byLeaf.assign(v.surfaceCount, 0);
+                byNode.assign(v.surfaceCount, 0);
+                std::vector<char> nodeSeen(v.nodeCount, 0);
+                for (std::uint32_t l = 1; l < v.leafCount; ++l)
+                {
+                    if (!leafSees(g.move, eyeLeaf, static_cast<int>(l)))
+                        continue;
+                    for (int m = 0; m < v.leaves[l].markCount; ++m)
+                        byLeaf[v.marks[v.leaves[l].firstMark + m]] = 1;
+                    for (std::uint16_t n = v.leaves[l].parent; n != kNoParent && !nodeSeen[n]; n = v.nodes[n].parent)
+                        nodeSeen[n] = 1;
+                }
+                for (std::uint32_t n = 0; n < v.nodeCount; ++n)
+                {
+                    if (!nodeSeen[n])
+                        continue;
+                    for (int m = 0; m < v.nodeSpans[n].count; ++m)
+                        byNode[v.nodeMarks[v.nodeSpans[n].first + m]] = 1;
+                }
+            };
+            if (std::string(map) == "c1a1")
+            {
+                const fx eye[3] = {fxFromInt(744), fxFromInt(2450), fxFromInt(792)};
+                std::vector<char> byLeaf, byNode;
+                drawn(worldLeaf(g.move, eye), byLeaf, byNode);
+                int wall = -1;
+                for (std::uint32_t i = 0; i < v.surfaceCount; ++i)
+                {
+                    const Surface &sf = v.surfaces[i];
+                    if (sf.texture != kNoTexture && std::abs(sf.center[0] - 928) < 40 && std::abs(sf.center[1] - 2044) < 8 &&
+                        std::abs(sf.center[2] - 796) < 40 && std::string(v.textures[sf.texture].name) == "c1a1w1m")
+                        wall = static_cast<int>(i);
+                }
+                check(wall >= 0, "c1a1's sign box has its far wall");
+                if (wall >= 0)
+                {
+                    std::printf("test_effects: c1a1: the sign box's far wall from by the sign: by a leaf %d, by a node %d\n",
+                                byLeaf[wall], byNode[wall]);
+                    check(!byLeaf[wall] && byNode[wall], "seen through the sign's gap: no seen leaf lists it, a node it is on does");
+                }
+            }
+            // The cost: what more the rule draws, eye leaf by eye leaf.
+            std::vector<int> extra;
+            for (std::uint32_t l = 1; l < v.leafCount; l += 4)
+            {
+                if (v.leaves[l].contents == kContentsSolid)
+                    continue;
+                std::vector<char> byLeaf, byNode;
+                drawn(static_cast<int>(l), byLeaf, byNode);
+                int polygons = 0;
+                for (std::uint32_t i = 0; i < v.surfaceCount; ++i)
+                    polygons += byNode[i] && !byLeaf[i] ? v.surfaces[i].polygons : 0;
+                extra.push_back(polygons);
+            }
+            std::sort(extra.begin(), extra.end());
+            if (!extra.empty())
+                std::printf("test_effects: %s: the node rule's polygons more, at most (no view cone): median %d, p90 %d, worst %d\n",
+                            map, extra[extra.size() / 2], extra[extra.size() * 9 / 10], extra.back());
+        }
+    }
 } // namespace
 
 int main()
@@ -740,6 +958,11 @@ int main()
     testLaserBurns(dir);
     testCrushAndBlast(dir);
     testCampaign(dir);
+    testCrateDrops(dir);
+    testCrateHits(dir);
+    testLightPatterns(dir);
+    testStartDark(dir);
+    testNodeRule(dir);
     if (g_failures == 0)
         std::printf("test_effects: ok\n");
     return g_failures == 0 ? 0 : 1;

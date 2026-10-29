@@ -60,6 +60,8 @@ namespace hlrt
         // flushed in pieces.)
         if (isDSiMode())
             list_ = static_cast<std::uint32_t *>(memalign(32, kListWords * 4));
+        // (The game's node rule costs surfaces a DS has no room for.)
+        nodeSurfaces_ = isDSiMode();
         listStuck_ = false; // (each map tries the DMA afresh)
         visFrame_ = 0;
         visLeaf_ = -1;

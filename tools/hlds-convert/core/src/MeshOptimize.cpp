@@ -673,8 +673,33 @@ namespace hlds
                 }
             }
         }
-        const double baseS = std::floor(minS / cooked.width) * cooked.width;
-        const double baseT = std::floor(minT / cooked.height) * cooked.height;
+        const double groupS = std::floor(minS / cooked.width) * cooked.width;
+        const double groupT = std::floor(minT / cooked.height) * cooked.height;
+        // ... unless the group spans more texels than 12.4 holds (faces with
+        // one texture far apart on it: c1a1's broken sign, its tilted slats
+        // thousands of texels from each other). Then each face is moved by
+        // its own whole repeats -- the same picture, the texture repeating --
+        // and only faces moved alike share vertices.
+        bool tooWide = false;
+        for (const MeshFace *face : group)
+        {
+            for (const FacePoint &p : face->points)
+                tooWide = tooWide || (p.s * scaleS - groupS) * 16 > 32767 || (p.t * scaleT - groupT) * 16 > 32767;
+        }
+        double baseS = groupS, baseT = groupT;
+        auto faceBase = [&](const MeshFace &face)
+        {
+            if (!tooWide)
+                return;
+            double faceS = 1e30, faceT = 1e30;
+            for (const FacePoint &p : face.points)
+            {
+                faceS = std::min(faceS, p.s * scaleS);
+                faceT = std::min(faceT, p.t * scaleT);
+            }
+            baseS = std::floor(faceS / cooked.width) * cooked.width;
+            baseT = std::floor(faceT / cooked.height) * cooked.height;
+        };
 
         double centre[3];
         for (int a = 0; a < 3; ++a)
@@ -725,6 +750,7 @@ namespace hlds
         std::vector<std::array<int, 3>> triangles;
         for (const MeshFace *face : group)
         {
+            faceBase(*face);
             const std::vector<FacePoint> polygon(face->points.rbegin(), face->points.rend());
             const int n = static_cast<int>(polygon.size());
             std::vector<int> ids(n);

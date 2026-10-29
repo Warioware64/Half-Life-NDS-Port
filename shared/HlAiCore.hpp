@@ -1429,6 +1429,18 @@ namespace hldata
             dir[k] = length > 0 ? static_cast<fx>((static_cast<std::int64_t>(to[k]) << kFxShift) / length) : 0;
     }
 
+    /// SetBlending(0, pitch of `dir`): its clip, if it blends by the aim,
+    /// drawn aimed along `dir` (unit, Q12) -- up or down at what it shoots.
+    inline void aiSetBlending(AiCtx &c, const fx *dir)
+    {
+        const ModelView *model = actorModel(c.a, c.me);
+        if (model == nullptr || c.me.clip < 0)
+            return;
+        const fx flat[3] = {dir[0], dir[1], 0};
+        const auto pitch = static_cast<std::int16_t>(fxAtan2Turns(dir[2], fxLength(flat)));
+        c.me.blend.value = static_cast<std::uint8_t>(clipBlend(model->clips[c.me.clip], pitch));
+    }
+
     /// A spent casing out of a monster's gun (EjectBrass, as hgrunt.cpp and
     /// hassassin.cpp throw it): from `from`, out to its right, up, and a
     /// little forward or back, by the way it faces. `kind`: kPieceShell or
@@ -2784,6 +2796,26 @@ namespace hldata
             c.me.health = static_cast<std::int16_t>(health);
         else if (c.me.ai != kAiIdle && !isPerson(c.me.kind))
             c.m.idealState = kStateAlert;
+        // With nothing under it, it falls (MOVETYPE_STEP: the game's
+        // monsters are let fall from where they are put -- a monstermaker's
+        // over a pit, SF_MONSTER_FALL_TO_GROUND). Not what flies, swims,
+        // hangs or is fixed in place, nor one of the people (peopleGround),
+        // nor what a scene holds.
+        if (!(c.m.capability & kCapFly) && !isPerson(c.me.kind) && !actorStaysPut(c.me.kind) && !actorCentred(c.me) &&
+            c.me.script < 0 &&
+            !aiHeld(c.a, c.index) && !(c.me.flags & kActorCeiling) && c.w.world != nullptr)
+        {
+            const bool small = monsterKind(c.me.kind).small;
+            const fx lift = small ? kCrouchedFeet : kStandingFeet;
+            const fx from[3] = {c.me.pos[0], c.me.pos[1], c.me.pos[2] + lift + fxFromInt(1)};
+            const fx to[3] = {c.me.pos[0], c.me.pos[1], c.me.pos[2] + lift - fxFromInt(2)};
+            const Trace under = traceAll(*c.w.world, small, from, to);
+            if (!under.startSolid && under.fraction >= kFractionOne)
+            {
+                c.m.inAir = true;
+                c.me.velocity[0] = c.me.velocity[1] = c.me.velocity[2] = 0;
+            }
+        }
     }
 
     // ------------------------------------------------------------- the tick
@@ -2838,7 +2870,7 @@ namespace hldata
         {
             if (c.player.health <= 0)
                 return;
-            playerHurt(c.player, amount, c.me.pos);
+            playerHurt(c.player, amount, c.me.pos, type);
             c.a.got |= kGotHurt;
             return;
         }
@@ -3038,8 +3070,12 @@ namespace hldata
             return;
         }
         const MonsterKind &kind = monsterKind(c.me.kind);
+        // (Move: MakeIdealYaw to the way it is going, and ChangeYaw at its
+        // own yaw speed -- aiTurnTick, after this.)
         const int went = walkTick(c.a, *c.w.world, c.index, aiHull(c), dest, speed, ms, &c.player, kind.half,
-                                  kind.height, c.m.movementGoal == kMoveGoalLocation);
+                                  kind.height, c.m.movementGoal == kMoveGoalLocation, &c.m.idealYaw);
+        if (went != kWalkNoWay)
+            aiChangeYaw(c);
         if (went == kWalkMoved)
         {
             c.m.moveBlockedMs = 0;
@@ -3142,10 +3178,14 @@ namespace hldata
                 return;
             aiStartMonster(c);
         }
-        // A script's while it has it (scripted_sequence: HlLogic.hpp).
+        // A script's while it has it (scripted_sequence: HlLogic.hpp) --
+        // but what the map set it to set off is looked for all the same, as
+        // RunAI does in SCRIPT state: c1a1f's freak zombie, held by a script
+        // nothing breaks, is ended by its own half-health trigger.
         if (c.me.script >= 0)
         {
             m->scripted = true;
+            aiCheckTrigger(c);
             return;
         }
         if (m->scripted)
@@ -3166,8 +3206,10 @@ namespace hldata
             const AiSpentScope spent(2);
             if (m->inAir)
                 aiAirTick(c, ms);
-            aiTurnTick(c, ms);
+            // (Turned after it moves: a think clears `turning`, and the
+            // frame after one would otherwise not turn while it walks.)
             aiMoveTick(c, ms);
+            aiTurnTick(c, ms);
         }
         m->thinkMs -= ms;
         if (m->thinkMs <= 0)
