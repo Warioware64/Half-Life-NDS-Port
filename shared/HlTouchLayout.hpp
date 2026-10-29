@@ -16,6 +16,8 @@
 //  158 |[crow][9mm ][shot][gren][mp5 ][357]|   a slot for each weapon
 //  192 +--------------------------------+
 //
+// In a match between consoles the bar has SPRAY too, beside a narrower USE.
+//
 // That is for a stylus in the right hand. Mirrored, for the left, the column
 // and the bar's ends change sides; the weapons stay in their order.
 //
@@ -49,10 +51,12 @@ namespace hldata
     inline constexpr int kTouchReload = 5;
     inline constexpr int kTouchLamp = 6;
     inline constexpr int kTouchSlot = 7; ///< ... and the four after it
+    inline constexpr int kTouchSpray = kTouchSlot + kTouchSlots; ///< (in a match)
 
     struct TouchLayout
     {
         TouchRect menu, use, reload, pad, jump, lamp, duck;
+        TouchRect spray; ///< none (no width) but in a match
         TouchRect slot[kTouchSlots];
     };
 
@@ -60,11 +64,17 @@ namespace hldata
     inline constexpr int kTouchBarHeight = 22;
     inline constexpr int kTouchSlotTop = 158;
 
-    inline constexpr TouchLayout touchLayout(bool mirrored)
+    inline constexpr TouchLayout touchLayout(bool mirrored, bool match = false)
     {
         TouchLayout at{};
         at.menu = {0, 0, 64, kTouchBarHeight};
         at.use = {68, 0, 120, kTouchBarHeight};
+        at.spray = {0, 0, 0, 0};
+        if (match)
+        {
+            at.use = {68, 0, 62, kTouchBarHeight};
+            at.spray = {134, 0, 54, kTouchBarHeight};
+        }
         at.reload = {192, 0, 64, kTouchBarHeight};
         at.pad = {0, 24, 208, 132};
         at.jump = {212, 24, 44, 48};
@@ -72,7 +82,7 @@ namespace hldata
         at.duck = {212, 108, 44, 48};
         if (mirrored)
         {
-            for (TouchRect *r : {&at.menu, &at.use, &at.reload, &at.pad, &at.jump, &at.lamp, &at.duck})
+            for (TouchRect *r : {&at.menu, &at.use, &at.reload, &at.pad, &at.jump, &at.lamp, &at.duck, &at.spray})
                 r->x = static_cast<std::int16_t>(kTouchWidth - r->x - r->w);
         }
         for (int n = 0; n < kTouchSlots; ++n)
@@ -87,6 +97,8 @@ namespace hldata
             return kTouchMenu;
         if (at.use.has(x, y))
             return kTouchUse;
+        if (at.spray.has(x, y))
+            return kTouchSpray;
         if (at.reload.has(x, y))
             return kTouchReload;
         if (at.jump.has(x, y))

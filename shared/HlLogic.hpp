@@ -164,6 +164,19 @@ namespace hldata
     inline constexpr fx kUseRange = fxFromInt(64);
     inline constexpr fx kUseMinFacing = 2048; // cos 60 in Q12
 
+    /// How many actors a map has room for beside its own: the visitors from
+    /// the map before; or, on a multiplayer map (one with a place a match's
+    /// player comes in at), the players of a match (HlActors.hpp).
+    inline int spareActorsOf(const LevelView &view)
+    {
+        for (std::uint32_t e = 0; e < view.entityCount; ++e)
+        {
+            if (view.entities[e].classId == static_cast<std::uint16_t>(EntityClass::InfoPlayerDeathmatch))
+                return kMaxMatchPlayers;
+        }
+        return kMaxVisitors;
+    }
+
     /// Everything the logic works on. The pointers are the caller's arrays:
     /// level data is read, live state is written.
     struct LogicWorld
@@ -300,6 +313,17 @@ namespace hldata
         /// EASY and MEDIUM: the game's sv_aim, HlAutoaim.hpp). The caller's
         /// setting, given each frame: not the game's state.
         Unsaved<bool> noAutoaim;
+        /// A match between consoles' rules, as its host set them
+        /// (HlNetGame.hpp's netStart; not the game's state): a weapon lying
+        /// about stays where it is when taken, and is not taken by whoever
+        /// has it already (mp_weaponstay); a fall costs a flat 10, not by
+        /// how hard it was (mp_falldamage 0); the lamp is not to be lit
+        /// (mp_flashlight 0); the guns' autoaim is the host's to say, not
+        /// the player's (0 off, 1 on; -1: the player's).
+        Unsaved<bool> weaponsStay;
+        Unsaved<bool> flatFalls;
+        Unsaved<bool> lampBanned;
+        Unsaved<std::int8_t> matchAutoaim{-1};
         std::int16_t struck[16] = {};
         int struckCount = 0;
         /// The boxes that can be pushed, as record indices: looked up once

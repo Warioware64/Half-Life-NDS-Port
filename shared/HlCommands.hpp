@@ -31,6 +31,7 @@ namespace hldata
         Load,        ///< quick load
         Restart,     ///< the map again from its start
         Flashlight,  ///< impulse 100
+        Spray,       ///< impulse 201: a match's spray on the wall ahead
         Fov,         ///< fov <n>
         Crosshair,   ///< crosshair 0|1
         Gravity,     ///< sv_gravity <n>
@@ -55,7 +56,7 @@ namespace hldata
         {"notarget", Command::Notarget, "notarget", "monsters do not see you"},
         {"noclip", Command::Noclip, "noclip", "fly through walls (again: off)"},
         {"give", Command::GiveAll, "give [item]", "everything, or one weapon_/ammo_"},
-        {"impulse", Command::Unknown, "impulse 101 / 100", "101: everything, 100: flashlight"},
+        {"impulse", Command::Unknown, "impulse 101/100/201", "everything, flashlight, spray"},
         {"heal", Command::Heal, "heal", "health back to 100"},
         {"health", Command::Health, "health <n>", "health set to n (1..999)"},
         {"kill", Command::Kill, "kill", "you die"},
@@ -137,6 +138,8 @@ namespace hldata
                 out.command = Command::GiveAll;
             else if (std::strcmp(out.args[0], "100") == 0)
                 out.command = Command::Flashlight;
+            else if (std::strcmp(out.args[0], "201") == 0)
+                out.command = Command::Spray;
         }
         if (out.command == Command::GiveAll && out.argc > 0 && std::strcmp(out.verb, "give") == 0)
             out.command = Command::Give;

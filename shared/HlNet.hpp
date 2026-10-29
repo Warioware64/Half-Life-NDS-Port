@@ -35,14 +35,18 @@
 
 namespace hldata
 {
-    inline constexpr int kNetPlayers = 4; ///< the host is player 0
+    inline constexpr int kNetPlayers = 8; ///< the host is player 0
     /// The most a frame may be: what the radio is set up for.
-    inline constexpr int kNetCmdBytes = 640;   ///< the host's
+    inline constexpr int kNetCmdBytes = 720;   ///< the host's
     inline constexpr int kNetReplyBytes = 220; ///< a client's
+    /// ... and the most the radio can carry (dswifi: a host's frame in its
+    /// 768-byte command buffer with its headers; a client's in 256).
+    static_assert(kNetCmdBytes <= 724 && kNetReplyBytes <= 227, "a frame the radio cannot carry");
     /// The first two bytes of every frame, and of the beacon's game id: a
     /// frame of another game, or of another build of this one, is not read.
+    /// (Version 2: eight players, profiles, the rules, teams, sprays.)
     inline constexpr std::uint16_t kNetMagic = 0x4C48; // "HL"
-    inline constexpr std::uint8_t kNetVersion = 1;
+    inline constexpr std::uint8_t kNetVersion = 2;
 
     // ------------------------------------------------------------ the state
 
@@ -77,7 +81,7 @@ namespace hldata
         None,
         Hello,    ///< client: text = its name
         Roster,   ///< host: player `a` is called text ("" = gone)
-        Start,    ///< host: v[0..1] the map's name hash, v[2] frag limit, v[3] minutes, text = the map
+        Start,    ///< host: v[0..1] the map's name hash, v[2] frag limit, v[3] minutes, v[4] how hard
         End,      ///< host: the match is over
         Shot,     ///< `from` fired weapon `a`: v[0] yaw, v[1] pitch (65536 to the circle), v[2] 1 = second trigger
         Hit,      ///< `from` hit player `a`: v[0] damage, v[1] which of a's lives (their spawn count)
@@ -91,8 +95,45 @@ namespace hldata
         Back,     ///< host: the item that is actor v[0] is back
         Fire,     ///< `from` set off the map's target v[0], used as v[1], by record v[2]
         Brushes,  ///< host: brush v[0] is at v[1..3] (quarter units), in state v[4], v[5] ms into it
-        Bye,      ///< leaving: `from` (the host: everybody out)
+        Bye,      ///< leaving: `from` (the host: everybody out; to a client in `a`: not let in)
+        Rules,    ///< host: v[0] the mode (kMode*), v[1] kRule* flags, v[2] how many may play
+        Profile,  ///< `from` looks like this: v[0] model, v[1] top | bottom << 8, v[2] team asked for
+                  ///< (0: any), v[3] spray colour, v[4..5] its spray's netSprayHash
+        SprayPiece, ///< `from`'s spray: piece `a` (kNetSprayPieces of them), twelve bytes in v
+        Team,     ///< host: player `a` plays for team v[0] (1 or 2; 0: none, a free-for-all)
+        Spray,    ///< `from` sprayed: at v[0..2] (quarter units), on a wall facing v[3..4]
+                  ///< (netPackNormal: ten bits of each axis)
     };
+
+    /// The rules' flags (Rules' v[1]): the game's mp_weaponstay,
+    /// mp_falldamage 1, mp_friendlyfire, mp_flashlight, its autoaim; and
+    /// whether consoles without the game are let in.
+    inline constexpr std::uint16_t kRuleWeaponsStay = 1;
+    inline constexpr std::uint16_t kRuleRealisticFall = 2;
+    inline constexpr std::uint16_t kRuleFriendlyFire = 4;
+    inline constexpr std::uint16_t kRuleFlashlight = 8;
+    inline constexpr std::uint16_t kRuleAutoaim = 16;
+    inline constexpr std::uint16_t kRuleGuests = 32;
+
+    /// The kinds of match (Rules' v[0]): every one for themselves, or two
+    /// teams (HlSettings.hpp's kModeDeathmatch, kModeTeamplay).
+    inline constexpr std::uint8_t kNetModeDeathmatch = 0;
+    inline constexpr std::uint8_t kNetModeTeamplay = 1;
+
+    /// A spray: 32 by 32, two bits a pixel (HlUi.hpp's logos), 256 bytes, in
+    /// pieces of twelve.
+    inline constexpr int kNetSprayBytes = 256;
+    inline constexpr int kNetSprayPieces = (kNetSprayBytes + 11) / 12;
+    inline constexpr std::uint32_t kNetSprayAll = (1u << kNetSprayPieces) - 1;
+    /// What a spray's bytes come to (FNV-1a): a Profile says it, so that a
+    /// spray is known to be whole. Never 0.
+    inline std::uint32_t netSprayHash(const std::uint8_t *bytes)
+    {
+        std::uint32_t hash = 2166136261u;
+        for (int i = 0; i < kNetSprayBytes; ++i)
+            hash = (hash ^ bytes[i]) * 16777619u;
+        return hash != 0 ? hash : 1;
+    }
 
     inline constexpr int kNetTextBytes = 12;
 
@@ -109,6 +150,10 @@ namespace hldata
         NetEvent() { std::memset(text, 0, sizeof(text)); }
     };
     inline constexpr int kNetEventBytes = 15;
+    /// A host's frame before its events (a header, each player's place and
+    /// stream, the events' count): with eight, still room for thirty.
+    inline constexpr int kNetHostFixedBytes = 8 + kNetPlayers * (kNetPlayerBytes + 6) + 3;
+    static_assert(kNetHostFixedBytes + 30 * kNetEventBytes <= kNetCmdBytes, "a host's frame with too few events");
 
     // -------------------------------------------------------------- packing
 
@@ -284,10 +329,12 @@ namespace hldata
         }
     };
 
-    /// Events arrived and not yet read, in order.
-    struct NetInbox
+    /// Events arrived and not yet read, in order: `Most` of them at most (one
+    /// that does not fit is sent again).
+    template <int Most>
+    struct NetInboxOf
     {
-        static constexpr int kMost = 64;
+        static constexpr int kMost = Most;
         NetEvent events[kMost];
         int head = 0, count = 0;
         std::uint16_t expected = 0; ///< the number of the next one wanted
@@ -313,6 +360,68 @@ namespace hldata
             ++expected;
         }
     };
+    /// A client's of the host's stream (as much as a frame of the host's
+    /// brings, and more) ...
+    using NetInbox = NetInboxOf<64>;
+    /// ... and the host's of each client's (whose frames bring twelve).
+    using NetClientInbox = NetInboxOf<32>;
+
+    // -------------------------------------------------------- the room's card
+
+    /// What a host's beacon says of its match, for the consoles looking for
+    /// one (16 bytes, after its name: the radio's game data): the protocol's
+    /// version, the mode, how many may play, whether consoles without the
+    /// game are let in, the map's name hash.
+    struct NetRoomInfo
+    {
+        std::uint8_t version = kNetVersion;
+        std::uint8_t mode = kNetModeDeathmatch;
+        std::uint8_t most = 4;
+        bool guests = false;
+        std::uint32_t mapHash = 0;
+    };
+    inline constexpr int kNetRoomBytes = 8;
+    inline void netRoomWrite(const NetRoomInfo &room, std::uint8_t *out)
+    {
+        out[0] = room.version;
+        out[1] = room.mode;
+        out[2] = room.most;
+        out[3] = room.guests ? 1 : 0;
+        for (int i = 0; i < 4; ++i)
+            out[4 + i] = static_cast<std::uint8_t>(room.mapHash >> (i * 8));
+    }
+    /// False for a host that said nothing, or not enough (one of an older
+    /// build: `room` says what is known, its version 0).
+    inline bool netRoomRead(const std::uint8_t *bytes, int size, NetRoomInfo &room)
+    {
+        room = NetRoomInfo();
+        room.version = 0;
+        if (size < kNetRoomBytes)
+            return false;
+        room.version = bytes[0];
+        room.mode = bytes[1];
+        room.most = bytes[2];
+        room.guests = bytes[3] != 0;
+        room.mapHash = 0;
+        for (int i = 0; i < 4; ++i)
+            room.mapHash |= static_cast<std::uint32_t>(bytes[4 + i]) << (i * 8);
+        return true;
+    }
+
+    /// How strong a signal is, in bars (0..4): from the radio's own reading
+    /// (the DS's, 0..255; in dBm, below 0, from a DSi's own radio) ...
+    inline int netBars(int rssi)
+    {
+        if (rssi < 0)
+            return rssi >= -55 ? 4 : (rssi >= -65 ? 3 : (rssi >= -75 ? 2 : (rssi >= -85 ? 1 : 0)));
+        return rssi >= 40 ? 4 : (rssi >= 28 ? 3 : (rssi >= 18 ? 2 : (rssi >= 8 ? 1 : 0)));
+    }
+    /// ... or, on a host, which has none of its clients', from how many of
+    /// its last 60 frames were answered (netLinkShare).
+    inline int netShareBars(int answered)
+    {
+        return answered >= 54 ? 4 : (answered >= 42 ? 3 : (answered >= 24 ? 2 : (answered >= 1 ? 1 : 0)));
+    }
 
     // ------------------------------------------------------------ the frames
 
@@ -342,11 +451,14 @@ namespace hldata
         struct Client
         {
             bool here = false;
-            NetInbox in;
+            NetClientInbox in;
             std::uint16_t acked = 0;    ///< what it has of the host's stream
             std::uint16_t joinedAt = 0; ///< ... and where it started
             std::uint16_t token = 0;    ///< what it calls itself (0: not heard yet)
             std::uint32_t heard = 0;    ///< frames since it was last heard
+            /// A bit a frame of the host's, the newest lowest: whether it
+            /// was answered (how good the link is: netLinkShare).
+            std::uint64_t answered = 0;
         } clients[kNetPlayers];         ///< [0] is never used: that is the host
         NetPlayer players[kNetPlayers]; ///< [0] is the host's own, the rest as last heard
         std::uint32_t frame = 0;
@@ -409,8 +521,24 @@ namespace hldata
             detail::put(out, host.out.at(static_cast<std::uint16_t>(host.out.first + n)));
         for (int c = 1; c < kNetPlayers; ++c)
             if (host.clients[c].here)
+            {
                 ++host.clients[c].heard;
+                host.clients[c].answered <<= 1;
+            }
         return out.ok ? static_cast<int>(out.at - bytes) : 0;
+    }
+
+    /// Of the host's last 60 frames, how many client `who` answered (a
+    /// host has no strength of a client's signal: this is what it has).
+    inline int netLinkShare(const NetHost &host, int who)
+    {
+        if (who < 1 || who >= kNetPlayers || !host.clients[who].here)
+            return 0;
+        std::uint64_t bits = host.clients[who].answered & ((std::uint64_t{1} << 60) - 1);
+        int n = 0;
+        for (; bits != 0; bits &= bits - 1)
+            ++n;
+        return n;
     }
 
     /// A client hears the host's frame. False if it is not one.
@@ -513,6 +641,7 @@ namespace hldata
             return false;
         client.token = token;
         client.heard = 0;
+        client.answered |= 1;
         host.players[who] = player;
         host.players[who].flags |= kNetHere;
         // (Only a number that is between where it began and where the

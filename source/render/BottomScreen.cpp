@@ -8,6 +8,7 @@
 #include "HlTouchLayout.hpp"
 #include "HlWeaponList.hpp"
 #include "HlUi.hpp"
+#include "net/NetGame.hpp"
 #include "ui/TouchCanvas.hpp"
 
 #include <cstring>
@@ -32,7 +33,7 @@ namespace hlrt
         /// copied from `from` to `to`, both laid out as the screen's.
         void copyPad(std::uint32_t *to, const std::uint32_t *from, bool mirrored)
         {
-            const TouchRect r = touchLayout(mirrored).pad;
+            const TouchRect r = touchLayout(mirrored, netGame.playing()).pad;
             const int left = r.x / 8, right = (r.x + r.w + 7) / 8, top = r.y / 8, bottom = (r.y + r.h + 7) / 8;
             for (int ty = top; ty < bottom; ++ty)
             {
@@ -122,9 +123,11 @@ namespace hlrt
     void BottomScreen::drawBar()
     {
         Canvas &canvas = touchCanvas.canvas();
-        const TouchLayout at = touchLayout(mirrored_);
+        const TouchLayout at = touchLayout(mirrored_, netGame.playing());
         label(at.menu, "MENU", held_ == kTouchMenu);
         label(at.use, "USE", held_ == kTouchUse);
+        if (at.spray.w > 0)
+            label(at.spray, "SPRAY", held_ == kTouchSpray);
         // RELOAD is faint while there is nothing to reload: no gun in
         // hand, a full one, or nothing carried for it.
         if (canReload_ || held_ == kTouchReload)
@@ -143,7 +146,7 @@ namespace hlrt
     void BottomScreen::drawPad()
     {
         Canvas &canvas = touchCanvas.canvas();
-        const TouchRect r = touchLayout(mirrored_).pad;
+        const TouchRect r = touchLayout(mirrored_, netGame.playing()).pad;
         canvas.plate(r.x + 1, r.y + 1, r.w - 2, r.h - 2, 6, kUiBack, kUiOrange);
         // The mark of the place in its middle, as faint as a line can be:
         // it is where the stylus rests, not something to read.
@@ -165,7 +168,7 @@ namespace hlrt
     HL_ARM void BottomScreen::drawColumn()
     {
         Canvas &canvas = touchCanvas.canvas();
-        const TouchLayout at = touchLayout(mirrored_);
+        const TouchLayout at = touchLayout(mirrored_, netGame.playing());
         const FontView &font = touchCanvas.font(kFontSmall);
         const struct
         {
@@ -230,7 +233,7 @@ namespace hlrt
                                                          ".357", "XBOW", "SATCH", "MINE", "SNARK",
                                                          "RPG",  "TAU",  "EGON",  "HIVE"};
         Canvas &canvas = touchCanvas.canvas();
-        const TouchLayout at = touchLayout(mirrored_);
+        const TouchLayout at = touchLayout(mirrored_, netGame.playing());
         const FontView &font = touchCanvas.font(kFontSmall);
         loadIcons();
         for (int n = 0; n < kTouchSlots; ++n)
@@ -333,7 +336,7 @@ namespace hlrt
         static const char *const kFull[kWeaponCount] = {"",         "CROWBAR",  "9MM PISTOL", "SHOTGUN",  "GRENADES",
                                                         "MP5",      ".357",     "CROSSBOW",   "SATCHELS", "TRIPMINES",
                                                         "SNARKS",   "RPG",      "TAU CANNON", "GLUON GUN", "HIVEHAND"};
-        const TouchLayout at = touchLayout(mirrored_);
+        const TouchLayout at = touchLayout(mirrored_, netGame.playing());
         const TouchRect r = weaponListRect(list_, at);
         const int drop = (256 - list_.slide) * (r.h + 4) / 256;
         // (Drawn into the screen's rows down to the pad's bottom edge, and no
@@ -417,7 +420,8 @@ namespace hlrt
         if (shown_ != Shown::Pad)
             return;
         // (A slot shows what is in hand, not what is touched.)
-        auto onBar = [](int on) { return on == kTouchMenu || on == kTouchUse || on == kTouchReload; };
+        auto onBar = [](int on)
+        { return on == kTouchMenu || on == kTouchUse || on == kTouchReload || on == kTouchSpray; };
         if (onBar(was) || onBar(held))
             drawBar();
         auto onColumn = [](int on) { return on == kTouchJump || on == kTouchDuck || on == kTouchLamp; };

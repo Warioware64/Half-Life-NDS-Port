@@ -210,7 +210,7 @@ namespace hlrt
             {
                 const int speed = fxToInt(state.landed);
                 viewLand(view, speed);
-                if (const int cost = fallDamage(speed))
+                if (const int cost = fallDamage(speed, game.logic.flatFalls.value))
                 {
                     gameApi.hurtPlayer(state, cost, hldata::kDmgFall);
                     game.heard.add(CommonSound::FallPain, nullptr);

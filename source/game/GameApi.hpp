@@ -96,6 +96,7 @@ namespace hlrt
         void (*hudSetStatus)(HudDraw &, bool suit, int health, int armor, int weapon, int clip, int spare, int extra);
         void (*netTick)(NetGame &, std::uint16_t yaw, std::int32_t pitch, std::uint32_t did, bool lamp, int ms);
         void (*netUsed)(NetGame &, int index);
+        bool (*netSpray)(NetGame &);
         void (*playerFrame)(Player &, int vblanks);
         void (*playerTurn)(Player &);
         void (*fadeSetDim)(ScreenFade &, bool under);

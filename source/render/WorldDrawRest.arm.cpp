@@ -496,6 +496,7 @@ namespace hlrt
         // (Their room was set aside before the walk -- EffectDraw::reserve
         // -- and is counted in already.)
         effectDraw.drawDecals();
+        effectDraw.drawSprays();
         effectDraw.drawSolid();
         lampPass();
         const int effects = effectDraw.begin();

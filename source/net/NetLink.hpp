@@ -33,11 +33,20 @@ namespace hlrt::netlink
     int failStage();
 
     // ------------------------------------------------------------- the host
-    /// Be a host, seen by consoles that look, under `name`. False if the
-    /// radio could not be started.
-    bool host(const char *name);
-    /// Which clients are there: bit n for client n (1..3).
+    /// Be a host, seen by consoles that look, under `name`, for `most`
+    /// players at most (itself among them). False if the radio could not be
+    /// started.
+    bool host(const char *name, int most);
+    /// Which clients are there: bit n for client n (1..7).
     unsigned clients();
+    /// What the beacon says of the match (HlNet.hpp's NetRoomInfo, as
+    /// netRoomWrite has it): seen by consoles looking from the next beacon.
+    void hostRoom(const std::uint8_t *bytes, int size);
+    /// ... and, on a console looking, what host `index` says of its match
+    /// (`size` 0 for a host that says nothing), and how strong its signal is.
+    bool hostRoomAt(int index, std::uint8_t *bytes, int &size, int &rssi);
+    /// On a client: how strong the host's signal is (0..255).
+    int strength();
     /// Let more consoles in, or not (a match under way lets nobody in).
     void admit(bool allow);
 

@@ -183,6 +183,7 @@ namespace
         hlrt::textureCache.destroy();
         hlrt::spriteCache.destroy();
         hlrt::modelCache.destroy();
+        hlrt::effectDraw.dropSprays();
         // (All of the map gone: anything that wrote where it should not
         // while it was played is found now, by its block.)
         hlrt::guard::check("map left");
@@ -661,9 +662,15 @@ namespace
             std::string error;
             return loadSave(error, hldata::kSlotQuick) ? "" : "no quick save";
         }
+        case Command::Spray:
+            if (!hlrt::netGame.playing())
+                return "spraying is for a match";
+            return hlrt::netGame.spray() ? "" : "no wall near, or too soon";
         case Command::Flashlight:
             if ((state.inv.have & hldata::kHaveSuit) == 0)
                 return "no suit, no flashlight";
+            if (hlrt::game.logic.lampBanned.value)
+                return "no flashlight in this match";
             hlrt::game.lamp.on = !hlrt::game.lamp.on;
             return onOff(hlrt::game.lamp.on, "flashlight");
         case Command::Fov:

@@ -56,6 +56,7 @@ extern "C" const hlrt::EngineFuncs hlEngine = {
         n.tick(yaw, pitch, did, lamp, ms);
     },
     .netUsed = [](hlrt::NetGame &n, int index) { n.used(index); },
+    .netSpray = [](hlrt::NetGame &n) { return n.spray(); },
     .playerFrame = [](hlrt::Player &p, int vblanks) { p.frame(vblanks); },
     .playerTurn = [](hlrt::Player &p) { p.turn(); },
     .fadeSetDim = [](hlrt::ScreenFade &f, bool under) { f.setDim(under); },

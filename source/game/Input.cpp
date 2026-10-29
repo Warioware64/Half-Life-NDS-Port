@@ -5,6 +5,7 @@
 #include "Global.hpp"
 #include "Settings.hpp"
 #include "audio/Sound.hpp"
+#include "net/NetGame.hpp"
 #include "render/BottomScreen.hpp"
 
 namespace hlrt
@@ -76,7 +77,7 @@ namespace hlrt
         }
         // A slot's list of weapons first: a touch that is the list's is not
         // the controls'.
-        const hldata::TouchLayout at = hldata::touchLayout(settings.leftHanded);
+        const hldata::TouchLayout at = hldata::touchLayout(settings.leftHanded, netGame.playing());
         const bool landed = in.touching && !touchWas_;
         touchWas_ = in.touching;
         const hldata::WeaponListTouch list =
@@ -85,7 +86,9 @@ namespace hlrt
         hldata::ControlsIn theirs = in;
         if (list.consumed)
             theirs.touching = false;
-        static_cast<hldata::ControlsOut &>(*this) = hldata::controlsStep(settings.controls(), theirs, state_);
+        hldata::ControlSettings controls = settings.controls();
+        controls.match = netGame.playing();
+        static_cast<hldata::ControlsOut &>(*this) = hldata::controlsStep(controls, theirs, state_);
         weaponChoose = list.chosen;
         // (A menu over the game: its touches are the menu's, and no weapon
         // is asked for nor heard.)

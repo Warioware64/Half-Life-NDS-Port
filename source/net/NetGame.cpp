@@ -1,6 +1,7 @@
 #include "net/NetGame.hpp"
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 #include <nds.h>
@@ -13,6 +14,10 @@
 #include "game/Player.hpp"
 #include "render/Camera.hpp"
 #include "net/NetLink.hpp"
+#include "HlUi.hpp"
+#include "audio/Sound.hpp"
+#include "data/ModelCache.hpp"
+#include "render/EffectDraw.hpp"
 
 namespace hlrt
 {
@@ -36,7 +41,108 @@ namespace hlrt
                 static_cast<std::uint16_t>((mac[4] << 8 | mac[5]) ^ (mac[2] << 8 | mac[3]) ^ (Global::vblanks() * 40503u));
             return token != 0 ? token : 1;
         }
+
+        /// This console's spray: the profile's logo of the card's (HlUi.hpp:
+        /// ui/logos.hic), its rows as they are (kNetSprayBytes). False if
+        /// the card has none.
+        bool ownSpray(std::uint8_t *out)
+        {
+            std::FILE *file = std::fopen(global.commonPath(kLogosFile).c_str(), "rb");
+            if (file == nullptr)
+                return false;
+            std::fseek(file, 0, SEEK_END);
+            const long size = std::ftell(file);
+            std::fseek(file, 0, SEEK_SET);
+            const long most = static_cast<long>(sizeof(IconsHeader) +
+                                                kLogosMost * (kLogoSize * iconRowWords(kLogoSize) * 4 + kLogoNameBytes));
+            auto *words = size > 0 && size <= most ? static_cast<std::uint32_t *>(std::malloc(static_cast<std::size_t>(size)))
+                                                   : nullptr;
+            const bool got = words != nullptr &&
+                             std::fread(words, 1, static_cast<std::size_t>(size), file) == static_cast<std::size_t>(size);
+            std::fclose(file);
+            LogosView logos;
+            const bool ok = got && logos.open(reinterpret_cast<const std::uint8_t *>(words), static_cast<std::size_t>(size));
+            static_assert(kLogoSize * iconRowWords(kLogoSize) * 4 == kNetSprayBytes, "a spray is a logo's rows");
+            if (ok)
+            {
+                const int logo = settings.spray % logos.count();
+                std::memcpy(out, logos.icons.rows + static_cast<std::size_t>(logo) * kLogoSize * iconRowWords(kLogoSize),
+                            kNetSprayBytes);
+            }
+            std::free(words);
+            return ok;
+        }
+
+        /// The settings' map, if a match can be played on it; else the first.
+        const std::string *hostedMap(const std::vector<std::string> &maps)
+        {
+            for (const std::string &map : maps)
+            {
+                if (map == settings.hostMap)
+                    return &map;
+            }
+            return maps.empty() ? nullptr : &maps[0];
+        }
     } // namespace
+
+    // (The settings' modes and the match's: the same numbers.)
+    static_assert(kModeDeathmatch == kNetModeDeathmatch && kModeTeamplay == kNetModeTeamplay);
+
+    void NetGame::sayProfile()
+    {
+        NetProfile profile;
+        profile.model = settings.playerModel;
+        profile.top = settings.topColour;
+        profile.bottom = settings.bottomColour;
+        profile.asked = match_.myProfile.asked;
+        profile.sprayColour = settings.sprayColour;
+        std::uint8_t spray[kNetSprayBytes];
+        netSetProfile(match_, profile, ownSpray(spray) ? spray : nullptr);
+    }
+
+    void NetGame::sayRules()
+    {
+        NetRules rules;
+        // (Co-op is not played yet: a free-for-all.)
+        rules.mode = settings.hostMode == kModeTeamplay ? kNetModeTeamplay : kNetModeDeathmatch;
+        rules.flags = static_cast<std::uint16_t>(
+            (settings.weaponsStay ? kRuleWeaponsStay : 0) | (settings.fallDamage != 0 ? kRuleRealisticFall : 0) |
+            (settings.friendlyFire ? kRuleFriendlyFire : 0) | (settings.flashlight ? kRuleFlashlight : 0) |
+            (settings.hostAutoaim ? kRuleAutoaim : 0) | (settings.allowGuests ? kRuleGuests : 0));
+        rules.most = settings.maxPlayers;
+        netSetRules(match_, rules);
+        // What the beacon says of it.
+        NetRoomInfo room;
+        room.mode = rules.mode;
+        room.most = match_.rules.most;
+        room.guests = settings.allowGuests;
+        const std::string *map = hostedMap(maps_);
+        room.mapHash = map != nullptr ? nameHash(map->c_str()) : 0;
+        std::uint8_t bytes[kNetRoomBytes];
+        netRoomWrite(room, bytes);
+        netlink::hostRoom(bytes, kNetRoomBytes);
+    }
+
+    void NetGame::hostChanged()
+    {
+        if (phase_ == Phase::Hosting)
+            sayRules();
+    }
+
+    void NetGame::askTeam(int team)
+    {
+        if (on())
+            netAskTeam(match_, team);
+    }
+
+    int NetGame::bars(int p) const
+    {
+        if (p < 0 || p >= kNetPlayers || !on())
+            return -1;
+        if (isHost())
+            return p == 0 ? 4 : netShareBars(netLinkShare(match_.host, p));
+        return p == 0 ? netBars(netlink::strength()) : -1;
+    }
 
     /// (For the menu, which says why hosting could not begin.)
     int netlinkFailStage()
@@ -51,9 +157,12 @@ namespace hlrt
     {
         char name[kNetTextBytes];
         std::snprintf(name, sizeof(name), "%s", settings.playerName());
-        if (!netlink::host(name))
+        if (!netlink::host(name, settings.maxPlayers))
             return false;
         netBegin(match_, NetMatch::Role::Host, 0, name);
+        sayRules();
+        sayProfile();
+        profilesSeen_ = 0;
         phase_ = Phase::Hosting;
         clientsWere_ = 0;
         ended_ = "";
@@ -78,13 +187,28 @@ namespace hlrt
         const int all = phase_ == Phase::Scanning ? netlink::found() : 0;
         for (int i = 0; i < all && count < most; ++i)
         {
-            char name[16];
+            Found &one = out[count];
             int players = 0, room = 0;
-            if (!netlink::hostAt(i, name, sizeof(name), &players, &room))
+            if (!netlink::hostAt(i, one.name, sizeof(one.name), &players, &room))
                 continue;
-            std::snprintf(out[count].line, sizeof(out[count].line), "%s  %d/%d", name[0] ? name : "A game",
-                          players, room);
-            out[count++].index = i;
+            std::uint8_t bytes[16]; // (the radio's most: DSWIFI_BEACON_GAME_DATA_MAX)
+            int size = 0, rssi = 0;
+            netlink::hostRoomAt(i, bytes, size, rssi);
+            netRoomRead(bytes, size, one.room);
+            one.map = nullptr;
+            for (const std::string &map : maps_)
+            {
+                if (one.room.mapHash != 0 && nameHash(map.c_str()) == one.room.mapHash)
+                    one.map = map.c_str();
+            }
+            one.players = players;
+            one.most = room;
+            one.bars = netBars(rssi);
+            std::snprintf(one.line, sizeof(one.line), "%s  %d/%d", one.name[0] ? one.name : "A game", players, room);
+            if (!one.name[0])
+                std::snprintf(one.name, sizeof(one.name), "A game");
+            one.index = i;
+            ++count;
         }
         return count;
     }
@@ -96,6 +220,8 @@ namespace hlrt
         char name[kNetTextBytes];
         std::snprintf(name, sizeof(name), "%s", settings.playerName());
         netBegin(match_, NetMatch::Role::Client, tokenOfThisConsole(), name);
+        sayProfile();
+        profilesSeen_ = 0;
         phase_ = Phase::Joining;
         lostFrames_ = 0;
         return true;
@@ -113,6 +239,8 @@ namespace hlrt
             char name[kNetTextBytes];
             std::snprintf(name, sizeof(name), "%s", settings.playerName());
             netBegin(match_, NetMatch::Role::Client, tokenOfThisConsole(), name);
+            sayProfile();
+            profilesSeen_ = 0;
         }
         phase_ = Phase::Joining;
         lostFrames_ = 0;
@@ -136,6 +264,7 @@ namespace hlrt
             }
         }
         netlink::powerDown();
+        effectDraw.dropSprays();
         match_ = NetMatch();
         phase_ = Phase::Off;
         startPending_ = false;
@@ -144,6 +273,7 @@ namespace hlrt
     void NetGame::lost(const char *why)
     {
         netlink::powerDown();
+        effectDraw.dropSprays();
         match_ = NetMatch();
         phase_ = Phase::Off;
         startPending_ = false;
@@ -154,6 +284,9 @@ namespace hlrt
     {
         if (phase_ != Phase::Hosting)
             return;
+        // (The rules as they are now, before the start: in that order on
+        // every console.)
+        sayRules();
         const std::uint32_t hash = nameHash(map.c_str());
         // (How hard: every console runs its own monsters and chargers.)
         netSay(match_, netEvent(NetEventType::Start, 0, static_cast<std::int16_t>(hash & 0xFFFF),
@@ -215,6 +348,10 @@ namespace hlrt
         gameApi.netStart(match_, game.logic, player.state, static_cast<int>(view.actorCount), model, spawns_.data(),
                  static_cast<int>(spawns_.size()), tokenOfThisConsole());
         phase_ = Phase::Playing;
+        // Everyone's spray, made into its picture now, while the map is
+        // being put up (nobody comes once the match has begun).
+        effectDraw.loadSprays(match_);
+        profilesSeen_ = 0;
 
         // A development aid (tools/emu/play.sh with two consoles): "x y z
         // yaw" in debug_net.txt, whole units and degrees, puts the host
@@ -327,6 +464,24 @@ namespace hlrt
             send();
         }
 
+        // Everyone in their own colours, as their profiles say.
+        if (match_.profileStamp != profilesSeen_)
+        {
+            profilesSeen_ = match_.profileStamp;
+            for (int p = 0; p < kNetPlayers; ++p)
+            {
+                const NetProfile &profile = match_.profiles[p];
+                if (profile.known)
+                    modelCache.setPlayerColours(p, profile.top, profile.bottom);
+            }
+        }
+        if (match_.refused)
+        {
+            match_.passedCount = 0;
+            lost("The game is full.");
+            return;
+        }
+
         // What the match leaves to whoever runs the screens.
         for (int n = 0; n < match_.passedCount; ++n)
         {
@@ -369,7 +524,23 @@ namespace hlrt
         if (phase_ != Phase::Playing)
             return;
         gameApi.netTick(match_, game.logic, player.state, yaw, pitch, did, lamp, ms);
-        send();
+        // (More than four: the host's frames every other frame, so that the
+        // air has room for everyone's answers. Each glides between.)
+        int here = 0;
+        for (int p = 0; p < kNetPlayers; ++p)
+            here += netHere(match_, p) ? 1 : 0;
+        if (!isHost() || here <= 4 || (++ticks_ & 1) == 0)
+            send();
+    }
+
+    bool NetGame::spray()
+    {
+        if (phase_ != Phase::Playing)
+            return false;
+        if (!netSpray(match_, game.logic, player.state, camera.pos, camera.forward))
+            return false;
+        sound.ui(kUiSoundSpray);
+        return true;
     }
 
     void NetGame::used(int index)

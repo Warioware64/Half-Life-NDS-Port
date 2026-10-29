@@ -59,6 +59,12 @@ namespace hldata
     {
         return speed <= kFallSafe ? 0 : ((speed - kFallSafe) * 100) / (kFallFatal - kFallSafe);
     }
+    /// ... and in a match whose rules make every fall the same (the game's
+    /// mp_falldamage 0): 10, past the safe speed.
+    inline constexpr int fallDamage(int speed, bool flat)
+    {
+        return !flat ? fallDamage(speed) : (speed <= kFallSafe ? 0 : 10);
+    }
 
     /// Hurt, by `damage`, from `side` (the direction to what did it, in the
     /// player's own axes: forward and right, any scale; both 0 if it came

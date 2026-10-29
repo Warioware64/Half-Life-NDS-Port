@@ -46,11 +46,20 @@ namespace hlrt
         bool host();  ///< be a host; false if the radio would not start
         bool scan();  ///< look for hosts
         /// The hosts found so far: up to `most` of them, each a line to
-        /// show ("name 2/4") and what to give join().
+        /// show ("name 2/4"), what its beacon says of the match, how strong
+        /// its signal is, and what to give join().
         struct Found
         {
             char line[32];
+            char name[16];
             int index;
+            int players, most;
+            /// What the host says of its match; `room.version` 0 if it says
+            /// nothing (an older build), and another than kNetVersion if it
+            /// is a build this one cannot play with.
+            hldata::NetRoomInfo room;
+            const char *map; ///< its map, if this card has it; else null
+            int bars;        ///< 0..4
         };
         int found(Found *out, int most);
         bool join(int index);
@@ -59,6 +68,15 @@ namespace hlrt
         bool joinStarter();
         /// Out of it altogether: the others are told, the radio is silent.
         void leave();
+        /// The host: the settings' match (its mode, its rules, its map) has
+        /// changed -- to the others in the lobby, and to the beacon.
+        void hostChanged();
+        /// The team this console's player would rather be on (1, 2; 0:
+        /// either). The host says which they are on.
+        void askTeam(int team);
+        /// How strong the link to player `p` is, in bars (0..4); -1 if it is
+        /// not known (a client knows only its host's).
+        int bars(int p) const;
 
         /// The host: begin the match on `map`. (It then loads the map
         /// itself, as the clients do when they hear.)
@@ -76,6 +94,9 @@ namespace hlrt
         void tick(std::uint16_t yaw, std::int32_t pitch, std::uint32_t did, bool lamp, int ms);
         /// The local player used the map's record `index`.
         void used(int index);
+        /// The local player sprays (the game's impulse 201): true if it went
+        /// on a wall.
+        bool spray();
 
         /// Something to say on the screen, if there is: a line of it into
         /// `line`. False when there is nothing more.
@@ -99,8 +120,12 @@ namespace hlrt
         int pendingSkill_ = 2; ///< (kSkillMedium)
         bool startPending_ = false;
         std::uint32_t sent_ = 0, heard_ = 0;
+        std::uint32_t profilesSeen_ = 0; ///< the match's profileStamp, when the colours were last set
+        std::uint32_t ticks_ = 0;
 
         void send();
+        void sayProfile();
+        void sayRules();
         void lost(const char *why);
     };
 

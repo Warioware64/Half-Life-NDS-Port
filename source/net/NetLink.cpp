@@ -39,29 +39,36 @@ namespace hlrt::netlink
 
         // What has come, and has not been read: a ring that the interrupt
         // fills and the frame empties. (One writer, one reader: the indices
-        // are each written by one side only.)
-        constexpr int kRing = 12;
+        // are each written by one side only.) One pool, in slots as big as
+        // what comes: a client's, twelve of the host's frames; a host's,
+        // the clients' smaller ones -- thirty-nine of them, room for what
+        // seven answer to five frames of its own.
         struct Frame
         {
             std::uint16_t size;
             std::uint8_t from;
-            std::uint8_t bytes[kNetCmdBytes];
+            std::uint8_t bytes[1]; ///< (as many as the slot has room for)
         };
-        Frame ring[kRing];
+        constexpr int kSlotHead = 4;
+        constexpr int kPoolBytes = 12 * (kSlotHead + kNetCmdBytes);
+        alignas(4) std::uint8_t pool[kPoolBytes];
+        int slotBytes = kSlotHead + kNetCmdBytes;
+        int slotCount = kPoolBytes / (kSlotHead + kNetCmdBytes);
         volatile int ringHead = 0; ///< the next to read
         volatile int ringTail = 0; ///< the next to write
         volatile unsigned ringDropped = 0;
+        Frame &slot(int n) { return *reinterpret_cast<Frame *>(pool + n * slotBytes); }
 
         void keep(int from, int base, int len)
         {
-            const int next = (ringTail + 1) % kRing;
-            if (len <= 0 || len > kNetCmdBytes || next == ringHead)
+            const int next = (ringTail + 1) % slotCount;
+            if (len <= 0 || len > slotBytes - kSlotHead || next == ringHead)
             {
                 if (next == ringHead)
                     ++ringDropped;
                 return;
             }
-            Frame &frame = ring[ringTail];
+            Frame &frame = slot(ringTail);
             Wifi_RxRawReadPacket(base, len, frame.bytes);
             frame.size = static_cast<std::uint16_t>(len);
             frame.from = static_cast<std::uint8_t>(from);
@@ -96,6 +103,14 @@ namespace hlrt::netlink
         void forget()
         {
             ringHead = ringTail = 0;
+        }
+        /// The pool in slots for frames of `bytes` (before the radio is
+        /// told to give any).
+        void shape(int bytes)
+        {
+            forget();
+            slotBytes = (kSlotHead + bytes + 3) & ~3;
+            slotCount = kPoolBytes / slotBytes;
         }
         Wifi_AccessPoint hostNamed(const std::uint8_t address[6])
         {
@@ -147,7 +162,7 @@ namespace hlrt::netlink
         started = false;
     }
 
-    bool host(const char *name)
+    bool host(const char *name, int most)
     {
         if (!start())
             return false;
@@ -156,8 +171,10 @@ namespace hlrt::netlink
             Wifi_MultiplayerAllowNewClients(true);
             return true;
         }
-        forget();
-        if (Wifi_MultiplayerHostMode(kNetPlayers - 1, kNetCmdBytes, kNetReplyBytes) != 0)
+        shape(kNetReplyBytes);
+        // (As many clients as the match lets play: the radio refuses the rest.)
+        most = most < 2 ? 2 : (most > kNetPlayers ? kNetPlayers : most);
+        if (Wifi_MultiplayerHostMode(most - 1, kNetCmdBytes, kNetReplyBytes) != 0)
             return false;
         Wifi_MultiplayerFromClientSetPacketHandler(fromClient);
         waitForMode();
@@ -178,7 +195,42 @@ namespace hlrt::netlink
 
     unsigned clients()
     {
-        return hosting ? (Wifi_MultiplayerGetClientMask() & 0xEu) : 0;
+        return hosting ? (Wifi_MultiplayerGetClientMask() & (((1u << kNetPlayers) - 1) & ~1u)) : 0;
+    }
+
+    void hostRoom(const std::uint8_t *bytes, int size)
+    {
+        if (!hosting)
+            return;
+        // (The beacon made again with it: what is looking for a game sees
+        // it at the next one.)
+        Wifi_MultiplayerHostGameData(bytes, static_cast<size_t>(size));
+        Wifi_BeaconStart(kSsid, kGameId);
+    }
+
+    bool hostRoomAt(int index, std::uint8_t *bytes, int &size, int &rssi)
+    {
+        size = 0;
+        rssi = 0;
+        if (!client || index < 0 || index >= Wifi_GetNumAP())
+            return false;
+        Wifi_AccessPoint ap;
+        Wifi_GetAPData(index, &ap);
+        if (ap.nintendo.game_id != kGameId)
+            return false;
+        size = ap.nintendo.game_data_len;
+        std::memcpy(bytes, ap.nintendo.game_data, static_cast<std::size_t>(size));
+        rssi = ap.rssi;
+        return true;
+    }
+
+    int strength()
+    {
+        if (!client || !joined())
+            return 0;
+        // (The value is the answer: no buffer.)
+        const int rssi = Wifi_GetData(WIFIGETDATA_RSSI, 0, nullptr);
+        return rssi > 0 ? rssi : 0;
     }
 
     void admit(bool allow)
@@ -191,7 +243,7 @@ namespace hlrt::netlink
     {
         if (!start())
             return false;
-        forget();
+        shape(kNetCmdBytes);
         if (Wifi_MultiplayerClientMode(kNetReplyBytes) != 0)
             return false;
         Wifi_MultiplayerFromHostSetPacketHandler(fromHost);
@@ -248,7 +300,7 @@ namespace hlrt::netlink
         {
             if (!start())
                 return false;
-            forget();
+            shape(kNetCmdBytes);
             if (Wifi_MultiplayerClientMode(kNetReplyBytes) != 0)
                 return false;
             Wifi_MultiplayerFromHostSetPacketHandler(fromHost);
@@ -287,11 +339,11 @@ namespace hlrt::netlink
     {
         if (ringHead == ringTail)
             return 0;
-        const Frame &frame = ring[ringHead];
+        const Frame &frame = slot(ringHead);
         const int size = frame.size;
         std::memcpy(into, frame.bytes, static_cast<std::size_t>(size));
         from = frame.from;
-        ringHead = (ringHead + 1) % kRing;
+        ringHead = (ringHead + 1) % slotCount;
         return size;
     }
 

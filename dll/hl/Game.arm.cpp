@@ -110,7 +110,8 @@ namespace hlrt
             ladderCount += view.logic[i].kind == static_cast<std::uint8_t>(LogicKind::Ladder);
         ladders_ = static_cast<LadderVolume *>(std::calloc(ladderCount + 1, sizeof(LadderVolume)));
         cornerState_ = static_cast<std::uint8_t *>(std::calloc(view.cornerCount + 1, 1));
-        const int actorCount = static_cast<int>(view.actorCount) + kMaxVisitors;
+        // (On a multiplayer map, room for a match's players instead.)
+        const int actorCount = static_cast<int>(view.actorCount) + spareActorsOf(view);
         actorStates_ = static_cast<ActorState *>(std::calloc(actorCount, sizeof(ActorState)));
         actorBoxes_ = static_cast<SolidBox *>(std::calloc(actorCount, sizeof(SolidBox)));
         if (brushStates_ == nullptr || movers_ == nullptr || reach_ == nullptr || states_ == nullptr ||
@@ -770,7 +771,7 @@ namespace hlrt
         {
             input.moveForward = input.moveSide = 0;
             input.jump = input.duck = input.usePressed = input.useHeld = input.attack = input.second = false;
-            input.reloadPressed = input.lampPressed = false;
+            input.reloadPressed = input.lampPressed = input.sprayPressed = false;
             input.weaponPick = input.weaponStep = input.weaponChoose = 0;
             input.lookDx = input.lookDy = input.lookFineX = input.lookFineY = 0;
         }
@@ -877,7 +878,13 @@ namespace hlrt
         // The lamp: its switch and its battery. (What it lights is the
         // renderer's business: HudDraw::drawLamp, ModelDraw.)
         {
-            const bool suit = (player.state.inv.have & kHaveSuit) != 0;
+            // (A match whose rules have no lamp: never lit.)
+            const bool suit = (player.state.inv.have & kHaveSuit) != 0 && !logic.lampBanned.value;
+            if (logic.lampBanned.value)
+                lamp.on = false;
+            // (A match's SPRAY: the game's impulse 201.)
+            if (input.sprayPressed)
+                netGame.spray();
             if (input.lampPressed && player.state.health > 0 && lampToggle(lamp, suit))
             {
                 sound.ui(kUiSoundLamp);
@@ -970,7 +977,8 @@ namespace hlrt
             // At a gun's controls: the fire button is the gun's, and what is
             // in hand is put away (the game's holstered weapon).
             const bool manning = tankManned(logic) >= 0;
-            logic.noAutoaim.value = !autoaim;
+            // (In a match, the host's to say.)
+            logic.noAutoaim.value = logic.matchAutoaim.value >= 0 ? logic.matchAutoaim.value == 0 : !autoaim;
             if (manning)
                 tankControl(logic, player.state, camera.yaw, camera.pitch, alive && input.attack, ms);
             const std::uint32_t did = netDid = weaponsTick(logic, player.state, weapon_, eye, camera.forward,

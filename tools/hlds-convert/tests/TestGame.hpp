@@ -272,8 +272,8 @@ namespace hldstest
         g.timesHeard.assign(v.soundCount + 1, 0);
         g.logic.cornerState = g.cornerState.data();
         g.logic.cornerCount = static_cast<int>(v.cornerCount);
-        g.actorStates.assign(v.actorCount + kMaxVisitors, ActorState());
-        g.actorBoxes.assign(v.actorCount + kMaxVisitors, SolidBox());
+        g.actorStates.assign(v.actorCount + spareActorsOf(v), ActorState());
+        g.actorBoxes.assign(v.actorCount + spareActorsOf(v), SolidBox());
         g.actors.states = g.actorStates.data();
         g.actors.count = static_cast<int>(g.actorStates.size());
         g.actors.models = g.modelViews.data();

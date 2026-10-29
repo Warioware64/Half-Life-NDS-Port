@@ -29,10 +29,15 @@
 
 namespace hldata
 {
+    static_assert(kNetPlayers <= kMaxMatchPlayers, "a match's players are actors the map has room for");
+
     inline constexpr int kNetRespawnMs = 3000;   ///< dead this long, then back
     inline constexpr int kNetWeaponBackMs = 20000; ///< a weapon or ammunition taken is back after this
     inline constexpr int kNetItemBackMs = 30000;   ///< ... a medkit or a battery after this
     inline constexpr int kNetBlameMs = 5000;     ///< a death this soon after a hit is the hitter's
+    inline constexpr int kNetSprayWaitMs = 30000; ///< a spray, then none until this long after (decalfrequency)
+    inline constexpr int kNetSprayReach = 128;    ///< how far off a wall may be sprayed
+    inline constexpr int kNetSprayHalf = 32;      ///< units from a spray's middle to its edge (64 across, as the game's)
     /// The health another player's actor is kept at: nobody dies of it, and
     /// what is missing from it is what this console's player did to them.
     inline constexpr std::int16_t kNetActorHealth = 20000;
@@ -51,6 +56,43 @@ namespace hldata
         NetEventType type = NetEventType::None;
         std::uint8_t who = 0;   ///< the player it is about
         std::uint8_t other = 0; ///< (a death: who did it; kNetPlayers: nobody else)
+    };
+
+    /// The rules of a match, as its host set them (Rules).
+    struct NetRules
+    {
+        std::uint8_t mode = kNetModeDeathmatch;
+        std::uint16_t flags = kRuleAutoaim; ///< kRule*
+        std::uint8_t most = 4;              ///< how many may play
+        bool teams() const { return mode == kNetModeTeamplay; }
+        bool has(std::uint16_t flag) const { return (flags & flag) != 0; }
+    };
+
+    /// A player as the others see them (Profile, SprayPiece), and their team
+    /// (Team: the host's to say).
+    struct NetProfile
+    {
+        bool known = false; ///< their Profile has come
+        std::uint8_t model = 0;
+        std::uint8_t top = 30, bottom = 6; ///< the game's topcolor and bottomcolor
+        std::uint8_t asked = 0;            ///< the team they would be on (0: either)
+        std::uint8_t team = 0;             ///< the team they are on (0: none)
+        std::uint8_t sprayColour = 0;      ///< HlSettings.hpp's kSprayColour
+        std::uint32_t sprayHash = 0;       ///< netSprayHash of their spray (0: none)
+        std::uint32_t pieces = 0;          ///< a bit for each piece of it that has come
+        std::uint8_t spray[kNetSprayBytes] = {};
+        bool sprayWhole() const
+        {
+            return sprayHash != 0 && pieces == kNetSprayAll && netSprayHash(spray) == sprayHash;
+        }
+    };
+
+    /// A player's spray on a wall: their last.
+    struct NetSprayMark
+    {
+        bool active = false;
+        fx at[3] = {0, 0, 0};
+        fx normal[3] = {0, 0, kFxOne}; ///< Q12: the way the wall faces
     };
 
     struct NetMatch
@@ -75,6 +117,24 @@ namespace hldata
         bool over = false;
         int fragLimit = 0;    ///< 0: none
         int minuteLimit = 0;  ///< 0: none
+        NetRules rules;
+        /// Everyone as they look, and their team.
+        NetProfile profiles[kNetPlayers];
+        /// Each team's frags (teamplay): [1] and [2].
+        std::int16_t teamFrags[3] = {};
+        /// Counts the profiles and teams that have come: whoever shows them
+        /// (the players' colours) looks again when it changes.
+        std::uint32_t profileStamp = 0;
+        /// This console's own (netSetProfile), until it has its place; then
+        /// profiles[me] too.
+        NetProfile myProfile;
+        int sprayNext = kNetSprayPieces; ///< the next piece of this console's spray to send
+        /// The host: of each player's spray, the pieces it has passed on.
+        std::uint32_t relayed[kNetPlayers] = {};
+        /// The host would not let this console in (too many).
+        bool refused = false;
+        NetSprayMark sprays[kNetPlayers];
+        std::int32_t sprayWaitMs = 0; ///< until this console's player may spray again
         std::int32_t playedMs = 0;
 
         // The others, here.
@@ -168,6 +228,59 @@ namespace hldata
         return e;
     }
 
+    /// Whether `a` and `b` are on one team, and may not hurt each other.
+    inline bool netTeammates(const NetMatch &match, int a, int b)
+    {
+        return match.rules.teams() && !match.rules.has(kRuleFriendlyFire) && a != b && a >= 0 && b >= 0 &&
+               a < kNetPlayers && b < kNetPlayers && match.profiles[a].team != 0 &&
+               match.profiles[a].team == match.profiles[b].team;
+    }
+
+    /// What a Profile says of `profile`.
+    inline NetEvent netProfileEvent(const NetProfile &profile)
+    {
+        return netEvent(NetEventType::Profile, 0, profile.model, profile.top | profile.bottom << 8, profile.asked,
+                        profile.sprayColour, static_cast<int>(profile.sprayHash & 0xFFFF),
+                        static_cast<int>(profile.sprayHash >> 16));
+    }
+    /// Piece `piece` of `profile`'s spray, as a SprayPiece.
+    inline NetEvent netSprayPiece(const NetProfile &profile, int piece)
+    {
+        NetEvent e = netEvent(NetEventType::SprayPiece, piece);
+        for (int i = 0; i < 6; ++i)
+        {
+            const int at = piece * 12 + i * 2;
+            const int low = at < kNetSprayBytes ? profile.spray[at] : 0;
+            const int high = at + 1 < kNetSprayBytes ? profile.spray[at + 1] : 0;
+            e.v[i] = static_cast<std::int16_t>(low | high << 8);
+        }
+        return e;
+    }
+    /// A wall's facing (Q12) as Spray's v[3..4]: ten bits each of x, y and
+    /// z, in 512ths.
+    inline void netPackNormal(const fx *normal, std::int16_t &low, std::int16_t &high)
+    {
+        std::uint32_t bits = 0;
+        for (int i = 0; i < 3; ++i)
+        {
+            int n = normal[i] >> 3;
+            n = n < -511 ? -511 : (n > 511 ? 511 : n);
+            bits |= (static_cast<std::uint32_t>(n) & 0x3FF) << (i * 10);
+        }
+        low = static_cast<std::int16_t>(bits & 0xFFFF);
+        high = static_cast<std::int16_t>(bits >> 16);
+    }
+    inline void netUnpackNormal(std::int16_t low, std::int16_t high, fx *normal)
+    {
+        const std::uint32_t bits = static_cast<std::uint16_t>(low) | static_cast<std::uint32_t>(static_cast<std::uint16_t>(high)) << 16;
+        for (int i = 0; i < 3; ++i)
+        {
+            int n = static_cast<int>((bits >> (i * 10)) & 0x3FF);
+            n = n >= 512 ? n - 1024 : n;
+            normal[i] = n << 3;
+        }
+    }
+
     namespace detail
     {
         inline void netNotice(NetMatch &match, NetEventType type, int who, int other = kNetPlayers)
@@ -212,14 +325,90 @@ namespace hldata
         inline void netScore(NetMatch &match, int victim, int killer)
         {
             ++match.deaths[victim];
+            // (In teamplay, a teammate killed costs the killer a frag, as a
+            // death by one's own hand does: the game's teamplay rules.)
+            const bool teamkill = match.rules.teams() && killer < kNetPlayers && killer != victim &&
+                                  match.profiles[killer].team != 0 &&
+                                  match.profiles[killer].team == match.profiles[victim].team;
             if (killer < kNetPlayers && killer != victim)
-                ++match.frags[killer];
+                match.frags[killer] = static_cast<std::int16_t>(match.frags[killer] + (teamkill ? -1 : 1));
             else
                 --match.frags[victim];
+            match.teamFrags[1] = match.teamFrags[2] = 0;
+            for (int p = 0; p < kNetPlayers; ++p)
+            {
+                const int team = match.profiles[p].team;
+                if (match.rules.teams() && (team == 1 || team == 2) && netHere(match, p))
+                    match.teamFrags[team] = static_cast<std::int16_t>(match.teamFrags[team] + match.frags[p]);
+            }
             for (int p : {victim, killer})
             {
                 if (p < kNetPlayers)
-                    match.host.out.add(netEvent(NetEventType::Score, p, match.frags[p], match.deaths[p]));
+                    match.host.out.add(netEvent(NetEventType::Score, p, match.frags[p], match.deaths[p],
+                                                match.teamFrags[1], match.teamFrags[2]));
+            }
+        }
+
+        /// The host: the team player `p` is to play for -- what they asked,
+        /// if that leaves the teams no more than one apart; else the smaller
+        /// (the first, if they are as big) -- told to everyone.
+        inline void netPickTeam(NetMatch &match, int p)
+        {
+            int team = 0;
+            if (match.rules.teams())
+            {
+                int count[3] = {0, 0, 0};
+                for (int q = 0; q < kNetPlayers; ++q)
+                {
+                    const int t = match.profiles[q].team;
+                    if (q != p && (t == 1 || t == 2) && netHere(match, q))
+                        ++count[t];
+                }
+                const int asked = match.profiles[p].asked;
+                if ((asked == 1 || asked == 2) && count[asked] <= count[3 - asked])
+                    team = asked;
+                else
+                    team = count[2] < count[1] ? 2 : 1;
+            }
+            match.profiles[p].team = static_cast<std::uint8_t>(team);
+            ++match.profileStamp;
+            match.host.out.add(netEvent(NetEventType::Team, p, team));
+        }
+
+        /// The host: everything a console that has just come needs to know
+        /// of the others -- the rules, everyone's profile and team, their
+        /// sprays again -- to everyone (those that had it lose nothing).
+        inline void netTellAll(NetMatch &match)
+        {
+            NetEvent rules = netEvent(NetEventType::Rules, 0, match.rules.mode, match.rules.flags, match.rules.most);
+            match.host.out.add(rules);
+            for (int p = 0; p < kNetPlayers; ++p)
+            {
+                if (!match.profiles[p].known || !netHere(match, p))
+                    continue;
+                NetEvent profile = netProfileEvent(match.profiles[p]);
+                profile.from = static_cast<std::uint8_t>(p);
+                match.host.out.add(profile);
+                match.host.out.add(netEvent(NetEventType::Team, p, match.profiles[p].team));
+                match.relayed[p] = 0;
+            }
+            // (The host's own spray: from its first piece again.)
+            if (match.myProfile.sprayHash != 0)
+                match.sprayNext = 0;
+        }
+
+        /// A player's spray is put on the wall at `at`, facing `normal`: in
+        /// the place of their last.
+        inline void netSprayPlace(NetMatch &match, int p, const fx *at, const fx *normal)
+        {
+            if (p < 0 || p >= kNetPlayers)
+                return;
+            NetSprayMark &mark = match.sprays[p];
+            mark.active = true;
+            for (int i = 0; i < 3; ++i)
+            {
+                mark.at[i] = at[i];
+                mark.normal[i] = normal[i];
             }
         }
 
@@ -232,11 +421,16 @@ namespace hldata
                 a.states[index].kind != static_cast<std::uint8_t>(ActorKind::Item))
                 return; // (someone else has it already)
             const auto item = static_cast<ItemKind>(a.states[index].item);
+            // (Weapons stay: a weapon is given, and is still there for the
+            // next -- who has not got it: HlMonsters.hpp asks only then.)
+            const bool stays = match.rules.has(kRuleWeaponsStay) && itemViewModel(item) != nullptr;
             if (who == match.me)
                 itemPickUp(w, player, index);
-            a.states[index].active = false;
+            a.states[index].active = stays;
             actorPlaceBox(a, index);
-            match.host.out.add(netEvent(NetEventType::Taken, who, index));
+            match.host.out.add(netEvent(NetEventType::Taken, who, index, stays ? 1 : 0));
+            if (stays)
+                return;
             for (NetMatch::Taken &slot : match.taken)
             {
                 if (slot.actor >= 0)
@@ -259,6 +453,17 @@ namespace hldata
             case NetEventType::Hello:
                 if (host && from > 0 && from < kNetPlayers)
                 {
+                    // (More than the rules let play: told so, and nothing more.
+                    // Counted as they came: the host and those it has let in,
+                    // whom it knows by name.)
+                    int here = 2;
+                    for (int p = 1; p < kNetPlayers; ++p)
+                        here += p != from && match.names[p][0] != 0 && netHere(match, p) ? 1 : 0;
+                    if (here > match.rules.most)
+                    {
+                        match.host.out.add(netEvent(NetEventType::Bye, from, 1));
+                        break;
+                    }
                     std::memcpy(match.names[from], event.text, kNetTextBytes);
                     match.names[from][kNetTextBytes - 1] = 0;
                     // Everyone's name to everyone: the newcomer has none yet.
@@ -272,6 +477,7 @@ namespace hldata
                         std::memcpy(roster.text, match.names[p], kNetTextBytes);
                         match.host.out.add(roster);
                     }
+                    netTellAll(match);
                     netNotice(match, NetEventType::Hello, from);
                 }
                 break;
@@ -289,7 +495,7 @@ namespace hldata
                 break;
             case NetEventType::Hit:
                 if (event.a == match.me && from != match.me && match.playing && player.health > 0 &&
-                    static_cast<std::uint8_t>(event.v[1]) == match.spawns)
+                    static_cast<std::uint8_t>(event.v[1]) == match.spawns && !netTeammates(match, from, match.me))
                 {
                     playerHurt(player, event.v[0], from < kNetPlayers ? match.glide[from].pos : nullptr);
                     match.blamed = from;
@@ -314,6 +520,66 @@ namespace hldata
                 {
                     match.frags[event.a] = event.v[0];
                     match.deaths[event.a] = event.v[1];
+                    match.teamFrags[1] = event.v[2];
+                    match.teamFrags[2] = event.v[3];
+                }
+                break;
+            case NetEventType::Rules:
+                if (!host)
+                {
+                    match.rules.mode = static_cast<std::uint8_t>(event.v[0]);
+                    match.rules.flags = static_cast<std::uint16_t>(event.v[1]);
+                    match.rules.most = static_cast<std::uint8_t>(event.v[2] < 2 ? 2 : (event.v[2] > kNetPlayers ? kNetPlayers : event.v[2]));
+                }
+                break;
+            case NetEventType::Profile:
+                if (from < kNetPlayers)
+                {
+                    NetProfile &profile = match.profiles[from];
+                    const std::uint32_t hash =
+                        static_cast<std::uint16_t>(event.v[4]) | static_cast<std::uint32_t>(static_cast<std::uint16_t>(event.v[5])) << 16;
+                    if (hash != profile.sprayHash)
+                        profile.pieces = 0;
+                    profile.known = true;
+                    profile.model = static_cast<std::uint8_t>(event.v[0]);
+                    profile.top = static_cast<std::uint8_t>(event.v[1] & 0xFF);
+                    profile.bottom = static_cast<std::uint8_t>((event.v[1] >> 8) & 0xFF);
+                    profile.asked = static_cast<std::uint8_t>(event.v[2]);
+                    profile.sprayColour = static_cast<std::uint8_t>(event.v[3]);
+                    profile.sprayHash = hash;
+                    ++match.profileStamp;
+                    if (host && from != match.me)
+                        netPickTeam(match, from);
+                }
+                break;
+            case NetEventType::SprayPiece:
+                if (from < kNetPlayers && event.a < kNetSprayPieces)
+                {
+                    NetProfile &profile = match.profiles[from];
+                    for (int i = 0; i < 12; ++i)
+                    {
+                        const int at = event.a * 12 + i;
+                        if (at < kNetSprayBytes)
+                            profile.spray[at] = static_cast<std::uint8_t>(static_cast<std::uint16_t>(event.v[i / 2]) >> ((i & 1) * 8));
+                    }
+                    profile.pieces |= 1u << event.a;
+                    ++match.profileStamp;
+                }
+                break;
+            case NetEventType::Team:
+                if (!host && event.a < kNetPlayers)
+                {
+                    match.profiles[event.a].team = static_cast<std::uint8_t>(event.v[0]);
+                    ++match.profileStamp;
+                }
+                break;
+            case NetEventType::Spray:
+                if (from != match.me && from < kNetPlayers && match.playing)
+                {
+                    const fx at[3] = {event.v[0] * 1024, event.v[1] * 1024, event.v[2] * 1024};
+                    fx normal[3];
+                    netUnpackNormal(event.v[3], event.v[4], normal);
+                    netSprayPlace(match, from, at, normal);
                 }
                 break;
             case NetEventType::Take:
@@ -326,7 +592,8 @@ namespace hldata
                     ActorWorld &a = *w.actors;
                     if (event.a == match.me && a.states[event.v[0]].active)
                         itemPickUp(w, player, event.v[0]);
-                    a.states[event.v[0]].active = false;
+                    // (v[1]: weapons stay, and so does this.)
+                    a.states[event.v[0]].active = event.v[1] != 0;
                     actorPlaceBox(a, event.v[0]);
                 }
                 break;
@@ -353,11 +620,22 @@ namespace hldata
                     w.sharing = sharing;
                 }
                 break;
+            case NetEventType::Bye:
+                // (The host's to a client it will not have: for that one
+                // alone, and the match goes on for the rest.)
+                if (from == 0 && event.v[0] == 1)
+                {
+                    if (event.a != match.me || match.me == 0)
+                        break;
+                    match.refused = true;
+                }
+                if (match.passedCount < NetMatch::kMostNotices)
+                    match.passed[match.passedCount++] = event;
+                break;
             case NetEventType::End:
                 match.over = true;
                 [[fallthrough]];
             case NetEventType::Start:
-            case NetEventType::Bye:
                 if (match.passedCount < NetMatch::kMostNotices)
                     match.passed[match.passedCount++] = event;
                 break;
@@ -512,6 +790,15 @@ namespace hldata
         a.shared = true;
         a.wanted = -1;
         w.sharing = true;
+        w.weaponsStay.value = match.rules.has(kRuleWeaponsStay);
+        w.flatFalls.value = !match.rules.has(kRuleRealisticFall);
+        w.lampBanned.value = !match.rules.has(kRuleFlashlight);
+        w.matchAutoaim.value = match.rules.has(kRuleAutoaim) ? 1 : 0;
+        match.sprayWaitMs = 0;
+        for (NetSprayMark &mark : match.sprays)
+            mark = NetSprayMark();
+        for (int t = 0; t < 3; ++t)
+            match.teamFrags[t] = 0;
         w.struckCount = 0;
         // Nobody of the map's own is in a match: no monsters, no people.
         // What lies about to be taken stays, and the furniture.
@@ -539,6 +826,90 @@ namespace hldata
             netSay(match, netEvent(NetEventType::Fire, 0, index));
     }
 
+    /// How this console's player looks (after netBegin): to everyone once it
+    /// has its place, with its spray (`spray`: kNetSprayBytes; null, none).
+    inline void netSetProfile(NetMatch &match, NetProfile profile, const std::uint8_t *spray)
+    {
+        profile.known = true;
+        profile.team = match.profiles[match.me].team;
+        if (spray != nullptr)
+        {
+            std::memcpy(profile.spray, spray, kNetSprayBytes);
+            profile.sprayHash = netSprayHash(profile.spray);
+            profile.pieces = kNetSprayAll;
+        }
+        else
+        {
+            profile.sprayHash = 0;
+            profile.pieces = 0;
+        }
+        match.myProfile = profile;
+        if (!netPlaced(match))
+            return; // (said once the host has said who this console is)
+        match.profiles[match.me] = profile;
+        ++match.profileStamp;
+        netSay(match, netProfileEvent(profile));
+        match.sprayNext = spray != nullptr ? 0 : kNetSprayPieces;
+        if (match.role == NetMatch::Role::Host)
+            detail::netPickTeam(match, match.me);
+    }
+
+    /// The host: the rules (before Start; again whenever they change). The
+    /// teams are picked again, every player in turn, for a teamplay match.
+    inline void netSetRules(NetMatch &match, const NetRules &rules)
+    {
+        if (match.role != NetMatch::Role::Host)
+            return;
+        match.rules = rules;
+        match.rules.most = static_cast<std::uint8_t>(rules.most < 2 ? 2 : (rules.most > kNetPlayers ? kNetPlayers : rules.most));
+        match.host.out.add(netEvent(NetEventType::Rules, 0, match.rules.mode, match.rules.flags, match.rules.most));
+        for (int p = 0; p < kNetPlayers; ++p)
+            match.profiles[p].team = 0;
+        for (int p = 0; p < kNetPlayers; ++p)
+        {
+            if (netHere(match, p))
+                detail::netPickTeam(match, p);
+        }
+    }
+
+    /// The team this console's player would rather be on (1, 2; 0: either):
+    /// the host says whether they are.
+    inline void netAskTeam(NetMatch &match, int team)
+    {
+        NetProfile profile = match.myProfile;
+        profile.asked = static_cast<std::uint8_t>(team == 1 || team == 2 ? team : 0);
+        const bool spray = profile.sprayHash != 0;
+        netSetProfile(match, profile, spray ? match.myProfile.spray : nullptr);
+        match.sprayNext = kNetSprayPieces; // (the spray is not sent again for that)
+    }
+
+    /// The local player sprays (the game's impulse 201): their spray on the
+    /// wall kNetSprayReach ahead of `eye` along `forward` (Q12), if there is
+    /// one, in the place of their last. False if there is no wall there, it
+    /// is too soon after the last, or they have no spray.
+    inline bool netSpray(NetMatch &match, LogicWorld &w, const PlayerState &player, const fx *eye, const fx *forward)
+    {
+        if (!match.playing || match.sprayWaitMs > 0 || player.health <= 0 || w.world == nullptr ||
+            !match.profiles[match.me].sprayWhole())
+            return false;
+        fx to[3];
+        for (int i = 0; i < 3; ++i)
+            to[i] = eye[i] + forward[i] * kNetSprayReach;
+        // (On the world: not on what moves, which would leave it behind.)
+        const Trace t = detail::pointTrace(*w.world, eye, to);
+        if (!t.hit || t.mover >= 0 || t.fraction >= kFractionOne)
+            return false;
+        fx normal[3];
+        for (int i = 0; i < 3; ++i)
+            normal[i] = t.normal[i] >> 18; // (Q30 to Q12)
+        detail::netSprayPlace(match, match.me, t.endPos, normal);
+        match.sprayWaitMs = kNetSprayWaitMs;
+        NetEvent spray = netEvent(NetEventType::Spray, 0, t.endPos[0] >> 10, t.endPos[1] >> 10, t.endPos[2] >> 10);
+        netPackNormal(normal, spray.v[3], spray.v[4]);
+        netSay(match, spray);
+        return true;
+    }
+
     namespace detail
     {
         /// A client: which player it is, once the host has said.
@@ -548,6 +919,43 @@ namespace hldata
             {
                 match.me = match.client.me;
                 std::memcpy(match.names[match.me], match.myName, kNetTextBytes);
+                // How this console's player looks, to everyone, now that
+                // they know who it is.
+                if (match.myProfile.known)
+                {
+                    match.profiles[match.me] = match.myProfile;
+                    ++match.profileStamp;
+                    netSay(match, netProfileEvent(match.myProfile));
+                    match.sprayNext = 0;
+                }
+            }
+        }
+
+        /// Once a frame: this console's spray, a little at a time; and on
+        /// the host, the others' passed on -- while there is room for them
+        /// beside what a match says (a spray is not worth a lost link).
+        inline void netShare(NetMatch &match)
+        {
+            if (!netPlaced(match))
+                return;
+            const bool host = match.role == NetMatch::Role::Host;
+            const NetOutbox &out = host ? match.host.out : match.client.out;
+            for (int n = 0; n < 2 && match.sprayNext < kNetSprayPieces && out.count < NetOutbox::kMost - 32; ++n)
+                netSay(match, netSprayPiece(match.myProfile, match.sprayNext++));
+            if (!host)
+                return;
+            for (int p = 1; p < kNetPlayers; ++p)
+            {
+                const std::uint32_t pending = match.profiles[p].pieces & ~match.relayed[p];
+                for (int piece = 0; piece < kNetSprayPieces && match.host.out.count < NetOutbox::kMost - 32; ++piece)
+                {
+                    if (!(pending & (1u << piece)))
+                        continue;
+                    NetEvent e = netSprayPiece(match.profiles[p], piece);
+                    e.from = static_cast<std::uint8_t>(p);
+                    match.host.out.add(e);
+                    match.relayed[p] |= 1u << piece;
+                }
             }
         }
 
@@ -573,6 +981,8 @@ namespace hldata
                         case NetEventType::Spawned:
                         case NetEventType::Fire:
                         case NetEventType::Bye:
+                        case NetEventType::Profile:
+                        case NetEventType::Spray:
                             match.host.out.add(event);
                             break;
                         default:
@@ -600,6 +1010,7 @@ namespace hldata
         match.mine = NetPlayer();
         match.mine.flags = kNetHere;
         detail::netEvents(match, none, nobody);
+        detail::netShare(match);
     }
 
     /// Once a frame, after the game's own tick. `yaw` and `pitch` are the
@@ -635,13 +1046,16 @@ namespace hldata
                 actor.health = kNetActorHealth;
                 // (Which of their lives it was: a hit on one that is over
                 // by the time it arrives is not taken by the next.)
-                if (hurt > 0 && player.health > 0)
+                // (Nor on a teammate, without friendly fire.)
+                if (hurt > 0 && player.health > 0 && !netTeammates(match, match.me, p))
                     netSay(match, netEvent(NetEventType::Hit, p, hurt > 30000 ? 30000 : hurt, netPlayer(match, p).spawns));
             }
             // What they struck of the map's.
             for (int n = 0; n < w.struckCount; ++n)
                 netSay(match, netEvent(NetEventType::Fire, 1, w.struck[n * 2], w.struck[n * 2 + 1]));
             w.struckCount = 0;
+            if (match.sprayWaitMs > 0)
+                match.sprayWaitMs -= ms;
             // What they would pick up.
             if (a.wanted >= 0)
             {
@@ -714,6 +1128,7 @@ namespace hldata
 
         // ---- what the others did
         detail::netEvents(match, w, player);
+        detail::netShare(match);
 
         // ---- the others, here
         for (int p = 0; p < kNetPlayers && match.firstActor >= 0; ++p)
@@ -803,8 +1218,11 @@ namespace hldata
         if (!match.over)
         {
             bool done = match.minuteLimit > 0 && match.playedMs >= match.minuteLimit * 60000;
-            for (int p = 0; p < kNetPlayers; ++p)
+            // (In teamplay, a team's frags: the game's teamplay rules.)
+            for (int p = 0; p < kNetPlayers && !match.rules.teams(); ++p)
                 done = done || (match.fragLimit > 0 && match.frags[p] >= match.fragLimit);
+            for (int t = 1; t <= 2 && match.rules.teams(); ++t)
+                done = done || (match.fragLimit > 0 && match.teamFrags[t] >= match.fragLimit);
             if (done)
             {
                 match.over = true;

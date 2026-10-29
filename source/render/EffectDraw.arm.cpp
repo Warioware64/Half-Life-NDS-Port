@@ -17,6 +17,9 @@
 #include "game/Player.hpp"
 #include "render/Camera.hpp"
 #include "render/WorldDraw.hpp"
+#include "HlNetGame.hpp"
+#include "HlSettings.hpp"
+#include "net/NetGame.hpp"
 
 namespace hlrt
 {
@@ -614,6 +617,12 @@ namespace hlrt
         }
         const int most = isDSiMode() ? kDecalPolygons : kDecalPolygons / 2;
         marks = marks > most ? most : marks;
+        // (And the sprays of a match: one each, at most.)
+        if (netGame.playing())
+        {
+            for (const NetSprayMark &mark : netGame.match().sprays)
+                marks += mark.active ? 1 : 0;
+        }
         polygons += marks + pieces;
         vertices += marks * 4 + pieces * 3;
     }
@@ -778,6 +787,130 @@ namespace hlrt
             GFX_TEX_FORMAT = 0;
             NEA_PolyFormat(31, 0, static_cast<NEA_LightEnum>(0), WorldDraw::kCull, worldDraw.polygonMode());
             GFX_COLOR = 0x7FFF;
+        }
+        return drawn;
+    }
+
+    void EffectDraw::loadSprays(const NetMatch &match)
+    {
+        static_assert(kMaxSprays >= kNetPlayers);
+        dropSprays();
+        for (int p = 0; p < kNetPlayers; ++p)
+        {
+            const NetProfile &profile = match.profiles[p];
+            if (!profile.sprayWhole())
+                continue;
+            // How solid the paint is (the logo's four levels: nothing, a
+            // third, two thirds, all of it), in one colour: A3I5, all its
+            // texels the palette's first.
+            static std::uint8_t texels[32 * 32];
+            static constexpr std::uint8_t kAlpha[4] = {0, 3 << 5, 5 << 5, 7 << 5};
+            for (int y = 0; y < 32; ++y)
+            {
+                for (int x = 0; x < 32; ++x)
+                {
+                    // (Its rows as the logos' are: HlUi.hpp's IconsView.)
+                    const std::uint8_t byte = profile.spray[y * 8 + (x >> 2)];
+                    texels[y * 32 + x] = kAlpha[(byte >> ((x & 3) * 2)) & 3];
+                }
+            }
+            const std::uint8_t *rgb = kSprayColour[profile.sprayColour % kSprayColours];
+            std::uint16_t colours[32];
+            for (std::uint16_t &c : colours)
+                c = static_cast<std::uint16_t>((rgb[0] >> 3) | (rgb[1] >> 3) << 5 | (rgb[2] >> 3) << 10);
+            NEA_Material *material = NEA_MaterialCreate();
+            NEA_Palette *palette = NEA_PaletteCreate();
+            if (material != nullptr && palette != nullptr &&
+                NEA_MaterialTexLoad(material, NEA_A3PAL32, 32, 32, NEA_TEXGEN_TEXCOORD, texels) == 1 &&
+                NEA_PaletteLoad(palette, colours, 32, NEA_A3PAL32) == 1)
+            {
+                NEA_MaterialSetPalette(material, palette);
+                sprayMaterials_[p] = material;
+                sprayPalettes_[p] = palette;
+                continue;
+            }
+            // (No room: that one is not seen.)
+            if (material != nullptr)
+                NEA_MaterialDelete(material);
+            if (palette != nullptr)
+                NEA_PaletteDelete(palette);
+        }
+    }
+
+    void EffectDraw::dropSprays()
+    {
+        for (int p = 0; p < kMaxSprays; ++p)
+        {
+            if (sprayMaterials_[p] != nullptr)
+                NEA_MaterialDelete(static_cast<NEA_Material *>(sprayMaterials_[p]));
+            if (sprayPalettes_[p] != nullptr)
+                NEA_PaletteDelete(static_cast<NEA_Palette *>(sprayPalettes_[p]));
+            sprayMaterials_[p] = sprayPalettes_[p] = nullptr;
+        }
+    }
+
+    int EffectDraw::drawSprays()
+    {
+        if (!netGame.playing() || player.noclip)
+            return 0;
+        const NetMatch &match = netGame.match();
+        constexpr int kDepthEqual = 1 << 14; // (as the marks: only where the wall is)
+        int drawn = 0;
+        for (int p = 0; p < kNetPlayers; ++p)
+        {
+            const NetSprayMark &mark = match.sprays[p];
+            if (!mark.active || sprayMaterials_[p] == nullptr)
+                continue;
+            const fx *n = mark.normal;
+            const std::int32_t d[3] = {fxToInt(camera.pos[0] - mark.at[0]), fxToInt(camera.pos[1] - mark.at[1]),
+                                       fxToInt(camera.pos[2] - mark.at[2])};
+            const std::int32_t facing = d[0] * n[0] + d[1] * n[1] + d[2] * n[2];
+            const std::int16_t centre[3] = {static_cast<std::int16_t>(fxToInt(mark.at[0])),
+                                            static_cast<std::int16_t>(fxToInt(mark.at[1])),
+                                            static_cast<std::int16_t>(fxToInt(mark.at[2]))};
+            if (facing <= 0 || !worldDraw.ballVisible(centre, kNetSprayHalf + 2))
+                continue;
+            // Upright on a wall, as the game sprays it: across, its right
+            // as one looks at it; up, the world's up in its plane. (On a
+            // floor or a ceiling, across as the view looks.)
+            fx u[3] = {-n[1], n[0], 0};
+            fx length = fxLength(u);
+            if (length < 1024)
+            {
+                u[0] = camera.forward[1];
+                u[1] = -camera.forward[0];
+                u[2] = 0;
+                length = fxLength(u);
+                if (length < 64)
+                    continue;
+            }
+            for (fx &c : u)
+                c = static_cast<fx>((static_cast<std::int64_t>(c) << 12) / length);
+            const fx v[3] = {(n[1] * u[2] - n[2] * u[1]) >> 12, (n[2] * u[0] - n[0] * u[2]) >> 12,
+                             (n[0] * u[1] - n[1] * u[0]) >> 12};
+            if (drawn == 0)
+                camera.apply();
+            NEA_MaterialUse(static_cast<NEA_Material *>(sprayMaterials_[p]));
+            NEA_PolyFormat(31, kIdMarks, static_cast<NEA_LightEnum>(0), NEA_CULL_NONE,
+                           static_cast<NEA_OtherFormatEnum>(static_cast<int>(worldDraw.polygonMode()) | kDepthEqual));
+            GFX_COLOR = 0x7FFF;
+            static constexpr int kSign[4][2] = {{-1, 1}, {1, 1}, {1, -1}, {-1, -1}};
+            static constexpr int kTexel[4][2] = {{0, 0}, {32, 0}, {32, 32}, {0, 32}};
+            GFX_BEGIN = GL_QUADS;
+            for (int k = 0; k < 4; ++k)
+            {
+                fx corner3[3];
+                for (int i = 0; i < 3; ++i)
+                    corner3[i] = mark.at[i] + u[i] * kNetSprayHalf * kSign[k][0] + v[i] * kNetSprayHalf * kSign[k][1];
+                GFX_TEX_COORD = TEXTURE_PACK(kTexel[k][0] << 4, kTexel[k][1] << 4);
+                corner(corner3);
+            }
+            ++drawn;
+        }
+        if (drawn > 0)
+        {
+            GFX_TEX_FORMAT = 0;
+            NEA_PolyFormat(31, 0, static_cast<NEA_LightEnum>(0), WorldDraw::kCull, worldDraw.polygonMode());
         }
         return drawn;
     }

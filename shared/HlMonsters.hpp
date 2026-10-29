@@ -3441,8 +3441,12 @@ namespace hldata
                         PlayerState trial = player;
                         Arsenal trialArsenal = player.arsenal != nullptr ? *player.arsenal : Arsenal();
                         trial.arsenal = player.arsenal != nullptr ? &trialArsenal : nullptr;
-                        std::uint32_t ignored = 0;
-                        if (a.wanted == -1 && detail::itemTakeAt(w, trial, i, ignored))
+                        std::uint32_t got = 0;
+                        // (Weapons stay: a weapon only for who has not got
+                        // it -- what is with it is not taken by who has.)
+                        const bool weapon = itemViewModel(static_cast<ItemKind>(actor.item)) != nullptr;
+                        if (a.wanted == -1 && detail::itemTakeAt(w, trial, i, got) &&
+                            (!w.weaponsStay.value || !weapon || (got & kGotWeapon)))
                             a.wanted = static_cast<std::int16_t>(i);
                     }
                     else

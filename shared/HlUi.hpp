@@ -478,15 +478,17 @@ namespace hldata
     inline constexpr int kUiSoundMove = 5;
     inline constexpr int kUiSoundHudOff = 6;
     inline constexpr int kUiSoundDeny = 7;
-    inline constexpr int kUiSoundCount = 8;
+    /// A spray put on a wall, in a match (the game's player/sprayer.wav).
+    inline constexpr int kUiSoundSpray = 8;
+    inline constexpr int kUiSoundCount = 9;
     /// Their files under snd/ on the card (without ".hsn"), and where each
     /// is in the game's sound folder.
     inline constexpr const char *const kUiSoundFiles[kUiSoundCount] = {
-        "ui_press", "ui_tick", "ui_weapon", "ui_lamp", "ui_hudon", "ui_move", "ui_hudoff", "ui_deny"};
+        "ui_press", "ui_tick", "ui_weapon", "ui_lamp", "ui_hudon", "ui_move", "ui_hudoff", "ui_deny", "ui_spray"};
     inline constexpr const char *const kUiSoundSources[kUiSoundCount] = {
         "common/launch_select2.wav", "common/launch_dnmenu1.wav", "common/wpn_select.wav",
         "items/flashlight1.wav",     "common/wpn_hudon.wav",      "common/wpn_moveselect.wav",
-        "common/wpn_hudoff.wav",     "common/wpn_denyselect.wav"};
+        "common/wpn_hudoff.wav",     "common/wpn_denyselect.wav", "player/sprayer.wav"};
 
     /// Blanks a value moved by the stylus rests before its sound is heard
     /// (a sixth of a second, as the weapon list's rows: HlWeaponList.hpp).

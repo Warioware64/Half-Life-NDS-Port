@@ -54,6 +54,11 @@ namespace hldata
 
     /// Actors that may arrive from the map before, on top of the map's own.
     inline constexpr int kMaxVisitors = 4;
+    /// ... and on a multiplayer map, in their place, the players of a match
+    /// between consoles (HlNet.hpp's kNetPlayers): a map nobody saves, so
+    /// that the saves' count of actors (kMaxVisitors) is not changed.
+    inline constexpr int kMaxMatchPlayers = 8;
+    inline constexpr int kMaxSpareActors = kMaxMatchPlayers > kMaxVisitors ? kMaxMatchPlayers : kMaxVisitors;
 
     // What a script is doing with the actor it has (ActorState::scriptPhase).
     inline constexpr std::uint8_t kActorFree = 0;

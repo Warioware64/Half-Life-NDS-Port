@@ -130,6 +130,9 @@ namespace hldata
         std::uint8_t firmPress = kFirmOff;
         /// CUSTOM: each action's buttons (kButton*; any of them does it).
         std::uint16_t keys[kActionCount] = {};
+        /// A match between consoles is on: the touch screen has SPRAY
+        /// (HlTouchLayout.hpp). Not a setting: the game's state.
+        bool match = false;
     };
 
     /// Each action's buttons in a layout (not CUSTOM, whose are its own).
@@ -270,6 +273,7 @@ namespace hldata
         bool reloadPressed = false;
         int touchOn = kTouchAim;
         bool lampPressed = false;
+        bool sprayPressed = false; ///< (a match's: the touch screen's SPRAY)
         bool startPressed = false;
         bool tapped = false; ///< the stylus came down this frame, at (tapX, tapY)
         int tapX = 0, tapY = 0;
@@ -386,14 +390,15 @@ namespace hldata
                 out.tapX = in.touchX;
                 out.tapY = in.touchY;
                 // Where a touch STARTS decides what it is for its whole life.
-                state.touch = touchHit(touchLayout(set.leftHanded), in.touchX, in.touchY);
+                state.touch = touchHit(touchLayout(set.leftHanded, set.match), in.touchX, in.touchY);
                 // USE, MENU, RELOAD and a weapon's slot are presses, not
                 // holds: they happen on the frame the stylus lands on them.
                 out.usePressed = out.usePressed || state.touch == kTouchUse;
                 out.menuPressed = state.touch == kTouchMenu;
                 out.reloadPressed = out.reloadPressed || state.touch == kTouchReload;
                 out.lampPressed = out.lampPressed || state.touch == kTouchLamp;
-                if (state.touch >= kTouchSlot)
+                out.sprayPressed = state.touch == kTouchSpray;
+                if (state.touch >= kTouchSlot && state.touch < kTouchSlot + kTouchSlots)
                     out.weaponPick = state.touch - kTouchSlot + 1;
                 // The button on the screen: held to crouch (and then slid off
                 // to turn the view, still crouched: duckSlide); or, with the
@@ -423,7 +428,7 @@ namespace hldata
                 }
             }
             else if (state.touch == kTouchDuck && !set.duckToggle &&
-                     touchHit(touchLayout(set.leftHanded), in.touchX, in.touchY) != kTouchDuck)
+                     touchHit(touchLayout(set.leftHanded, set.match), in.touchX, in.touchY) != kTouchDuck)
             {
                 // Held DUCK slid off it: the view turns from here on (from
                 // where it is now: no jerk), still crouched -- and it is no

@@ -10,6 +10,7 @@
 
 #include "HlNet.hpp"
 #include "HlNetGame.hpp"
+#include "HlView.hpp"
 #include "TestGame.hpp"
 
 using namespace hldata;
@@ -396,18 +397,24 @@ namespace
         return c;
     }
 
-    /// Three consoles and the air between them.
+    /// Consoles (three, unless said) and the air between them.
     struct Room
     {
-        static constexpr int kCount = 3;
-        std::unique_ptr<Console> c[kCount];
-        Air down[kCount], up[kCount];
+        int count = 3;
+        /// More than four: the host's frames every other tick (NetGame's
+        /// rate), each client answering what it has.
+        bool halfRate = false;
+        /// A client's match begins once the host has said which player it
+        /// is; or, as on a console, when it is told to (startAll).
+        bool startWhenPlaced = true;
+        std::unique_ptr<Console> c[kNetPlayers];
+        Air down[kNetPlayers], up[kNetPlayers];
         int now = 0;
 
         void tick(int ms = 33)
         {
             ++now;
-            for (int n = 0; n < kCount; ++n)
+            for (int n = 0; n < count; ++n)
             {
                 if (c[n]->gone)
                     continue;
@@ -416,7 +423,7 @@ namespace
                 logicTick(g.logic, g.player, ms);
                 monstersTick(g.logic, g.player, ms);
                 // (A client's match begins when the host has said which player it is.)
-                if (!c[n]->match->playing && netPlaced(*c[n]->match))
+                if (startWhenPlaced && !c[n]->match->playing && netPlaced(*c[n]->match))
                     netStart(*c[n]->match, g.logic, g.player, static_cast<int>(g.view.actorCount), c[n]->model,
                              c[n]->spawns.data(), static_cast<int>(c[n]->spawns.size()), 77u * static_cast<unsigned>(n + 1));
                 netTick(*c[n]->match, g.logic, g.player, static_cast<std::uint16_t>(n * 1000), 0, c[n]->did, false, ms);
@@ -425,8 +432,8 @@ namespace
                 g.player.hurt = 0;
             }
             std::uint8_t frame[kNetCmdBytes];
-            const int size = netWrite(*c[0]->match, frame);
-            for (int n = 1; n < kCount; ++n)
+            const int size = halfRate && (now & 1) ? 0 : netWrite(*c[0]->match, frame);
+            for (int n = 1; n < count; ++n)
             {
                 down[n].now = up[n].now = now;
                 if (c[n]->gone)
@@ -444,6 +451,17 @@ namespace
         {
             for (int n = 0; n < ticks; ++n)
                 tick();
+        }
+        /// Every console's match begins (the host's again: with the rules
+        /// as they are now).
+        void startAll()
+        {
+            for (int n = 0; n < count; ++n)
+            {
+                Game &g = c[n]->g();
+                netStart(*c[n]->match, g.logic, g.player, static_cast<int>(g.view.actorCount), c[n]->model,
+                         c[n]->spawns.data(), static_cast<int>(c[n]->spawns.size()), 77u * static_cast<unsigned>(n + 1));
+            }
         }
     };
 
@@ -501,6 +519,277 @@ namespace
         check(started, "the host's word to start reaches each of them, once, with which map and what limits");
     }
 
+    /// Version 2's frames and what goes in them: eight players and still
+    /// room; the room's card, the bars, a wall's facing, there and back.
+    void testWire()
+    {
+        NetHost host;
+        for (int c = 1; c < kNetPlayers; ++c)
+            netHostJoin(host, c);
+        for (int n = 0; n < 100; ++n)
+            host.out.add(numbered(NetEventType::Shot, 0, n));
+        NetPlayer mine;
+        std::uint8_t frame[kNetCmdBytes];
+        const int size = netHostWrite(host, mine, frame);
+        const int events = frame[kNetHostFixedBytes - 1];
+        check(size > 0 && size <= kNetCmdBytes && events >= 30,
+              "a host's frame of eight players fits the radio, with thirty events and more in it");
+        NetClient client;
+        client.token = 9;
+        for (int n = 0; n < 40; ++n)
+            client.out.add(numbered(NetEventType::Shot, 0, n));
+        std::uint8_t reply[kNetReplyBytes];
+        const int replySize = netClientWrite(client, mine, reply);
+        check(replySize > 0 && replySize <= kNetReplyBytes, "... and a client's, full, fits its own");
+
+        NetRoomInfo room;
+        room.mode = kNetModeTeamplay;
+        room.most = 8;
+        room.guests = true;
+        room.mapHash = nameHash("crossfire");
+        std::uint8_t card[kNetRoomBytes];
+        netRoomWrite(room, card);
+        NetRoomInfo back;
+        check(netRoomRead(card, kNetRoomBytes, back) && back.version == kNetVersion && back.mode == kNetModeTeamplay &&
+                  back.most == 8 && back.guests && back.mapHash == nameHash("crossfire"),
+              "what a host's beacon says of its match reads back as it was");
+        check(!netRoomRead(card, 0, back) && back.version == 0, "a host that says nothing is one of an older build");
+        check(netBars(60) == 4 && netBars(20) == 2 && netBars(0) == 0 && netBars(-50) == 4 && netBars(-95) == 0 &&
+                  netShareBars(60) == 4 && netShareBars(30) == 2 && netShareBars(0) == 0,
+              "a signal's strength, and a link's answers, as bars");
+        // (How many of the host's frames a client answered.)
+        NetHost h2;
+        netHostJoin(h2, 1);
+        std::uint8_t r[kNetReplyBytes];
+        NetClient one;
+        one.token = 5;
+        for (int n = 0; n < 60; ++n)
+        {
+            netHostWrite(h2, mine, frame);
+            if (n % 2 == 0)
+                netHostRead(h2, 1, r, netClientWrite(one, mine, r));
+        }
+        check(netLinkShare(h2, 1) == 30, "the host counts the frames a client answered, of its last sixty");
+        const fx facing[3] = {2896, -2896, 0};
+        std::int16_t low, high;
+        netPackNormal(facing, low, high);
+        fx unpacked[3];
+        netUnpackNormal(low, high, unpacked);
+        bool near = true;
+        for (int i = 0; i < 3; ++i)
+            near = near && unpacked[i] - facing[i] < 16 && facing[i] - unpacked[i] < 16;
+        check(near, "a wall's facing, packed in two numbers, comes back as it was");
+        check(fallDamage(700, true) == 10 && fallDamage(500, true) == 0 && fallDamage(700, false) == fallDamage(700) &&
+                  fallDamage(1024, true) == 10,
+              "a match's falls cost a flat 10 past the safe speed; a realistic one, as the game alone has them");
+    }
+
+    /// A lobby of `count` consoles through bad air: the host's rules, and each
+    /// one's profile and spray to all.
+    struct Lobby
+    {
+        int count = 0;
+        std::unique_ptr<NetMatch> m[kNetPlayers];
+        Air down[kNetPlayers], up[kNetPlayers];
+        std::uint8_t sprays[kNetPlayers][kNetSprayBytes] = {};
+        LogicWorld none;
+        PlayerState nobody;
+
+        void add(int n)
+        {
+            m[n] = std::make_unique<NetMatch>();
+            char name[kNetTextBytes];
+            std::snprintf(name, sizeof(name), "P%d", n);
+            netBegin(*m[n], n == 0 ? NetMatch::Role::Host : NetMatch::Role::Client, static_cast<std::uint16_t>(70 + n),
+                     name);
+            for (int i = 0; i < kNetSprayBytes; ++i)
+                sprays[n][i] = static_cast<std::uint8_t>(rnd());
+            NetProfile profile;
+            profile.top = static_cast<std::uint8_t>(10 + n * 20);
+            profile.bottom = static_cast<std::uint8_t>(200 - n * 10);
+            profile.sprayColour = static_cast<std::uint8_t>(n % 9);
+            netSetProfile(*m[n], profile, sprays[n]);
+            if (n > 0)
+                netHostJoin(m[0]->host, n);
+            count = n + 1 > count ? n + 1 : count;
+        }
+        void run(int ticks)
+        {
+            for (int t = 0; t < ticks; ++t)
+            {
+                std::uint8_t frame[kNetCmdBytes];
+                for (int n = 0; n < count; ++n)
+                    if (m[n])
+                        netTick(*m[n], none, nobody, 0, 0, 0, false, 17);
+                const int size = netWrite(*m[0], frame);
+                for (int n = 1; n < count; ++n)
+                {
+                    if (!m[n])
+                        continue;
+                    down[n].now = up[n].now = down[n].now + 1;
+                    down[n].send(frame, size);
+                    for (const auto &bytes : down[n].land())
+                        netRead(*m[n], bytes.data(), static_cast<int>(bytes.size()));
+                    std::uint8_t reply[kNetReplyBytes];
+                    up[n].send(reply, netWrite(*m[n], reply));
+                    for (const auto &bytes : up[n].land())
+                        netRead(*m[0], bytes.data(), static_cast<int>(bytes.size()), n);
+                }
+            }
+        }
+        /// Whether console `n` knows player `p` as `p` made themself.
+        bool knows(int n, int p) const
+        {
+            const NetProfile &profile = m[n]->profiles[p];
+            return profile.known && profile.top == 10 + p * 20 && profile.bottom == 200 - p * 10 &&
+                   profile.sprayColour == p % 9 && profile.sprayWhole() &&
+                   std::memcmp(profile.spray, sprays[p], kNetSprayBytes) == 0;
+        }
+    };
+
+    void testLobbyOfEight()
+    {
+        Lobby lobby;
+        lobby.add(0);
+        NetRules rules;
+        rules.mode = kNetModeTeamplay;
+        rules.flags = kRuleWeaponsStay | kRuleAutoaim;
+        rules.most = kNetPlayers;
+        netSetRules(*lobby.m[0], rules);
+        for (int n = 1; n < 6; ++n)
+            lobby.add(n);
+        lobby.run(400);
+        bool all = true;
+        for (int n = 0; n < 6; ++n)
+            for (int p = 0; p < 6; ++p)
+                all = all && lobby.knows(n, p);
+        check(all, "six in a lobby through bad air: each has everyone's profile and spray, byte for byte");
+        // Two come late.
+        lobby.add(6);
+        lobby.add(7);
+        lobby.run(400);
+        bool late = true;
+        for (int n = 0; n < kNetPlayers; ++n)
+            for (int p = 0; p < kNetPlayers; ++p)
+                late = late && lobby.knows(n, p);
+        check(late, "two more come late: they have everyone's, and everyone theirs -- eight");
+        bool lost = lobby.m[0]->host.out.lost == 0;
+        for (int n = 1; n < kNetPlayers; ++n)
+            lost = lost && lobby.m[n]->client.out.lost == 0;
+        check(lost, "... and nothing was dropped for want of room, the sprays and all");
+
+        // The teams: the host's word, the same on every console, no more
+        // than one apart.
+        bool same = true;
+        int sizes[3] = {0, 0, 0};
+        for (int p = 0; p < kNetPlayers; ++p)
+        {
+            const int team = lobby.m[0]->profiles[p].team;
+            sizes[team < 3 ? team : 0]++;
+            for (int n = 1; n < kNetPlayers; ++n)
+                same = same && lobby.m[n]->profiles[p].team == team;
+        }
+        check(same && sizes[0] == 0 && sizes[1] == 4 && sizes[2] == 4,
+              "teamplay: everyone on a team, four and four, and every console agrees");
+        // Asking: to the other team is refused while it would make five and three...
+        const int was = lobby.m[3]->profiles[3].team;
+        netAskTeam(*lobby.m[3], 3 - was);
+        lobby.run(100);
+        check(lobby.m[3]->profiles[3].team == was && lobby.m[5]->profiles[3].team == was,
+              "a player who asks for the other team is refused while it would make them five to three");
+        // ... and given when it would not: one of the other team asks first.
+        int other = -1;
+        for (int p = 1; p < kNetPlayers && other < 0; ++p)
+            if (lobby.m[0]->profiles[p].team != was)
+                other = p;
+        netAskTeam(*lobby.m[other], was);
+        lobby.run(100);
+        netAskTeam(*lobby.m[3], 3 - was);
+        lobby.run(100);
+        check(lobby.m[other]->profiles[other].team == 3 - was || lobby.m[3]->profiles[3].team == 3 - was,
+              "... and given when the teams stay no more than one apart");
+        bool rulesKnown = true;
+        for (int n = 1; n < kNetPlayers; ++n)
+            rulesKnown = rulesKnown && lobby.m[n]->rules.mode == kNetModeTeamplay &&
+                         lobby.m[n]->rules.flags == (kRuleWeaponsStay | kRuleAutoaim) && lobby.m[n]->rules.most == 8;
+        check(rulesKnown, "every console has the host's rules");
+        // The rules said before the start arrive before it.
+        rules.flags = kRuleFriendlyFire;
+        netSetRules(*lobby.m[0], rules);
+        netSay(*lobby.m[0], netEvent(NetEventType::Start, 0, 1, 2, 20, 10, 2));
+        for (int n = 1; n < kNetPlayers; ++n)
+            lobby.m[n]->passedCount = 0;
+        bool ordered = true;
+        for (int t = 0; t < 60; ++t)
+        {
+            lobby.run(1);
+            for (int n = 1; n < kNetPlayers; ++n)
+                if (lobby.m[n]->passedCount > 0 && lobby.m[n]->passed[0].type == NetEventType::Start)
+                    ordered = ordered && lobby.m[n]->rules.flags == kRuleFriendlyFire;
+        }
+        bool startedAll = true;
+        for (int n = 1; n < kNetPlayers; ++n)
+            startedAll = startedAll && lobby.m[n]->rules.flags == kRuleFriendlyFire;
+        check(ordered && startedAll, "the rules said before the start are known before the start is");
+    }
+
+    /// The host lets in no more than its rules say.
+    void testTooMany()
+    {
+        Lobby lobby;
+        lobby.add(0);
+        NetRules rules;
+        rules.most = 4;
+        netSetRules(*lobby.m[0], rules);
+        for (int n = 1; n < 5; ++n)
+            lobby.add(n);
+        lobby.run(200);
+        int refused = 0;
+        for (int n = 1; n < 5; ++n)
+            refused += lobby.m[n]->refused ? 1 : 0;
+        // (Which of them is the fifth is whichever the host heard last:
+        // through this air, not always the last to begin.)
+        check(refused == 1, "with four to play, the fifth the host hears from is told so, and no other");
+        bool four = true;
+        for (int n = 0; n < 5; ++n)
+            for (int p = 0; p < 5; ++p)
+                four = four && (n == p || (n > 0 && lobby.m[n]->refused) || (p > 0 && lobby.m[p]->refused) ||
+                                lobby.knows(n, p));
+        check(four, "... and the four play on, knowing each other");
+    }
+
+    /// The scores of a teamplay match, as the host keeps them.
+    void testTeamScore()
+    {
+        NetMatch match;
+        netBegin(match, NetMatch::Role::Host, 0, "Host");
+        for (int c = 1; c < 4; ++c)
+        {
+            netHostJoin(match.host, c);
+            match.host.players[c].flags = kNetHere;
+        }
+        match.rules.mode = kNetModeTeamplay;
+        const int teams[4] = {1, 2, 1, 2};
+        for (int p = 0; p < 4; ++p)
+            match.profiles[p].team = static_cast<std::uint8_t>(teams[p]);
+        hldata::detail::netScore(match, 1, 0); // 0 kills 1: across
+        check(match.frags[0] == 1 && match.teamFrags[1] == 1 && match.teamFrags[2] == 0, "a kill: a frag, for the team");
+        hldata::detail::netScore(match, 2, 0); // 0 kills 2: a teammate
+        check(match.frags[0] == 0 && match.teamFrags[1] == 0 && match.deaths[2] == 1,
+              "a teammate killed: a frag less for the killer, and for the team");
+        hldata::detail::netScore(match, 3, 3); // a death by their own hand
+        check(match.frags[3] == -1 && match.teamFrags[2] == -1, "a death by one's own hand: a frag less");
+        hldata::detail::netScore(match, 3, 1); // 1 kills 3: a teammate
+        check(match.frags[1] == -1 && match.teamFrags[2] == -2 && match.deaths[3] == 2, "... the other team's too");
+        check(netTeammates(match, 0, 2) && !netTeammates(match, 0, 1) && !netTeammates(match, 0, 0),
+              "teammates cannot hurt each other, without friendly fire");
+        match.rules.flags |= kRuleFriendlyFire;
+        check(!netTeammates(match, 0, 2), "... and can, with it");
+        match.rules.mode = kNetModeDeathmatch;
+        match.rules.flags = 0;
+        check(!netTeammates(match, 0, 2), "... and in a free-for-all there are no teams");
+    }
+
     int far(const fx *a, const fx *b)
     {
         fx d[3] = {a[0] - b[0], a[1] - b[1], a[2] - b[2]};
@@ -511,7 +800,7 @@ namespace
     {
         Room room;
         static const char *const kNames[] = {"Host", "Anna", "Bob"};
-        for (int n = 0; n < Room::kCount; ++n)
+        for (int n = 0; n < room.count; ++n)
         {
             room.c[n] = console(dir, "crossfire", n == 0 ? NetMatch::Role::Host : NetMatch::Role::Client, n, kNames[n]);
             if (!room.c[n])
@@ -530,9 +819,9 @@ namespace
 
         // ---- everyone is seen by everyone, where they are
         bool seen = true, named = true, apart = true;
-        for (int n = 0; n < Room::kCount; ++n)
+        for (int n = 0; n < room.count; ++n)
         {
-            for (int p = 0; p < Room::kCount; ++p)
+            for (int p = 0; p < room.count; ++p)
             {
                 if (p == n)
                     continue;
@@ -587,7 +876,7 @@ namespace
         room.run(45);
         check(bob.player().health <= 0, "enough of it kills him");
         bool scored = true;
-        for (int n = 0; n < Room::kCount; ++n)
+        for (int n = 0; n < room.count; ++n)
             scored = scored && room.c[n]->match->frags[1] == 1 && room.c[n]->match->deaths[2] == 1 &&
                      room.c[n]->match->frags[2] == 0 && room.c[n]->match->frags[0] == 0;
         check(scored, "... a frag for Anna and a death for Bob, on every console");
@@ -626,7 +915,7 @@ namespace
         bob.player().health = 0;
         room.run(45);
         bool own = true;
-        for (int n = 0; n < Room::kCount; ++n)
+        for (int n = 0; n < room.count; ++n)
             own = own && room.c[n]->match->frags[2] == -1 && room.c[n]->match->deaths[2] == 2 &&
                   room.c[n]->match->frags[1] == 1;
         check(own, "a death by nobody else costs him a frag, and gives nobody one");
@@ -655,7 +944,7 @@ namespace
             const bool his = (bob.player().inv.have & (1u << kWeaponShotgun)) != 0;
             check(hers != his, "two reach for one shotgun: one of them has it, and only one");
             bool gone = true;
-            for (int n = 0; n < Room::kCount; ++n)
+            for (int n = 0; n < room.count; ++n)
                 gone = gone && !room.c[n]->g().actorStates[item].active;
             check(gone, "... and it is gone from where it lay, on every console");
             // (They stand on it still: it is theirs again the moment it is back. Away.)
@@ -663,12 +952,12 @@ namespace
             bob.player().origin[0] -= fxFromInt(200);
             room.run(kNetWeaponBackMs / 33 - 60);
             bool still = true;
-            for (int n = 0; n < Room::kCount; ++n)
+            for (int n = 0; n < room.count; ++n)
                 still = still && !room.c[n]->g().actorStates[item].active;
             check(still, "... for twenty seconds");
             room.run(120);
             bool back = true;
-            for (int n = 0; n < Room::kCount; ++n)
+            for (int n = 0; n < room.count; ++n)
                 back = back && room.c[n]->g().actorStates[item].active;
             check(back, "... and then it is back, for all of them");
         }
@@ -694,7 +983,7 @@ namespace
             const bool went = bob.g().logic.states[door].move != MoveState::AtBottom;
             room.run(20);
             bool all = went;
-            for (int n = 0; n < Room::kCount; ++n)
+            for (int n = 0; n < room.count; ++n)
                 all = all && (room.c[n]->g().logic.states[door].move != MoveState::AtBottom ||
                               room.c[n]->g().logic.states[door].timer >= 0);
             check(!went || all, "what Bob uses goes on every console");
@@ -706,7 +995,7 @@ namespace
                 anna.player().origin[i] = fxFromInt((record.mins[i] + record.maxs[i]) / 2);
             room.run(12);
             bool all = true;
-            for (int n = 0; n < Room::kCount; ++n)
+            for (int n = 0; n < room.count; ++n)
                 all = all && (room.c[n]->g().logic.states[trigger].timer >= 0 || room.c[n]->g().logic.states[trigger].dead);
             check(all, "a trigger Anna walks into fires on every console, by where each sees her");
         }
@@ -728,6 +1017,181 @@ namespace
         room.run(40);
         check(host.match->over && anna.match->over, "the frag limit reached, the match is over for everyone");
     }
+
+    /// A teamplay match on crossfire, four of them: the rules said before it
+    /// begins, and played.
+    void testTeamMatch(const char *dir)
+    {
+        Room room;
+        room.count = 4;
+        room.startWhenPlaced = false;
+        static const char *const kNames[] = {"Host", "Anna", "Bob", "Cleo"};
+        std::uint8_t spray[kNetSprayBytes];
+        for (int i = 0; i < kNetSprayBytes; ++i)
+            spray[i] = static_cast<std::uint8_t>(i * 7);
+        for (int n = 0; n < room.count; ++n)
+        {
+            room.c[n] = console(dir, "crossfire", n == 0 ? NetMatch::Role::Host : NetMatch::Role::Client, n, kNames[n]);
+            if (!room.c[n])
+            {
+                check(false, "crossfire loads");
+                return;
+            }
+            NetProfile profile;
+            profile.top = static_cast<std::uint8_t>(n * 50);
+            netSetProfile(*room.c[n]->match, profile, spray);
+            if (n == 0)
+            {
+                NetRules rules;
+                rules.mode = kNetModeTeamplay;
+                rules.flags = kRuleWeaponsStay | kRuleAutoaim;
+                rules.most = 8;
+                netSetRules(*room.c[0]->match, rules);
+            }
+            else
+                netHostJoin(room.c[0]->match->host, n);
+        }
+        room.run(150); // (the lobby: everyone, their profiles, the teams)
+        room.startAll();
+        room.run(60);
+        Console &host = *room.c[0];
+        bool rules = true;
+        for (int n = 0; n < room.count; ++n)
+            rules = rules && room.c[n]->match->playing && room.c[n]->g().logic.weaponsStay.value &&
+                    room.c[n]->g().logic.flatFalls.value && room.c[n]->g().logic.lampBanned.value &&
+                    room.c[n]->g().logic.matchAutoaim.value == 1;
+        check(rules, "every console plays by the host's rules: weapons stay, a flat fall, no lamp, autoaim");
+        // Who is with whom.
+        int shooter = 1, mate = -1, foe = -1;
+        const int team = host.match->profiles[shooter].team;
+        for (int p = 0; p < room.count; ++p)
+        {
+            if (p == shooter)
+                continue;
+            if (host.match->profiles[p].team == team && mate < 0)
+                mate = p;
+            else if (host.match->profiles[p].team != team && foe < 0)
+                foe = p;
+        }
+        check(team != 0 && mate >= 0 && foe >= 0, "four on two teams: each has a teammate and two to fight");
+        if (mate < 0 || foe < 0)
+            return;
+        Console &s = *room.c[shooter], &m = *room.c[mate], &f = *room.c[foe];
+        monsterHurt(s.g().logic, s.match->firstActor + mate, 30, true, kHitBody);
+        room.run(40);
+        check(m.player().health == 100, "no friendly fire: a teammate's shot does not hurt");
+        monsterHurt(s.g().logic, s.match->firstActor + foe, 30, true, kHitBody);
+        room.run(40);
+        check(f.player().health < 100, "... one of the other team's does");
+
+        // ---- weapons stay
+        int item = -1;
+        for (int i = 0; i < host.g().actors.count && item < 0; ++i)
+        {
+            const ActorState &actor = host.g().actorStates[i];
+            if (actor.active && actor.kind == static_cast<std::uint8_t>(ActorKind::Item) &&
+                actor.item == static_cast<std::uint8_t>(ItemKind::Shotgun))
+                item = i;
+        }
+        if (item >= 0)
+        {
+            for (Console *who : {&s, &f})
+            {
+                for (int i = 0; i < 3; ++i)
+                    who->player().origin[i] = host.g().actorStates[item].pos[i];
+                who->player().origin[2] += fxFromInt(36);
+            }
+            room.run(60);
+            const bool both = (s.player().inv.have & (1u << kWeaponShotgun)) && (f.player().inv.have & (1u << kWeaponShotgun));
+            bool there = true;
+            for (int n = 0; n < room.count; ++n)
+                there = there && room.c[n]->g().actorStates[item].active;
+            check(both && there, "weapons stay: two take one shotgun, both have it, and it is still there for all");
+            const int ammo = s.player().inv.ammoBuck;
+            room.run(90); // (still standing on it)
+            check(s.player().inv.ammoBuck == ammo, "... and who has it does not take it again");
+            s.player().origin[0] += fxFromInt(200);
+            f.player().origin[0] -= fxFromInt(200);
+        }
+
+        // ---- a spray
+        const fx eye[3] = {host.player().origin[0], host.player().origin[1], host.player().origin[2] + fxFromInt(28)};
+        bool sprayed = false, missed = false, tested = false;
+        for (int k = 0; k < 16 && !sprayed; ++k)
+        {
+            fx sine, cosine;
+            fxSinCos(static_cast<std::uint16_t>(k * 4096), sine, cosine);
+            const fx forward[3] = {cosine, sine, 0};
+            sprayed = netSpray(*host.match, host.g().logic, host.player(), eye, forward);
+        }
+        if (!sprayed)
+        {
+            // (Nothing near that way: the floor, under their feet.)
+            const fx down[3] = {0, 0, -kFxOne};
+            sprayed = netSpray(*host.match, host.g().logic, host.player(), eye, down);
+        }
+        check(sprayed, "the host sprays on the wall it faces");
+        room.run(40);
+        bool seen = true;
+        for (int n = 1; n < room.count; ++n)
+            seen = seen && room.c[n]->match->sprays[0].active &&
+                   far(room.c[n]->match->sprays[0].at, host.match->sprays[0].at) <= 1;
+        check(seen, "... and every console has it on that wall");
+        fx ahead[3] = {kFxOne, 0, 0};
+        check(!netSpray(*host.match, host.g().logic, host.player(), eye, ahead), "... and not again so soon");
+        room.run(kNetSprayWaitMs / 33 + 10);
+        // Into the air: a way with nothing within reach, if there is one here.
+        for (int k = 0; k < 16 && !tested; ++k)
+        {
+            fx sine, cosine;
+            fxSinCos(static_cast<std::uint16_t>(k * 4096), sine, cosine);
+            const fx forward[3] = {cosine, sine, 0};
+            fx to[3];
+            for (int i = 0; i < 3; ++i)
+                to[i] = eye[i] + forward[i] * kNetSprayReach;
+            if (hldata::detail::pointTrace(*host.g().logic.world, eye, to).hit)
+                continue;
+            tested = true;
+            missed = !netSpray(*host.match, host.g().logic, host.player(), eye, forward);
+        }
+        check(!tested || missed, "nothing is sprayed on the air");
+        check(host.match->host.out.lost == 0, "nothing was dropped for want of room");
+    }
+
+    /// Six on crossfire, the host's frames every other tick: they still see
+    /// each other, and a death is scored on every console.
+    void testHalfRate(const char *dir)
+    {
+        Room room;
+        room.count = 6;
+        room.halfRate = true;
+        for (int n = 0; n < room.count; ++n)
+        {
+            char name[kNetTextBytes];
+            std::snprintf(name, sizeof(name), "P%d", n);
+            room.c[n] = console(dir, "crossfire", n == 0 ? NetMatch::Role::Host : NetMatch::Role::Client, n, name);
+            if (!room.c[n])
+            {
+                check(false, "crossfire loads");
+                return;
+            }
+            if (n > 0)
+                netHostJoin(room.c[0]->match->host, n);
+        }
+        room.run(150);
+        bool seen = true;
+        for (int n = 0; n < room.count; ++n)
+            for (int p = 0; p < room.count; ++p)
+                seen = seen && (p == n || (room.c[n]->other(p).active &&
+                                           far(room.c[n]->other(p).pos, room.c[p]->player().origin) < 60));
+        check(seen, "six at half the rate: each sees the other five where they are");
+        monsterHurt(room.c[1]->g().logic, room.c[1]->match->firstActor + 5, 500, true, kHitBody);
+        room.run(60);
+        bool scored = true;
+        for (int n = 0; n < room.count; ++n)
+            scored = scored && room.c[n]->match->frags[1] == 1 && room.c[n]->match->deaths[5] == 1;
+        check(scored, "... and a death is scored on every console");
+    }
 } // namespace
 
 int main()
@@ -737,11 +1201,19 @@ int main()
     testFile();
     testGlide();
     testLobby();
+    testWire();
+    testLobbyOfEight();
+    testTooMany();
+    testTeamScore();
     const char *dir = std::getenv("HLDS_VALVE_DIR");
     if (dir == nullptr)
         std::printf("test_net: HLDS_VALVE_DIR not set, no match was played\n");
     else
+    {
         testMatch(dir);
+        testTeamMatch(dir);
+        testHalfRate(dir);
+    }
     if (g_failures == 0)
         std::printf("test_net: ok\n");
     return g_failures == 0 ? 0 : 1;

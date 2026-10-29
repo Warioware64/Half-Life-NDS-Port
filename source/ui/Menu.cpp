@@ -2228,6 +2228,7 @@ namespace hlrt
                 std::memset(settings.hostMap, 0, sizeof(settings.hostMap));
                 std::memcpy(settings.hostMap, next.data(),
                             next.size() < sizeof(settings.hostMap) ? next.size() : sizeof(settings.hostMap) - 1);
+                netGame.hostChanged(); // (what the beacon says of the match)
             }
             drawRow(row, false);
             break;

@@ -49,7 +49,7 @@ namespace hlrt
         /// One for every actor a map may have, its own and those who come
         /// along (hldata::kMaxMapActors: the converter refuses a map with
         /// more): what each was drawn at, and whether it is behind a wall.
-        static constexpr int kActorSlots = hldata::kMaxMapActors + hldata::kMaxVisitors;
+        static constexpr int kActorSlots = hldata::kMaxMapActors + hldata::kMaxSpareActors;
         /// A model whose finest level is of more polygons than this has the
         /// game's own mesh for it (a DSi's file): for the nearest model in
         /// a frame with room, and nobody else.

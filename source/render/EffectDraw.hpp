@@ -13,6 +13,11 @@
 #include "HlActors.hpp"
 #include "HlFixed.hpp"
 
+namespace hldata
+{
+    struct NetMatch;
+}
+
 namespace hlrt
 {
     class EffectDraw
@@ -39,6 +44,14 @@ namespace hlrt
         int drawDecals();
         /// The most marks drawn in a pass (half of it on a DS).
         static constexpr int kDecalPolygons = 48;
+
+        /// A match's sprays (HlNetGame.hpp): each player's made into a
+        /// picture of its own, in its colour -- once the map is loaded, and
+        /// let go with it -- and drawn on its wall as the marks are, after
+        /// them. Returns how many it drew.
+        void loadSprays(const hldata::NetMatch &match);
+        void dropSprays();
+        int drawSprays();
         /// The small things that are solid (specks, casings, the pieces of
         /// what is not glass), in as few runs as there are textures among
         /// them. With the marks. Returns how many triangles it drew.
@@ -73,6 +86,9 @@ namespace hlrt
         };
         Item items_[kMaxItems];
         int count_ = 0;
+        static constexpr int kMaxSprays = 8; ///< (kNetPlayers)
+        void *sprayMaterials_[kMaxSprays] = {};
+        void *sprayPalettes_[kMaxSprays] = {};
         int refused_ = 0; ///< this pass: what was in view and found the list full
 
     public:

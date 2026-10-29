@@ -72,6 +72,7 @@ namespace hlrt
         hlEngine.netTick(*this, yaw, pitch, did, lamp, ms);
     }
     void NetGame::used(int index) { hlEngine.netUsed(*this, index); }
+    bool NetGame::spray() { return hlEngine.netSpray(*this); }
     void Player::frame(int vblanks) { hlEngine.playerFrame(*this, vblanks); }
     void Player::turn() { hlEngine.playerTurn(*this); }
     void ScreenFade::setDim(bool under) { hlEngine.fadeSetDim(*this, under); }
