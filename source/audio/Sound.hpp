@@ -96,6 +96,9 @@ namespace hlrt
         struct Clip
         {
             std::uint8_t *data = nullptr; ///< the ADPCM; null if not in memory
+            /// Another's memory (a console sent the game: the group's base),
+            /// not freed with the map.
+            bool shared = false;
             std::uint32_t bytes = 0;
             std::uint32_t loopWord = hldata::kSoundNoLoop;
             std::uint16_t rate = 0;
@@ -156,6 +159,10 @@ namespace hlrt
         static constexpr int kLoops = 8; ///< loops of a place at once, where there are voices
 
         bool readClip(const char *name, Clip &clip);
+#ifdef HLDS_CHILD
+        /// The group's base's copy, if it has one (net/GuestLoad.hpp).
+        bool borrowClip(const char *name, Clip &clip);
+#endif
         void place(const hldata::fx *pos, int volume, int radius, int &outVolume, int &outPan) const;
         int start(hldata::SoundLayer layer, const Clip &clip, int volume, int pan, bool loop, int tag = -1,
                   int pitch = 100);

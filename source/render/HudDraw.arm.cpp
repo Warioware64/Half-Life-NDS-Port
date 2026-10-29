@@ -428,7 +428,7 @@ namespace hlrt
                 lampMaterial_ = material;
             }
         }
-        if (decalMaterial_ == nullptr && global.hasFat)
+        if (decalMaterial_ == nullptr && global.hasData)
         {
             NEA_Material *material = nullptr;
             NEA_Palette *palette = nullptr;
@@ -442,7 +442,7 @@ namespace hlrt
         // The display's pictures: read, not uploaded (its sprites are made
         // from them: draw()). The 640 set's if the card has it, else the
         // 320 set's.
-        if (!atlas_ && global.hasFat)
+        if (!atlas_ && global.hasData)
         {
             static std::uint8_t body[kHudAtlasWidth * kHudAtlasHeight + 64];
             hldata::TextureHeader header;
@@ -462,7 +462,7 @@ namespace hlrt
         }
         // The train's pictures, the same way (a card cooked before them has
         // none, and shows none).
-        if (!train_ && global.hasFat)
+        if (!train_ && global.hasData)
         {
             static std::uint8_t body[kHudTrainWidth * kHudTrainHeight + 64];
             hldata::TextureHeader header;
@@ -955,7 +955,7 @@ namespace hlrt
         {
             NEA_Material *material = nullptr;
             NEA_Palette *palette = nullptr;
-            if (!global.hasFat || !TextureCache::loadFile(global.commonPath(kLoadingFile).c_str(), false, kLoadingSize,
+            if (!global.hasData || !TextureCache::loadFile(global.commonPath(kLoadingFile).c_str(), false, kLoadingSize,
                                                           kLoadingSize, 0, material, palette))
                 return false;
             loadingMaterial_ = material;

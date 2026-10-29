@@ -38,6 +38,10 @@ python tools/dspsim/embed.py
 BUILD_ID="$(python tools/buildid.py)"
 
 python build.py "$@"
+# The Download Play child (child/build.py): the same code built again for a
+# console that has no card. After the parent, whose ARM7 program it uses.
+(cd child && python build.py "$@")
+python tools/child_size.py
 # The ELFs of every build, by its name, for looking up a crash screen's
 # addresses afterwards (arm-none-eabi-addr2line -e build/elf/<name>/arm9.elf);
 # the last twelve kept.

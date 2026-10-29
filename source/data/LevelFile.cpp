@@ -4,6 +4,7 @@
 #include "DebugLog.hpp"
 #include "Global.hpp"
 #include "global_header.hpp"
+#include "net/GuestLoad.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -23,9 +24,18 @@ namespace hlrt
 
     bool Level::peekHeader(const std::string &name, hldata::LevelHeader &header)
     {
+#ifdef HLDS_CHILD
+        // (Sent the game, the level is read once, as it comes: there is no
+        // looking at it first. Whether it was sent at all is what is known.)
+        header = hldata::LevelHeader();
+        std::memcpy(header.magic, hldata::kLevelMagic, sizeof(hldata::kLevelMagic));
+        header.version = hldata::kLevelVersion;
+        header.minReader = hldata::kLevelMinReader;
+        return guest::offered(name);
+#endif
         // (A drive of its own, for the length of one read: the map being
         // played stays mounted, and may be this very one.)
-        if (!global.hasFat || NEA_NpacMount("peek", global.mapArchive(name).c_str()) != 0)
+        if (!global.hasData || NEA_NpacMount("peek", global.mapArchive(name).c_str()) != 0)
             return false;
         std::FILE *file = std::fopen("peek:/level.0", "rb");
         const bool got = file != nullptr && std::fread(&header, sizeof(header), 1, file) == 1;
@@ -43,34 +53,43 @@ namespace hlrt
 
         // The first piece says how long the level is: the card's word, so
         // it is checked before it is trusted with an allocation. No cooked
-        // map is anywhere near 8 MB.
+        // map is anywhere near 8 MB. (The piece is read once, header first:
+        // a map sent over the air comes once, and is not read again.)
         hldata::LevelHeader header{};
         std::FILE *file = std::fopen(global.mapPath("level.0").c_str(), "rb");
-        const bool got = file != nullptr && std::fread(&header, sizeof(header), 1, file) == 1;
+        bool got = file != nullptr && std::fread(&header, sizeof(header), 1, file) == 1;
+        const std::uint32_t size = header.fileSize;
+        if (got && (size < hldata::kLevelDataStart || size > 8 * 1024 * 1024))
+        {
+            std::fclose(file);
+            error = "Map file is damaged. Convert again.";
+            return false;
+        }
+        if (got)
+        {
+            block_ = static_cast<std::uint8_t *>(std::malloc(size));
+            if (block_ == nullptr)
+            {
+                std::fclose(file);
+                error = "Not enough memory for this map.";
+                return false;
+            }
+            std::memcpy(block_, &header, sizeof(header));
+            const std::uint32_t rest = hldata::levelPieceBytes(size, 0) - sizeof(header);
+            got = cardRead(block_ + sizeof(header), rest, file) == rest;
+        }
         if (file != nullptr)
             std::fclose(file);
         if (!got)
         {
+            unload();
             error = "Map not found on the card.";
-            return false;
-        }
-        const std::uint32_t size = header.fileSize;
-        if (size < hldata::kLevelDataStart || size > 8 * 1024 * 1024)
-        {
-            error = "Map file is damaged. Convert again.";
-            return false;
-        }
-
-        block_ = static_cast<std::uint8_t *>(std::malloc(size));
-        if (block_ == nullptr)
-        {
-            error = "Not enough memory for this map.";
             return false;
         }
         // Piece by piece, each to its place. (A compressed piece is inflated
         // by the archive as it is opened, beside this block, and let go
         // when it is closed: that is why a level is in pieces.)
-        for (std::uint32_t piece = 0; piece < hldata::levelPieces(size); ++piece)
+        for (std::uint32_t piece = 1; piece < hldata::levelPieces(size); ++piece)
         {
             char name[16];
             std::snprintf(name, sizeof(name), "level.%u", static_cast<unsigned>(piece));
@@ -113,6 +132,9 @@ namespace hlrt
             return false;
         }
         size_ = size;
+#ifdef HLDS_CHILD
+        guest::count(hldata::GuestKind::Level, size);
+#endif
         return true;
     }
 } // namespace hlrt

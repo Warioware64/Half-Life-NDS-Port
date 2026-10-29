@@ -1,3 +1,7 @@
+// (Only in the game library, HL_DSL. Linked into the program -- a console
+// that was sent the game, HLDS_CHILD -- the game reaches the engine as the
+// engine reaches itself, and none of this is wanted.)
+#ifdef HL_DSL
 #include "game/GameApi.hpp"
 
 #include "DebugLog.hpp"
@@ -116,3 +120,4 @@ namespace hldata
         return hlEngine.walkTick(a, world, index, small, dest, speed, ms, player, half, height, still, idealYaw);
     }
 } // namespace hldata
+#endif

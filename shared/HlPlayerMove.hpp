@@ -277,6 +277,10 @@ namespace hldata
         std::int8_t queue[4] = {-1, -1, -1, -1};
         std::int32_t waitMs = 0; ///< until the next may be said (SUITUPDATETIME)
         std::int32_t againMs[kSuitLines] = {};
+        /// In a game between consoles the suit says nothing (SetSuitUpdate:
+        /// "We don't play HEV sounds in multiplayer"); nor are its words
+        /// sent to a console that has no card.
+        bool silent = false;
     };
 
     struct PlayerState
@@ -370,7 +374,7 @@ namespace hldata
     inline void suitUpdate(PlayerState &player, int line, std::int32_t againMs)
     {
         SuitVoice &suit = player.suit.value;
-        if (!(player.inv.have & 1) || line < 0 || line >= kSuitLines || suit.againMs[line] > 0)
+        if (!(player.inv.have & 1) || suit.silent || line < 0 || line >= kSuitLines || suit.againMs[line] > 0)
             return;
         for (std::int8_t &slot : suit.queue)
         {

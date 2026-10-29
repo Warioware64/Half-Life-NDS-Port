@@ -498,6 +498,7 @@ namespace hldata
         match.spawnCount = spawnCount;
         match.seed = seed | 1;
         match.playing = true;
+        player.suit.value.silent = true;
         match.over = false;
         match.playedMs = 0;
         for (int p = 0; p < kNetPlayers; ++p)

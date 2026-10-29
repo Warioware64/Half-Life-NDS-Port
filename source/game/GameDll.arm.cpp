@@ -88,6 +88,27 @@ extern "C" const hlrt::EngineFuncs hlEngine = {
     .walkTick = &hldata::walkTick,
 };
 
+#ifdef HLDS_CHILD
+// (A console that was sent the game has no ROM files to load it from: the
+// game is linked into the program, and its table asked for straight.)
+extern "C" bool GetGameAPI(std::uint32_t version, const hlrt::GameLayout &layout, const hlrt::EngineFuncs *engine,
+                           hlrt::GameFuncs *game);
+
+namespace hlrt
+{
+    GameFuncs gameApi;
+
+    bool loadGame(const char **why)
+    {
+        if (!GetGameAPI(kGameApiVersion, gameLayout(), &hlEngine, &gameApi))
+        {
+            *why = "The game linked in is not of this build.";
+            return false;
+        }
+        return true;
+    }
+} // namespace hlrt
+#else
 namespace hlrt
 {
     GameFuncs gameApi;
@@ -178,3 +199,4 @@ namespace hlrt
         return true;
     }
 } // namespace hlrt
+#endif

@@ -10,6 +10,9 @@ namespace hlrt
 {
     Game game;
 
+    // (A console that was sent the game has it linked in: Game's code is
+    // the game's own, called straight, and none of this goes between.)
+#ifndef HLDS_CHILD
     bool Game::create() { return gameApi.create(*this); }
     void Game::destroy() { gameApi.destroy(*this); }
     void Game::frame(int vblanks)
@@ -34,4 +37,5 @@ namespace hlrt
     {
         return gameApi.layStored(*this, in, sentAway, landed);
     }
+#endif
 } // namespace hlrt

@@ -109,7 +109,7 @@ namespace hlrt
         if (iconsTried_)
             return;
         iconsTried_ = true;
-        if (!global.hasFat)
+        if (!global.hasData)
             return;
         std::FILE *file = std::fopen(global.commonPath(kWeaponIconsFile).c_str(), "rb");
         if (file == nullptr)

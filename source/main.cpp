@@ -8,6 +8,7 @@
 #include "Global.hpp"
 #include "Guard.hpp"
 #include "HlCommands.hpp"
+#include "net/GuestLoad.hpp"
 #include "Settings.hpp"
 #include "data/LevelFile.hpp"
 #include "data/ModelCache.hpp"
@@ -345,6 +346,11 @@ namespace
         hlrt::hudDraw.hideLoading();
         hlrt::frameFreeze.thaw();
         hlrt::screenFade.curtainUp(curtainFrames());
+#ifdef HLDS_CHILD
+        // (Sent the game: the map's stream has given its loaders all it had.
+        // Nothing of it is read during play.)
+        global.unmountMap();
+#endif
         hlrt::guard::check("map loaded");
         return LoadResult::Ok;
     }
@@ -844,6 +850,13 @@ int main(int argc, char *argv[])
     hlrt::hudDraw.load();
     // (Before any map: a map's sounds are handed to it as they are read.)
     hlrt::sound.init();
+#ifdef HLDS_CHILD
+    // Sent the game, what the common stream brought is read now, by all that
+    // reads it, and let go: none of it stays beside the map.
+    hlrt::bottomScreen.loadIcons();
+    hlrt::topText.loadTitle();
+    hlrt::guest::dropCommon();
+#endif
     std::string error;
     hlrt::menu.setSaves(&hlrt::SaveGame::index());
     // The title: go on with the last save, load another, begin -- or a game

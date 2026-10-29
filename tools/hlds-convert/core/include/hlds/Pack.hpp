@@ -38,6 +38,37 @@ namespace hlds
     bool packMap(const std::filesystem::path &stage, const std::filesystem::path &card,
                  const std::string &map, bool compress, PackReport &report, std::string &error);
 
+    struct AirReport
+    {
+        struct Map
+        {
+            std::string name;
+            std::size_t bytes = 0; ///< its own stream, without the base
+            /// What it holds of each kind (hldata::GuestKind), undone.
+            std::size_t raw[8] = {};
+            int missing = 0;
+        };
+        std::size_t baseBytes = 0;
+        std::size_t baseRaw[8] = {};
+        std::vector<Map> maps;
+    };
+
+    /// What a console that has no card is sent of a group of maps (the
+    /// game between consoles' maps, the Hazard Course's, Uplink's), as a DS
+    /// reads them, as guest streams (HlGuest.hpp): <card>/air/<group>.base.hgs,
+    /// the models and sounds all of them share, kept from one map to the
+    /// next; and <card>/air/<map>.hgs, the rest of each.
+    /// `multiplayer`: the maps of a game between consoles, where the suit
+    /// says nothing (its words are left out).
+    bool packAir(const std::filesystem::path &stage, const std::filesystem::path &card, const std::string &group,
+                 const std::vector<std::string> &maps, bool multiplayer, AirReport &report, std::string &error);
+
+    /// The common stream of a console with no card: <card>/air/common.hgs,
+    /// what of <card>/common.npac it uses (none of the title's pictures, no
+    /// weapon from another map, no word of what the people say).
+    bool packAirCommon(const std::filesystem::path &stage, const std::filesystem::path &card, PackReport &report,
+                       std::string &error);
+
     /// <stage>/ui/* and the menu's sounds -> <card>/common.npac.
     /// Which of a level's sounds are only words of what its people say
     /// (its talk table): those are in the common archive, not the map's.

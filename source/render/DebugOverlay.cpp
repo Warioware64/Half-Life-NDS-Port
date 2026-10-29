@@ -5,6 +5,7 @@
 
 #include "DebugLog.hpp"
 #include "Global.hpp"
+#include "net/GuestLoad.hpp"
 #include "Settings.hpp"
 #include "data/ModelCache.hpp"
 #include "data/TextureCache.hpp"
@@ -111,6 +112,22 @@ namespace hlrt
             // it ran short of what to echo, and the loudest it was lately
             // sent -- then the ARM7's figures, as below).
             // (A game between consoles: the radio's account instead.)
+#ifdef HLDS_CHILD
+            // (Sent the game: what of the memory the map's data takes -- the
+            // level, the models and the sounds its stream gave, the group's
+            // base -- in KB, beside what is left.)
+            if (!netGame.on())
+            {
+                const guest::Held &held = guest::held();
+                std::snprintf(line, sizeof(line), "heap%4uK L%u M%u S%u B%u",
+                              static_cast<unsigned>(global.heapHeadroom() / 1024),
+                              static_cast<unsigned>(held.mapBytes[static_cast<int>(hldata::GuestKind::Level)] / 1024),
+                              static_cast<unsigned>(held.mapBytes[static_cast<int>(hldata::GuestKind::Model)] / 1024),
+                              static_cast<unsigned>(held.mapBytes[static_cast<int>(hldata::GuestKind::Sound)] / 1024),
+                              static_cast<unsigned>(held.baseBytes / 1024));
+                break;
+            }
+#endif
             if (netGame.on())
                 netGame.status(line, sizeof(line));
             else if (sound.extended())

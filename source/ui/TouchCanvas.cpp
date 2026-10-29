@@ -54,7 +54,7 @@ namespace hlrt
             hldata::plainFont(static_cast<const std::uint8_t *>(own.gfx), false, plainWords);
             plain_.open(reinterpret_cast<const std::uint8_t *>(plainWords), sizeof(plainWords));
         }
-        if (!global.hasFat)
+        if (!global.hasData)
             return;
         for (int n = 0; n < hldata::kFontCount; ++n)
         {

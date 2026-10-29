@@ -107,3 +107,7 @@ sdroot-stage/
 source/audio/DspProgram.gen.cpp
 # Made by tools/buildid.py
 source/BuildId.gen.cpp
+
+# The Download Play child (child/build.py): its ROM and what a test build links in.
+child/out/
+child/generated/

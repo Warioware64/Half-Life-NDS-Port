@@ -66,6 +66,10 @@ namespace hlrt
         /// message is what is shown.
         void readout(int row, const char *text);
 
+        /// The weapons' pictures, read now rather than when first drawn (a
+        /// console sent the game has them only while it starts up).
+        void loadIcons();
+
     private:
         enum class Shown
         {
@@ -82,7 +86,6 @@ namespace hlrt
         hldata::WeaponList list_; ///< as last drawn
         int listHover_ = -1;
         unsigned empty_ = 0;
-        void loadIcons();
         bool canReload_ = false;
         bool lampSuit_ = false, lampOn_ = false;
         int lampBar_ = -1; ///< the gauge as drawn, in pixels

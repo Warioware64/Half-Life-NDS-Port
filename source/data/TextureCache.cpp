@@ -78,7 +78,14 @@ namespace hlrt
             // A streamed texture is its flat colour until it is read in.
             // (The planner numbers a map's textures up to a limit; the rest
             // are loaded like any other.)
-            if ((ref.flags & hldata::kTextureStreamed) != 0 && i < hldata::kStreamMaxTextures &&
+            // (Sent the game, there is nothing to stream from: what was sent
+            // is loaded, every one, as it comes.)
+#ifdef HLDS_CHILD
+            constexpr bool kMayStream = false;
+#else
+            constexpr bool kMayStream = true;
+#endif
+            if (kMayStream && (ref.flags & hldata::kTextureStreamed) != 0 && i < hldata::kStreamMaxTextures &&
                 makeFlat(static_cast<unsigned>(i),
 #ifdef HLDS_PROFILE
                          // (A build that measures shows what is not in video

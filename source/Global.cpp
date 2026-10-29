@@ -1,8 +1,11 @@
 #include "Global.hpp"
 #include <cstdio>
+#include <cstring>
 #include <nds/arm9/dldi.h>
 
 #include "HlManifest.hpp"
+#include "net/AirDevice.hpp"
+#include "net/GuestLoad.hpp"
 #include "data/VramWriter.hpp"
 #include "render/HudDraw.hpp"
 #include "render/Camera.hpp"
@@ -53,6 +56,53 @@ void Global::process(void (*draw)())
     NEA_Process(draw);
 }
 
+#ifdef HLDS_CHILD
+// What a child build was given to start with (tools/child_testpack.py), for
+// a test with no host: the files it holds, put on the "air:" drive as if
+// they had been received. Empty in a build made to be sent.
+// (bin2c gives its size as a macro, in a header of the child's build: the
+// container says where each file is, and it was made by the same build.)
+extern "C" const std::uint8_t airpack_bin[];
+
+namespace
+{
+    void putTestPack()
+    {
+        struct Entry
+        {
+            char name[32];
+            std::uint32_t at;
+            std::uint32_t size;
+        };
+        constexpr std::uint32_t kMagic = 0x42414C48; // "HLAB"
+        std::uint32_t head[2];
+        std::memcpy(head, airpack_bin, sizeof(head));
+        if (head[0] != kMagic || head[1] > 8)
+            return;
+        // (The streams as they would come over the air, a packet's worth at
+        // a time: the common one, the group's base, the map's.)
+        for (std::uint32_t i = 0; i < head[1]; ++i)
+        {
+            Entry entry;
+            std::memcpy(&entry, airpack_bin + 8 + i * sizeof(Entry), sizeof(entry));
+            entry.name[sizeof(entry.name) - 1] = '\0';
+            const std::string name = entry.name;
+            hlrt::guest::MemorySupply supply;
+            supply.data = airpack_bin + entry.at;
+            supply.size = entry.size;
+            if (name == "common.hgs")
+                hlrt::guest::receiveCommon(supply);
+            else if (name == "base.hgs")
+                hlrt::guest::receiveBase(supply);
+            else if (name.rfind("maps/", 0) == 0 && name.size() > 9)
+                hlrt::guest::offerMap(name.substr(5, name.size() - 9), supply.data, supply.size);
+            else
+                hlrt::air::put(entry.name, airpack_bin + entry.at, entry.size);
+        }
+    }
+} // namespace
+#endif
+
 void Global::Init(const char *launchedFrom)
 {
     // First, before anything is timed against the CPU: every later measurement
@@ -69,10 +119,48 @@ void Global::Init(const char *launchedFrom)
     irqSet(IRQ_VBLANK, onVblank);
     irqSet(IRQ_HBLANK, NEA_HBLFunc);
 
+#ifdef HLDS_CHILD
+    // Sent the game: no card is looked for (on a console that has one, it is
+    // not this game's), and what was sent is on the "air:" drive. For a
+    // test, what a build was given to start with (HLDS_CHILD_TESTPACK:
+    // tools/child_testpack.py) is put there now, as though received.
+    (void)launchedFrom;
+    hlrt::air::install();
+    putTestPack();
+#ifdef HLDS_CHILD_FROMCARD
+    // (A test that is given its data as the air would give it, with none of
+    // it in memory: the streams on the emulator's card, a packet's worth at a
+    // time. Nothing else of the card is read.)
+    if (fatInitDefault() && fatGetDefaultDrive() != nullptr)
+    {
+        const std::string air = std::string(fatGetDefaultDrive()) + "_nds/hl_nds/data/air/";
+        const char *map = HLDS_CHILD_FROMCARD;
+        const std::string group = std::strncmp(map, "t0a0", 4) == 0      ? "hazard"
+                                  : std::strncmp(map, "hldemo", 6) == 0 ? "uplink"
+                                                                        : "match";
+        hlrt::guest::FileSupply supply;
+        for (const std::string &stream : {air + "common.hgs", air + group + ".base.hgs"})
+        {
+            supply.file = std::fopen(stream.c_str(), "rb");
+            if (supply.file == nullptr)
+                continue;
+            if (stream.find("common") != std::string::npos)
+                hlrt::guest::receiveCommon(supply);
+            else
+                hlrt::guest::receiveBase(supply);
+            std::fclose(supply.file);
+        }
+        hlrt::guest::offerMapFile(map, air + map + ".hgs");
+    }
+#endif
+    hasData = hlrt::guest::offeredCount() > 0;
+    return;
+#endif
     // SD / flashcard FAT access -- every byte of game content comes from here.
     const bool fatOk = fatInitDefault();
     fatDevice = fatGetDefaultDrive();
     hasFat = fatOk && (fatDevice != nullptr);
+    hasData = hasFat;
     if (hasFat)
     {
         fatDeviceCPP = fatDevice;
@@ -136,32 +224,47 @@ void Global::InitVideo()
 
     // Bringing the engine up again closed its archives.
     mountCommon();
+#ifndef HLDS_CHILD
     if (!mapMounted_.empty() && !NEA_NpacIsMounted("map"))
         NEA_NpacMount("map", mapArchive(mapMounted_).c_str());
+#endif
 }
 
 bool Global::mountMap(const std::string &name)
 {
     unmountMap();
-    if (!hasFat || NEA_NpacMount("map", mapArchive(name).c_str()) != 0)
+#ifdef HLDS_CHILD
+    // (Sent the game: the map's stream, given to the "air:" drive, whose
+    // files are read from it as the map is loaded.)
+    if (!hlrt::guest::beginMap(name))
         return false;
+#else
+    if (!hasData || NEA_NpacMount("map", mapArchive(name).c_str()) != 0)
+        return false;
+#endif
     mapMounted_ = name;
     return true;
 }
 
 void Global::unmountMap()
 {
+#ifdef HLDS_CHILD
+    hlrt::guest::endMap();
+#else
     if (NEA_NpacIsMounted("map"))
         NEA_NpacUnmount("map");
+#endif
     mapMounted_.clear();
 }
 
 void Global::mountCommon()
 {
+#ifndef HLDS_CHILD
     // (A card with no common archive is a game without its own letters and
     // pictures, which is said where each is missed, not here.)
-    if (hasFat && !NEA_NpacIsMounted("common"))
+    if (hasData && !NEA_NpacIsMounted("common"))
         NEA_NpacMount("common", (dataDir() + "common.npac").c_str());
+#endif
 }
 
 std::size_t Global::heapHeadroom() const
@@ -172,6 +275,20 @@ std::size_t Global::heapHeadroom() const
 Global::DataStatus Global::ReadManifest(std::string &startMap, std::vector<std::string> *multiplayer,
                                         std::string *why) const
 {
+#ifdef HLDS_CHILD
+    // Sent the game, there is no manifest: the maps are the ones it was
+    // sent, and the first is where it starts.
+    (void)why;
+    for (int i = 0; i < hlrt::guest::offeredCount(); ++i)
+    {
+        const std::string map = hlrt::guest::offeredName(i);
+        if (startMap.empty())
+            startMap = map;
+        if (multiplayer != nullptr)
+            multiplayer->push_back(map);
+    }
+    return startMap.empty() ? DataStatus::NoData : DataStatus::Ok;
+#endif
     if (!hasFat)
         return DataStatus::NoCard;
 

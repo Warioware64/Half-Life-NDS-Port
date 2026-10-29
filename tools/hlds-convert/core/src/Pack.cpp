@@ -2,14 +2,17 @@
 
 #include <algorithm>
 #include <cstring>
+#include <map>
 #include <set>
 
+#include "HlGuest.hpp"
 #include "HlLevelReader.hpp"
 #include "HlModel.hpp"
 #include "HlSound.hpp"
 #include "HlSprite.hpp"
 #include "HlUi.hpp"
 #include "hlds/AtomicWrite.hpp"
+#include "hlds/Lz77.hpp"
 #include "hlds/NpacWriter.hpp"
 
 namespace fs = std::filesystem;
@@ -45,6 +48,55 @@ namespace hlds
                 return true;
             }
         };
+
+        /// A guest stream (HlGuest.hpp) of `members`, in their order: each
+        /// LZ77 where that makes it a good deal smaller (not a sound: they
+        /// are compressed already, as sound). What each kind comes to,
+        /// undone, into `raw`.
+        bool writeGuest(const std::vector<NpacMember> &members, const fs::path &out, std::size_t *raw,
+                        std::size_t &streamBytes, std::string &error)
+        {
+            std::vector<std::uint8_t> stream(sizeof(hldata::GuestHeader));
+            hldata::GuestHeader header{};
+            std::memcpy(header.magic, hldata::kGuestMagic, 4);
+            header.version = hldata::kGuestVersion;
+            header.levelVersion = hldata::kLevelVersion;
+            for (const NpacMember &member : members)
+            {
+                if (member.path.size() > hldata::kGuestNameMost)
+                {
+                    error = "a name too long for a guest stream: " + member.path;
+                    return false;
+                }
+                const hldata::GuestKind kind = hldata::guestKindOf(member.path.c_str());
+                std::vector<std::uint8_t> packed;
+                if (kind != hldata::GuestKind::Sound && member.data.size() >= 256)
+                {
+                    packed = lz77Compress(member.data.data(), member.data.size());
+                    if (packed.size() * 8 > member.data.size() * 7)
+                        packed.clear();
+                }
+                hldata::GuestMember record{};
+                record.kind = static_cast<std::uint8_t>(kind);
+                record.flags = packed.empty() ? 0 : hldata::kGuestLz77;
+                record.nameBytes = static_cast<std::uint16_t>(member.path.size());
+                record.rawSize = static_cast<std::uint32_t>(member.data.size());
+                const std::vector<std::uint8_t> &bytes = packed.empty() ? member.data : packed;
+                record.packedSize = static_cast<std::uint32_t>(bytes.size());
+                const auto *r = reinterpret_cast<const std::uint8_t *>(&record);
+                stream.insert(stream.end(), r, r + sizeof(record));
+                stream.insert(stream.end(), member.path.begin(), member.path.end());
+                stream.insert(stream.end(), bytes.begin(), bytes.end());
+                ++header.members;
+                header.rawBytes += record.rawSize;
+                if (raw != nullptr)
+                    raw[static_cast<int>(kind)] += member.data.size();
+            }
+            header.streamBytes = static_cast<std::uint32_t>(stream.size());
+            std::memcpy(stream.data(), &header, sizeof(header));
+            streamBytes = stream.size();
+            return writeFileAtomic(out, stream, error);
+        }
 
         bool finish(Packing &packing, const fs::path &out, bool compress, std::string &error)
         {
@@ -96,127 +148,295 @@ namespace hlds
     }
 
 
+    namespace
+    {
+        /// Everything a map's archive holds, in the order the console loads
+        /// it. `air`: only what a DS reads (a console sent the game over the
+        /// air runs as one) -- no DSi model, no DSi copy of a sound.
+        bool collectMap(const fs::path &stage, const std::string &map, bool air, Packing &packing,
+                        std::string &error)
+        {
+            std::vector<std::uint8_t> level;
+            if (!readFile(stage / "maps" / (map + ".hlm"), level, error))
+                return false;
+            hldata::LevelView view;
+            if (view.open(level.data(), static_cast<std::uint32_t>(level.size())) != hldata::LevelError::Ok)
+            {
+                error = "the staged level does not open: " + map;
+                return false;
+            }
+
+            // The level, in pieces (HlLevel.hpp).
+            const std::uint32_t size = static_cast<std::uint32_t>(level.size());
+            for (std::uint32_t piece = 0; piece < hldata::levelPieces(size); ++piece)
+            {
+                NpacMember member;
+                member.path = "level." + std::to_string(piece);
+                const std::uint32_t start = hldata::levelPieceStart(piece);
+                member.data.assign(level.begin() + start,
+                                   level.begin() + start + hldata::levelPieceBytes(size, piece));
+                packing.named.insert(member.path);
+                packing.members.push_back(std::move(member));
+            }
+
+            for (std::uint32_t i = 0; i < view.textureCount; ++i)
+            {
+                const hldata::TextureRef &ref = view.textures[i];
+                char name[40];
+                hldata::textureFileName(ref.name, ref.width, ref.height,
+                                        (ref.flags & hldata::kTextureA3I5) != 0, name);
+                packing.add(stage / "tex" / name, std::string("tex/") + name, true);
+            }
+
+            for (std::uint32_t i = 0; i < view.spriteCount; ++i)
+            {
+                const hldata::SpriteRef &ref = view.sprites[i];
+                if (ref.frames == 0)
+                    continue;
+                const std::string name = hldata::spriteFile(ref.name, ref.width, ref.height);
+                packing.add(stage / "spr" / name, "spr/" + name, true);
+            }
+
+            // Models as a DS reads them, their skins, then the files a DSi reads
+            // instead where there are any.
+            std::vector<std::string> skins;
+            auto skinOf = [&](const NpacMember &model, const char *name)
+            {
+                if (model.data.size() < sizeof(hldata::ModelHeader))
+                    return;
+                hldata::ModelHeader header;
+                std::memcpy(&header, model.data.data(), sizeof(header));
+                if (header.atlasWidth != 0)
+                    skins.push_back(hldata::modelSkinFile(name, header.atlasWidth, header.atlasHeight));
+            };
+            // (Not a weapon the map has not: that is in the common archive.)
+            for (std::uint32_t i = 0; i < view.modelRefCount; ++i)
+            {
+                const char *name = view.modelRefs[i].name;
+                if (hldata::modelRefLazy(view.modelRefs[i]))
+                    continue;
+                if (packing.add(stage / "mdl" / map / (std::string(name) + ".hmd"),
+                                std::string("mdl/") + name + ".hmd", true))
+                    skinOf(packing.members.back(), name);
+            }
+            const std::size_t skinsAt = packing.members.size();
+            for (std::uint32_t i = 0; i < view.modelRefCount && !air; ++i)
+            {
+                const char *name = view.modelRefs[i].name;
+                if (hldata::modelRefLazy(view.modelRefs[i]))
+                    continue;
+                if (packing.add(stage / "mdl" / map / (std::string(name) + ".dsi.hmd"),
+                                std::string("mdl/") + name + ".dsi.hmd", true, false))
+                    skinOf(packing.members.back(), name);
+            }
+            // (The skins go between the two: named now that both kinds have
+            // said which they want.)
+            {
+                Packing skinsOnly;
+                skinsOnly.report = packing.report;
+                skinsOnly.named = packing.named;
+                for (const std::string &skin : skins)
+                    skinsOnly.add(stage / "mdl" / skin, "mdl/" + skin, true);
+                packing.members.insert(packing.members.begin() + skinsAt,
+                                       std::make_move_iterator(skinsOnly.members.begin()),
+                                       std::make_move_iterator(skinsOnly.members.end()));
+            }
+
+            // Sounds: those loaded with the map first (a DSi's better copy
+            // beside the plain one), then the words read as they are spoken.
+            // Not compressed: they are compressed already, as sound.
+            std::vector<char> kept(view.soundCount + 1, 0);
+            hldata::soundsKept(view.logic, view.logicCount, view.logicSounds, view.logicSoundCount,
+                               view.soundCount, reinterpret_cast<bool *>(kept.data()), view.modelSounds,
+                               view.modelSoundCount);
+            std::vector<char> talk;
+            talkWords(view, talk);
+            for (int pass = 0; pass < 2; ++pass)
+            {
+                for (std::uint32_t i = 0; i < view.soundCount; ++i)
+                {
+                    const hldata::SoundRef &ref = view.sounds[i];
+                    if (ref.name[0] == '\0' || (kept[i] != 0) != (pass == 0) || hldata::soundLazy(ref))
+                        continue;
+                    // (What the people say is in the common archive.)
+                    if (pass == 1 && talk[i] != 0)
+                        continue;
+                    char twin[sizeof(hldata::SoundRef)];
+                    if (pass == 0 && !air && hldata::soundTwinName(ref, twin, sizeof(twin)))
+                        packing.add(stage / "snd" / (std::string(twin) + ".hsn"),
+                                    std::string("snd/") + twin + ".hsn", false, false);
+                    packing.add(stage / "snd" / (std::string(ref.name) + ".hsn"),
+                                std::string("snd/") + ref.name + ".hsn", false);
+                }
+            }
+            return true;
+        }
+    } // namespace
+
     bool packMap(const fs::path &stage, const fs::path &card, const std::string &map, bool compress,
                  PackReport &report, std::string &error)
     {
         report = PackReport();
-        std::vector<std::uint8_t> level;
-        if (!readFile(stage / "maps" / (map + ".hlm"), level, error))
-            return false;
-        hldata::LevelView view;
-        if (view.open(level.data(), static_cast<std::uint32_t>(level.size())) != hldata::LevelError::Ok)
-        {
-            error = "the staged level does not open: " + map;
-            return false;
-        }
         Packing packing;
         packing.report = &report;
+        if (!collectMap(stage, map, false, packing, error))
+            return false;
+        return finish(packing, card / "maps" / (map + ".npac"), compress, error);
+    }
 
-        // The level, in pieces (HlLevel.hpp).
-        const std::uint32_t size = static_cast<std::uint32_t>(level.size());
-        for (std::uint32_t piece = 0; piece < hldata::levelPieces(size); ++piece)
+    bool packAir(const fs::path &stage, const fs::path &card, const std::string &group,
+                 const std::vector<std::string> &maps, bool multiplayer, AirReport &report, std::string &error)
+    {
+        report = AirReport();
+        if (maps.empty())
+            return true;
+        std::vector<Packing> each(maps.size());
+        std::vector<PackReport> reports(maps.size());
+        for (std::size_t m = 0; m < maps.size(); ++m)
         {
-            NpacMember member;
-            member.path = "level." + std::to_string(piece);
-            const std::uint32_t start = hldata::levelPieceStart(piece);
-            member.data.assign(level.begin() + start,
-                               level.begin() + start + hldata::levelPieceBytes(size, piece));
-            packing.named.insert(member.path);
-            packing.members.push_back(std::move(member));
+            each[m].report = &reports[m];
+            if (!collectMap(stage, maps[m], true, each[m], error))
+                return false;
+            // (The suit says nothing in a game between consoles: the game's
+            // SetSuitUpdate, "We don't play HEV sounds in multiplayer".)
+            if (multiplayer)
+                each[m].members.erase(std::remove_if(each[m].members.begin(), each[m].members.end(),
+                                                     [](const NpacMember &member)
+                                                     { return member.path.rfind("snd/fvox_", 0) == 0; }),
+                                      each[m].members.end());
         }
-
-        for (std::uint32_t i = 0; i < view.textureCount; ++i)
+        // A model is cooked for each map with a skin as big as that map has
+        // room for: here every map has the same one, the smallest any of
+        // them was given -- so the model is the same everywhere, and in the
+        // base.
         {
-            const hldata::TextureRef &ref = view.textures[i];
-            char name[40];
-            hldata::textureFileName(ref.name, ref.width, ref.height,
-                                    (ref.flags & hldata::kTextureA3I5) != 0, name);
-            packing.add(stage / "tex" / name, std::string("tex/") + name, true);
-        }
-
-        for (std::uint32_t i = 0; i < view.spriteCount; ++i)
-        {
-            const hldata::SpriteRef &ref = view.sprites[i];
-            if (ref.frames == 0)
-                continue;
-            const std::string name = hldata::spriteFile(ref.name, ref.width, ref.height);
-            packing.add(stage / "spr" / name, "spr/" + name, true);
-        }
-
-        // Models as a DS reads them, their skins, then the files a DSi reads
-        // instead where there are any.
-        std::vector<std::string> skins;
-        auto skinOf = [&](const NpacMember &model, const char *name)
-        {
-            if (model.data.size() < sizeof(hldata::ModelHeader))
-                return;
-            hldata::ModelHeader header;
-            std::memcpy(&header, model.data.data(), sizeof(header));
-            if (header.atlasWidth != 0)
-                skins.push_back(hldata::modelSkinFile(name, header.atlasWidth, header.atlasHeight));
-        };
-        // (Not a weapon the map has not: that is in the common archive.)
-        for (std::uint32_t i = 0; i < view.modelRefCount; ++i)
-        {
-            const char *name = view.modelRefs[i].name;
-            if (hldata::modelRefLazy(view.modelRefs[i]))
-                continue;
-            if (packing.add(stage / "mdl" / map / (std::string(name) + ".hmd"),
-                            std::string("mdl/") + name + ".hmd", true))
-                skinOf(packing.members.back(), name);
-        }
-        const std::size_t skinsAt = packing.members.size();
-        for (std::uint32_t i = 0; i < view.modelRefCount; ++i)
-        {
-            const char *name = view.modelRefs[i].name;
-            if (hldata::modelRefLazy(view.modelRefs[i]))
-                continue;
-            if (packing.add(stage / "mdl" / map / (std::string(name) + ".dsi.hmd"),
-                            std::string("mdl/") + name + ".dsi.hmd", true, false))
-                skinOf(packing.members.back(), name);
-        }
-        // (The skins go between the two: named now that both kinds have
-        // said which they want.)
-        {
-            Packing skinsOnly;
-            skinsOnly.report = &report;
-            skinsOnly.named = packing.named;
-            for (const std::string &skin : skins)
-                skinsOnly.add(stage / "mdl" / skin, "mdl/" + skin, true);
-            packing.members.insert(packing.members.begin() + skinsAt,
-                                   std::make_move_iterator(skinsOnly.members.begin()),
-                                   std::make_move_iterator(skinsOnly.members.end()));
-        }
-
-        // Sounds: those loaded with the map first (a DSi's better copy
-        // beside the plain one), then the words read as they are spoken.
-        // Not compressed: they are compressed already, as sound.
-        std::vector<char> kept(view.soundCount + 1, 0);
-        hldata::soundsKept(view.logic, view.logicCount, view.logicSounds, view.logicSoundCount,
-                           view.soundCount, reinterpret_cast<bool *>(kept.data()), view.modelSounds,
-                           view.modelSoundCount);
-        std::vector<char> talk;
-        talkWords(view, talk);
-        for (int pass = 0; pass < 2; ++pass)
-        {
-            for (std::uint32_t i = 0; i < view.soundCount; ++i)
+            struct Variant
             {
-                const hldata::SoundRef &ref = view.sounds[i];
-                if (ref.name[0] == '\0' || (kept[i] != 0) != (pass == 0) || hldata::soundLazy(ref))
-                    continue;
-                // (What the people say is in the common archive.)
-                if (pass == 1 && talk[i] != 0)
-                    continue;
-                char twin[sizeof(hldata::SoundRef)];
-                if (pass == 0 && hldata::soundTwinName(ref, twin, sizeof(twin)))
-                    packing.add(stage / "snd" / (std::string(twin) + ".hsn"),
-                                std::string("snd/") + twin + ".hsn", false, false);
-                packing.add(stage / "snd" / (std::string(ref.name) + ".hsn"),
-                            std::string("snd/") + ref.name + ".hsn", false);
+                std::size_t map = 0;
+                std::uint32_t texels = 0;
+            };
+            std::map<std::string, Variant> smallest;
+            auto skinPathOf = [](const NpacMember &model, const std::string &name, std::uint32_t *texels)
+            {
+                hldata::ModelHeader header;
+                std::memcpy(&header, model.data.data(), sizeof(header));
+                if (texels != nullptr)
+                    *texels = static_cast<std::uint32_t>(header.atlasWidth) * header.atlasHeight;
+                return header.atlasWidth == 0
+                           ? std::string()
+                           : "mdl/" + hldata::modelSkinFile(name.c_str(), header.atlasWidth, header.atlasHeight);
+            };
+            auto modelName = [](const std::string &path)
+            {
+                const bool model = path.rfind("mdl/", 0) == 0 && path.size() > 8 &&
+                                   path.compare(path.size() - 4, 4, ".hmd") == 0;
+                return model ? path.substr(4, path.size() - 8) : std::string();
+            };
+            for (std::size_t m = 0; m < maps.size(); ++m)
+            {
+                for (const NpacMember &member : each[m].members)
+                {
+                    const std::string name = modelName(member.path);
+                    if (name.empty() || member.data.size() < sizeof(hldata::ModelHeader))
+                        continue;
+                    std::uint32_t texels = 0;
+                    skinPathOf(member, name, &texels);
+                    auto it = smallest.find(name);
+                    if (it == smallest.end() || texels < it->second.texels)
+                        smallest[name] = Variant{m, texels};
+                }
+            }
+            auto find = [](std::vector<NpacMember> &members, const std::string &path)
+            {
+                return std::find_if(members.begin(), members.end(),
+                                    [&](const NpacMember &other) { return other.path == path; });
+            };
+            for (std::size_t m = 0; m < maps.size(); ++m)
+            {
+                for (const auto &[name, variant] : smallest)
+                {
+                    if (variant.map == m)
+                        continue;
+                    std::vector<NpacMember> &mine = each[m].members;
+                    std::vector<NpacMember> &theirs = each[variant.map].members;
+                    const auto own = find(mine, "mdl/" + name + ".hmd");
+                    const auto chosen = find(theirs, "mdl/" + name + ".hmd");
+                    if (own == mine.end() || chosen == theirs.end() || own->data == chosen->data)
+                        continue;
+                    const std::string ownSkin = skinPathOf(*own, name, nullptr);
+                    const std::string chosenSkin = skinPathOf(*chosen, name, nullptr);
+                    const auto chosenSkinAt = find(theirs, chosenSkin);
+                    if (!chosenSkin.empty() && chosenSkinAt == theirs.end())
+                        continue; // (its skin is not there to go with it)
+                    own->data = chosen->data;
+                    if (ownSkin != chosenSkin)
+                    {
+                        // (In its place among the models: an archive's
+                        // folders are each in one run.)
+                        const NpacMember skin = chosenSkinAt != theirs.end() ? *chosenSkinAt : NpacMember();
+                        const auto ownSkinAt = find(mine, ownSkin);
+                        std::size_t at = ownSkinAt != mine.end() ? static_cast<std::size_t>(ownSkinAt - mine.begin())
+                                                                 : static_cast<std::size_t>(own - mine.begin()) + 1;
+                        if (ownSkinAt != mine.end())
+                            mine.erase(ownSkinAt);
+                        if (!chosenSkin.empty() && find(mine, chosenSkin) == mine.end())
+                            mine.insert(mine.begin() + static_cast<std::ptrdiff_t>(at), skin);
+                    }
+                }
             }
         }
-
-        return finish(packing, card / "maps" / (map + ".npac"), compress, error);
+        // The base: what every map of the group has, byte for byte -- the
+        // weapons, the items, their sounds. A console sent the group keeps
+        // it from one map to the next; only the rest of each is sent again.
+        // (Never a map's own level or textures, even where two agree.)
+        // (Only what stays in RAM: a model's block, a sound's clip. Skins and
+        // sprites are in video memory, which is laid out again for every
+        // map: they come with each map.)
+        auto shareable = [](const std::string &path)
+        {
+            const hldata::GuestKind kind = hldata::guestKindOf(path.c_str());
+            return kind == hldata::GuestKind::Model || kind == hldata::GuestKind::Sound;
+        };
+        std::set<std::string> base;
+        for (const NpacMember &member : each[0].members)
+        {
+            if (!shareable(member.path))
+                continue;
+            bool everywhere = true;
+            for (std::size_t m = 1; m < maps.size() && everywhere; ++m)
+            {
+                const auto it = std::find_if(each[m].members.begin(), each[m].members.end(),
+                                             [&](const NpacMember &other) { return other.path == member.path; });
+                everywhere = it != each[m].members.end() && it->data == member.data;
+            }
+            if (everywhere)
+                base.insert(member.path);
+        }
+        std::vector<NpacMember> shared;
+        for (const NpacMember &member : each[0].members)
+        {
+            if (base.count(member.path) != 0)
+                shared.push_back(member);
+        }
+        fs::create_directories(card / "air");
+        if (!writeGuest(shared, card / "air" / (group + ".base.hgs"), report.baseRaw, report.baseBytes, error))
+            return false;
+        for (std::size_t m = 0; m < maps.size(); ++m)
+        {
+            std::vector<NpacMember> own;
+            for (NpacMember &member : each[m].members)
+            {
+                if (base.count(member.path) == 0)
+                    own.push_back(std::move(member));
+            }
+            AirReport::Map line;
+            line.name = maps[m];
+            line.missing = reports[m].missing;
+            if (!writeGuest(own, card / "air" / (maps[m] + ".hgs"), line.raw, line.bytes, error))
+                return false;
+            report.maps.push_back(line);
+        }
+        return true;
     }
 
     bool packCommon(const fs::path &stage, const fs::path &card, bool compress, PackReport &report,
@@ -309,6 +529,39 @@ namespace hlds
             return true;
         }
         return finish(packing, card / "common.npac", compress, error);
+    }
+
+    bool packAirCommon(const fs::path &stage, const fs::path &card, PackReport &report, std::string &error)
+    {
+        report = PackReport();
+        Packing packing;
+        packing.report = &report;
+        // The pictures and letters of the game, not of its title (the menu's
+        // background and the animated name are never shown on a console
+        // that was sent the game: it goes straight into the match); the
+        // menu's sounds. Stored: read in place.
+        std::vector<fs::path> files;
+        std::error_code ec;
+        for (auto it = fs::directory_iterator(stage / "ui", ec); !ec && it != fs::directory_iterator();
+             it.increment(ec))
+        {
+            const std::string name = "ui/" + it->path().filename().string();
+            if (it->is_regular_file(ec) && it->path().extension() != ".tmp" && name != hldata::kLogoFile &&
+                name != hldata::kMenuFile)
+                files.push_back(it->path());
+        }
+        std::sort(files.begin(), files.end());
+        for (const fs::path &file : files)
+            packing.add(file, "ui/" + file.filename().string(), false);
+        for (const char *name : hldata::kUiSoundFiles)
+            packing.add(stage / "snd" / (std::string(name) + ".hsn"), std::string("snd/") + name + ".hsn", false,
+                        false);
+        fs::create_directories(card / "air");
+        std::size_t raw[static_cast<int>(hldata::GuestKind::Count)] = {};
+        for (const NpacMember &member : packing.members)
+            report.rawBytes += member.data.size();
+        report.members = static_cast<int>(packing.members.size());
+        return writeGuest(packing.members, card / "air" / "common.hgs", raw, report.cardBytes, error);
     }
 
     bool unpackLevel(const fs::path &archive, std::vector<std::uint8_t> &level,

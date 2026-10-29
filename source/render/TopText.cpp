@@ -135,21 +135,25 @@ namespace hlrt
         }
     }
 
-    HL_ARM void TopText::drawLogo(Slot &slot, int index)
+    void TopText::loadTitle()
     {
-        if (!titleTried)
+        if (titleTried)
+            return;
+        titleTried = true;
+        if (global.hasData)
         {
-            titleTried = true;
-            if (global.hasFat)
+            if (std::FILE *file = std::fopen(global.commonPath(kTitleFile).c_str(), "rb"))
             {
-                if (std::FILE *file = std::fopen(global.commonPath(kTitleFile).c_str(), "rb"))
-                {
-                    const std::size_t size = std::fread(titleWords, 1, sizeof(titleWords), file);
-                    std::fclose(file);
-                    title.open(reinterpret_cast<const std::uint8_t *>(titleWords), size, 255);
-                }
+                const std::size_t size = std::fread(titleWords, 1, sizeof(titleWords), file);
+                std::fclose(file);
+                title.open(reinterpret_cast<const std::uint8_t *>(titleWords), size, 255);
             }
         }
+    }
+
+    HL_ARM void TopText::drawLogo(Slot &slot, int index)
+    {
+        loadTitle();
         const int band = index * kLines;
         canvas_.fill(0, band * kBandHeight, 256, kBandHeight * kLines, 0);
         const int left = (256 - title.width()) / 2;

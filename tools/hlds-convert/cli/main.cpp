@@ -345,6 +345,10 @@ namespace
                     common.intro ? "the Valve intro" : "no intro");
         for (const std::string &warning : common.warnings)
             std::printf("  warning: %s\n", warning.c_str());
+        if (!common.guest.empty())
+            std::printf("sent to a console with no card (its memory, textures aside):\n");
+        for (const std::string &line : common.guest)
+            std::printf("%s\n", line.c_str());
         if (all)
             std::printf("%zu maps, %d failed\n", names.size(), failed);
         return failed == 0 ? 0 : 1;
@@ -387,6 +391,11 @@ namespace
             std::fprintf(stderr, "error: %s\n", error.c_str());
         for (const std::string &warning : converter.common().warnings)
             std::printf("  warning: %s\n", warning.c_str());
+        // What each map takes of the memory of a console sent it.
+        if (!converter.common().guest.empty())
+            std::printf("sent to a console with no card (its memory, textures aside):\n");
+        for (const std::string &line : converter.common().guest)
+            std::printf("%s\n", line.c_str());
         std::printf("%d maps packed, %d failed: %ld MB on the card for %ld MB of files\n", maps, failed,
                     cardKb / 1024, rawKb / 1024);
         return failed == 0 ? 0 : 1;

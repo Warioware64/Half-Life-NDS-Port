@@ -18,6 +18,7 @@
 #include <thread>
 #include <cctype>
 
+#include "HlGuest.hpp"
 #include "HlLevelReader.hpp"
 #include "hlds/AtomicWrite.hpp"
 #include "hlds/BrushInfo.hpp"
@@ -75,6 +76,90 @@ namespace hlds
         result.archiveKb = static_cast<int>(report.cardBytes / 1024);
         result.archiveRawKb = static_cast<int>(report.rawBytes / 1024);
         result.archiveMembers = report.members;
+    }
+
+    void Converter::packAirGroups()
+    {
+        // The groups a console with no card can be sent: the maps of a game
+        // between consoles (those with a place to come into one), the
+        // Hazard Course's and Uplink's.
+        std::vector<std::string> groups[3];
+        std::error_code ec;
+        for (auto it = fs::directory_iterator(stageDir() / "maps", ec); !ec && it != fs::directory_iterator();
+             it.increment(ec))
+        {
+            if (it->path().extension() != ".hlm")
+                continue;
+            const std::string name = it->path().stem().string();
+            if (name.rfind("t0a0", 0) == 0)
+            {
+                groups[1].push_back(name);
+                continue;
+            }
+            if (name.rfind("hldemo", 0) == 0)
+            {
+                groups[2].push_back(name);
+                continue;
+            }
+            std::vector<std::uint8_t> level;
+            std::string ignored;
+            hldata::LevelView view;
+            if (!readFile(it->path(), level, ignored) ||
+                view.open(level.data(), static_cast<std::uint32_t>(level.size())) != hldata::LevelError::Ok)
+                continue;
+            for (std::uint32_t e = 0; e < view.entityCount; ++e)
+            {
+                if (view.entities[e].classId == static_cast<std::uint16_t>(hldata::EntityClass::InfoPlayerDeathmatch))
+                {
+                    groups[0].push_back(name);
+                    break;
+                }
+            }
+        }
+        {
+            PackReport report;
+            std::string why;
+            if (!packAirCommon(stageDir(), dataDir(options_.cardRoot), report, why))
+                common_.warnings.push_back("the air common archive was not made: " + why);
+        }
+        for (int g = 0; g < 3; ++g)
+        {
+            std::sort(groups[g].begin(), groups[g].end());
+            AirReport report;
+            std::string why;
+            if (!packAir(stageDir(), dataDir(options_.cardRoot), hldata::kAirGroupNames[g + 1], groups[g], g == 0, report,
+                         why))
+            {
+                common_.warnings.push_back(std::string("the air archives of ") + hldata::kAirGroupNames[g + 1] +
+                                           " were not made: " + why);
+                continue;
+            }
+            // What each takes of a guest's memory: its level, models and
+            // sounds, and the base's (textures are in video memory).
+            const auto of = [](const std::size_t *raw, hldata::GuestKind kind) { return raw[static_cast<int>(kind)]; };
+            const std::size_t base = of(report.baseRaw, hldata::GuestKind::Model) + of(report.baseRaw, hldata::GuestKind::Sound);
+            if (!report.maps.empty())
+                common_.guest.push_back(std::string(hldata::kAirGroupNames[g + 1]) + " (base " +
+                                        std::to_string(base / 1024) + " KB):");
+            for (const AirReport::Map &map : report.maps)
+            {
+                const std::size_t level = of(map.raw, hldata::GuestKind::Level);
+                const std::size_t models = of(map.raw, hldata::GuestKind::Model);
+                const std::size_t sounds = of(map.raw, hldata::GuestKind::Sound);
+                const auto data = static_cast<std::uint32_t>(level + models + sounds + base);
+                CommonResult::Guest guest;
+                guest.peak = hldata::guestPeak(data);
+                guest.fits = hldata::guestFits(data);
+                common_.guestByMap[map.name] = guest;
+                char line[160];
+                std::snprintf(line, sizeof(line),
+                              "  %-14s level %4zu  models %3zu  sounds %3zu  -> %4u KB of %u, %s (sent: %zu KB)",
+                              map.name.c_str(), level / 1024, models / 1024, sounds / 1024,
+                              static_cast<unsigned>(guest.peak / 1024), static_cast<unsigned>(hldata::kGuestRamBytes / 1024),
+                              guest.fits ? "fits" : "TOO BIG", map.bytes / 1024);
+                common_.guest.push_back(line);
+            }
+        }
     }
 
     std::string Converter::preflight() const
@@ -1587,6 +1672,7 @@ namespace hlds
                 common_.warnings.push_back("the common archive was not made: " + why);
         }
 
+        packAirGroups();
         if (!writeManifest(error))
             return failed + 1;
         return failed;
@@ -1619,6 +1705,7 @@ namespace hlds
             if (done)
                 done(result);
         }
+        packAirGroups();
         if (!writeManifest(error))
             return failed + 1;
         return failed;
@@ -1674,11 +1761,37 @@ namespace hlds
                     map.spawns < 255)
                     ++map.spawns;
             }
+            // (What it is sent as to a console with no card, if anything.)
+            const fs::path air = dir / "air" / (map.name + ".hgs");
+            std::error_code missing;
+            if (fs::is_regular_file(air, missing))
+            {
+                map.airBytes = static_cast<std::uint32_t>(fs::file_size(air, missing));
+                const auto guest = common_.guestByMap.find(map.name);
+                if (guest != common_.guestByMap.end())
+                {
+                    map.guestPeakBytes = guest->second.peak;
+                    map.guestFits = guest->second.fits;
+                }
+                map.airGroup = static_cast<std::uint8_t>(
+                    map.name.rfind("t0a0", 0) == 0 ? hldata::AirGroup::Hazard
+                    : map.name.rfind("hldemo", 0) == 0 ? hldata::AirGroup::Uplink
+                                                       : hldata::AirGroup::Match);
+            }
             manifest.maps.push_back(std::move(map));
         }
         std::sort(manifest.maps.begin(), manifest.maps.end(),
                   [](const hldata::ManifestMap &a, const hldata::ManifestMap &b)
                   { return a.name < b.name; });
+        manifest.airBaseBytes.assign(static_cast<std::size_t>(hldata::AirGroup::Count), 0);
+        for (int g = 1; g < static_cast<int>(hldata::AirGroup::Count); ++g)
+        {
+            std::error_code missing;
+            const fs::path base = dir / "air" / (std::string(hldata::kAirGroupNames[g]) + ".base.hgs");
+            if (fs::is_regular_file(base, missing))
+                manifest.airBaseBytes[static_cast<std::size_t>(g)] =
+                    static_cast<std::uint32_t>(fs::file_size(base, missing));
+        }
 
         // The start map: what was asked for, else what it was, else the
         // game's first map, else whatever there is.

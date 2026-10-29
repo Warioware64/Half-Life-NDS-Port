@@ -30,7 +30,20 @@
 namespace hldata
 {
     inline constexpr char kManifestMagic[4] = {'H', 'L', 'M', 'F'};
-    inline constexpr std::uint16_t kManifestVersion = 3;
+    inline constexpr std::uint16_t kManifestVersion = 5;
+
+    /// The groups of maps a console with no card can be sent (air/ on the
+    /// card): 0 is none. Each has its base, air/<name>.base.npac, which is
+    /// sent once and kept from map to map.
+    enum class AirGroup : std::uint8_t
+    {
+        None,
+        Match,  ///< the maps of a game between consoles
+        Hazard, ///< the Hazard Course
+        Uplink,
+        Count
+    };
+    inline constexpr const char *kAirGroupNames[] = {"", "match", "hazard", "uplink"};
     /// The same on both sides, or nothing reads back.
     inline constexpr std::size_t kYasFlags = yas::mem | yas::binary | yas::no_header;
 
@@ -58,11 +71,21 @@ namespace hldata
         /// How many places it has for a player to come into a game between
         /// consoles; 0 for a map that is not a multiplayer map.
         std::uint8_t spawns = 0;
+        /// Its group of what can be sent to a console with no card (AirGroup),
+        /// and the size of its own air archive, without the group's base.
+        std::uint8_t airGroup = 0;
+        std::uint32_t airBytes = 0;
+        /// Sent to a console with no card: the most of its memory the map
+        /// takes (HlGuest.hpp, guestPeak), and whether that leaves it enough
+        /// to play in (guestFits). 0 / false for a map not sent.
+        std::uint32_t guestPeakBytes = 0;
+        bool guestFits = false;
 
         template <class Ar>
         void serialize(Ar &ar)
         {
-            ar &name &levelBytes &archiveBytes &worstPolygons &worstVertices &textureCount &spawns;
+            ar &name &levelBytes &archiveBytes &worstPolygons &worstVertices &textureCount &spawns &airGroup &airBytes
+                &guestPeakBytes &guestFits;
         }
     };
 
@@ -71,11 +94,13 @@ namespace hldata
         std::string converterVersion;
         std::string startMap;
         std::vector<ManifestMap> maps;
+        /// The size of each AirGroup's base archive (0: there is none).
+        std::vector<std::uint32_t> airBaseBytes;
 
         template <class Ar>
         void serialize(Ar &ar)
         {
-            ar &converterVersion &startMap &maps;
+            ar &converterVersion &startMap &maps &airBaseBytes;
         }
 
         const ManifestMap *find(const std::string &name) const

@@ -24,6 +24,11 @@ public:
     const char *fatDevice = nullptr;   ///< libfat default drive, e.g. "fat:" / "sd:"
     std::string fatDeviceCPP;          ///< same as a std::string, for path building
     bool hasFat = false;               ///< FAT init succeeded and a drive is mounted
+    /// There is the game's data to read: on the card, or (a console that was
+    /// sent the game, HLDS_CHILD) received, on the "air:" drive
+    /// (net/AirDevice.hpp). What is WRITTEN -- saves, settings -- is the
+    /// card's alone, and goes by hasFat.
+    bool hasData = false;
     /// Without a card: what the console was like when it looked for one (the
     /// mode it runs in, its SD switch, the DLDI driver the loader put in, the
     /// path it was started from) -- said on the screen that says so, which is
@@ -71,15 +76,28 @@ public:
     // file on a card is slow; a map used to be two hundred of them. Loose
     // beside the archives: what the game writes (saves, settings) and the
     // music, which is played off the card as it goes.
+#ifdef HLDS_CHILD
+    // (Sent the game: what it was sent is laid out as on a card.)
+    std::string dataDir() const { return "air:/"; }
+#else
     std::string dataDir() const { return fatDeviceCPP + "_nds/hl_nds/data/"; }
+#endif
     /// A map's archive: maps/<name>.npac.
     std::string mapArchive(const std::string &name) const { return dataDir() + "maps/" + name + ".npac"; }
     /// Inside the archive of the map being played: "level.0", "tex/...",
     /// "spr/...", "mdl/...", "snd/...".
+#ifdef HLDS_CHILD
+    // (Sent the game, there are no archives: the map's files, and the
+    // common ones, are on the "air:" drive as they come -- net/AirDevice.hpp.
+    // What the group's base has, the loaders borrow: net/GuestLoad.hpp.)
+    std::string mapPath(const std::string &rel) const { return "air:/" + rel; }
+    std::string commonPath(const std::string &rel) const { return "air:/" + rel; }
+#else
     std::string mapPath(const std::string &rel) const { return "map:/" + rel; }
-    std::string texDir() const { return mapPath("tex/"); }
     /// Inside the card's common archive: "ui/...", "snd/...".
     std::string commonPath(const std::string &rel) const { return "common:/" + rel; }
+#endif
+    std::string texDir() const { return mapPath("tex/"); }
     /// Written by the game, never by the converter.
     std::string savesDir() const { return dataDir() + "saves/"; }
     std::string dataPath(const std::string &rel) const { return dataDir() + rel; }

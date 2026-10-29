@@ -47,6 +47,10 @@ namespace hlrt
         /// Nothing written: the map is going.
         void clear();
 
+        /// The game's title (ui/title.hic), read now rather than when first
+        /// shown (a console sent the game has it only while it starts up).
+        void loadTitle();
+
     private:
         static constexpr int kSlots = 2;
         static constexpr int kLines = 2;

@@ -12,6 +12,7 @@
 #include <atomic>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -128,6 +129,16 @@ namespace hlds
         bool decals = false; ///< the marks shots and blood leave
         int sounds = 0;    ///< the menu's
         std::vector<std::string> warnings;
+        /// What each map sent to a console with no card takes of its memory
+        /// (HlGuest.hpp): a line each, for the report.
+        std::vector<std::string> guest;
+        /// ... and the same, by map, for the manifest.
+        struct Guest
+        {
+            std::uint32_t peak = 0;
+            bool fits = false;
+        };
+        std::map<std::string, Guest> guestByMap;
     };
 
     class Converter
@@ -178,6 +189,8 @@ namespace hlds
         bool findMap(const std::string &name, std::filesystem::path &out) const;
         void packInto(MapResult &result) const;
         bool writeManifest(std::string &error) const;
+        /// The air archives (Pack.hpp, packAir) of the staged maps, by group.
+        void packAirGroups();
 
         ConvertOptions options_;
         CommonResult common_;

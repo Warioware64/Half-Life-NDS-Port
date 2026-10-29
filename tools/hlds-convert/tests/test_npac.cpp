@@ -12,13 +12,19 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <cstring>
 #include <random>
+#include <set>
 
+#include "HlGuest.hpp"
 #include "HlLevel.hpp"
+#include "HlLz77Stream.hpp"
+#include "HlModel.hpp"
 #include "TestBspBuilder.hpp"
 #include "hlds/AtomicWrite.hpp"
 #include "hlds/Lz77.hpp"
 #include "hlds/NpacWriter.hpp"
+#include "hlds/Pack.hpp"
 
 namespace fs = std::filesystem;
 using namespace hlds;
@@ -254,6 +260,216 @@ namespace
         const std::uint8_t text[] = {'1', '2', '3', '4', '5', '6', '7', '8', '9'};
         check(hldata::crc32(text, 9) == 0xCBF43926u, "and is the standard one");
     }
+
+    /// The decoder a console sent the game undoes it with, as it arrives: in
+    /// pieces of any size, straight into where it is to stay, coming back
+    /// the same as the PC's own decoder -- and a damaged or mis-sized
+    /// stream refused, never run past the end of its buffer.
+    void testStreamDecoder()
+    {
+        std::mt19937 rng(7);
+        int good = 0, tried = 0;
+        for (int round = 0; round < 60; ++round)
+        {
+            Bytes in(static_cast<std::size_t>(rng() % 70000));
+            // (Half of them with long repeats, as a level's is: the runs
+            // that reach back over what they write.)
+            for (std::size_t i = 0; i < in.size(); ++i)
+                in[i] = round % 2 ? static_cast<std::uint8_t>(rng()) : static_cast<std::uint8_t>((i / (1 + rng() % 9)) & 7);
+            const Bytes packed = lz77Compress(in.data(), in.size());
+            Bytes out(in.size() + 16, 0xEE);
+            hldata::Lz77Stream stream;
+            stream.begin(static_cast<std::uint32_t>(in.size()));
+            // (In pieces of any size, both ways: what comes, and where what
+            // it comes back to goes.)
+            std::size_t at = 0, wrote = 0;
+            bool ok = true;
+            while (ok && !stream.done())
+            {
+                const std::size_t piece = std::min<std::size_t>(packed.size() - at, 1 + rng() % 700);
+                const std::uint8_t *p = packed.data() + at;
+                std::size_t left = piece;
+                const std::size_t room = std::min<std::size_t>(in.size() - wrote, 1 + rng() % 900);
+                wrote += stream.pump(p, left, out.data() + wrote, room);
+                at += piece - left;
+                ok = !stream.failed() && (at < packed.size() || wrote == in.size() || left == 0);
+                if (at >= packed.size() && wrote < in.size() && room == 0)
+                    ok = false;
+            }
+            ++tried;
+            if (ok && stream.done() && std::equal(in.begin(), in.end(), out.begin()) && out[in.size()] == 0xEE)
+                ++good;
+        }
+        check(good == tried, "an LZ77 stream fed in pieces of any size comes back whole, into its own buffer");
+
+        const Bytes in(5000, 7);
+        Bytes packed = lz77Compress(in.data(), in.size());
+        Bytes out(in.size());
+        hldata::Lz77Stream stream;
+        auto undo = [&](const Bytes &bytes, std::uint32_t expect, std::size_t give)
+        {
+            stream.begin(expect);
+            const std::uint8_t *p = bytes.data();
+            std::size_t left = std::min(give, bytes.size());
+            stream.pump(p, left, out.data(), out.size());
+            return !stream.failed();
+        };
+        check(!undo(packed, 4999, packed.size()), "a stream of another size than it says is refused");
+        // A run from before the start: the first item made a reference.
+        const Bytes bad = {0x10, 0x10, 0x00, 0x00, 0x80, 0x00, 0x05};
+        check(!undo(bad, 16, bad.size()), "a run reaching before the start is refused");
+        check(undo(packed, 5000, packed.size() / 2) && !stream.done(), "half a stream is not a whole one");
+    }
+
+    /// What a console with no card is sent of a group of maps (packAir),
+    /// from the converter's own stage when HLDS_STAGE_DIR says where it is:
+    /// each map's archive and the group's base, together, are all that the
+    /// map's card archive has for a DS -- no DSi model or sound, and in a
+    /// game between consoles no word of the suit's -- and a model is the
+    /// same on every map of the group, so it is sent once, in the base.
+    void testAir()
+    {
+        const char *stage = std::getenv("HLDS_STAGE_DIR");
+        if (stage == nullptr || stage[0] == '\0')
+        {
+            std::printf("test_npac: HLDS_STAGE_DIR not set, the air archives were not made\n");
+            return;
+        }
+        const std::vector<std::string> maps = {"frenzy", "stalkyard", "xen_dm"};
+        for (const std::string &map : maps)
+        {
+            if (!fs::is_regular_file(fs::path(stage) / "maps" / (map + ".hlm")))
+            {
+                std::printf("test_npac: %s is not staged, the air archives were not made\n", map.c_str());
+                return;
+            }
+        }
+        const fs::path card = fs::temp_directory_path() / "hlds_test_air";
+        std::error_code ec;
+        fs::remove_all(card, ec);
+        fs::create_directories(card / "maps");
+        AirReport report;
+        std::string error;
+        check(packAir(stage, card, "match", maps, true, report, error), "the air archives are made");
+        if (!error.empty())
+            std::printf("test_npac: %s\n", error.c_str());
+        // (A guest stream read back with the console's own reader, as it
+        // would come: in pieces.)
+        auto read = [&](const fs::path &file, std::vector<NpacMember> &members)
+        {
+            Bytes bytes;
+            std::string why;
+            if (!readFile(file, bytes, why))
+                return false;
+            // (In pieces of 600 bytes, as the air brings them.)
+            struct Supply : hldata::GuestSupply
+            {
+                const Bytes *bytes;
+                std::size_t at = 0;
+                bool more(const std::uint8_t *&data, std::size_t &size) override
+                {
+                    if (at >= bytes->size())
+                        return false;
+                    data = bytes->data() + at;
+                    size = std::min<std::size_t>(600, bytes->size() - at);
+                    at += size;
+                    return true;
+                }
+            } supply;
+            supply.bytes = &bytes;
+            hldata::GuestCursor cursor(supply);
+            if (!cursor.start())
+                return false;
+            while (cursor.next())
+            {
+                NpacMember out;
+                out.path = cursor.name();
+                out.data.resize(cursor.member().rawSize);
+                // (Read in odd pieces, as a reader would.)
+                std::size_t got = 0;
+                while (got < out.data.size())
+                {
+                    const std::size_t n = cursor.read(out.data.data() + got, std::min<std::size_t>(333, out.data.size() - got));
+                    if (n == 0)
+                        return false;
+                    got += n;
+                }
+                members.push_back(std::move(out));
+            }
+            return cursor.ended() && cursor.header().streamBytes == bytes.size();
+        };
+        std::vector<NpacMember> base;
+        check(read(card / "air" / "match.base.hgs", base), "the group's base reads back, a piece at a time");
+        int models = 0;
+        for (const NpacMember &member : base)
+            models += member.path.size() > 4 && member.path.compare(member.path.size() - 4, 4, ".hmd") == 0;
+        std::printf("test_npac: the base of %zu maps: %zu files, %d models, %zu KB\n", maps.size(), base.size(),
+                    models, report.baseBytes / 1024);
+        check(models > 5, "the weapons are in the base");
+        for (std::size_t m = 0; m < maps.size(); ++m)
+        {
+            std::vector<NpacMember> own;
+            check(read(card / "air" / (maps[m] + ".hgs"), own), "a map's guest stream reads back, a piece at a time");
+            std::set<std::string> sent;
+            bool clean = true;
+            for (const std::vector<NpacMember> *part : {&base, &own})
+            {
+                for (const NpacMember &member : *part)
+                {
+                    clean = clean && member.path.find(".dsi.") == std::string::npos &&
+                            member.path.rfind("snd/fvox_", 0) != 0 && sent.insert(member.path).second;
+                }
+            }
+            check(clean, "nothing of a DSi's, no word of the suit's, nothing twice");
+            // Every model's skin is there with it.
+            bool skinned = true;
+            for (const std::vector<NpacMember> *part : {&base, &own})
+            {
+                for (const NpacMember &member : *part)
+                {
+                    if (member.path.rfind("mdl/", 0) != 0 || member.data.size() < sizeof(hldata::ModelHeader) ||
+                        member.path.compare(member.path.size() - 4, 4, ".hmd") != 0)
+                        continue;
+                    hldata::ModelHeader header;
+                    std::memcpy(&header, member.data.data(), sizeof(header));
+                    const std::string name = member.path.substr(4, member.path.size() - 8);
+                    skinned = skinned && (header.atlasWidth == 0 ||
+                                          sent.count("mdl/" + hldata::modelSkinFile(name.c_str(), header.atlasWidth,
+                                                                                    header.atlasHeight)) != 0);
+                }
+            }
+            check(skinned, "every model's skin is sent with it");
+            // And all that the card's archive has for a DS is there.
+            PackReport cardReport;
+            check(packMap(stage, card, maps[m], false, cardReport, error), "the card archive is made too");
+            std::vector<NpacMember> whole;
+            read(card / "maps" / (maps[m] + ".npac"), whole);
+            int lost = 0;
+            for (const NpacMember &member : whole)
+            {
+                const bool dsi = member.path.find(".dsi.") != std::string::npos;
+                const bool skin = member.path.rfind("mdl/", 0) == 0 &&
+                                  member.path.compare(member.path.size() - 4, 4, ".htx") == 0;
+                if (!dsi && !skin && member.path.rfind("snd/fvox_", 0) != 0 && sent.count(member.path) == 0)
+                {
+                    // (A DSi's copy of a sound is named by its rate: a DS
+                    // reads the lowest.)
+                    bool twin = false;
+                    if (member.path.rfind("snd/", 0) == 0)
+                    {
+                        const std::string stem = member.path.substr(0, member.path.find('.'));
+                        for (const std::string &path : sent)
+                            twin = twin || path.rfind(stem + ".", 0) == 0;
+                    }
+                    lost += twin ? 0 : 1;
+                }
+            }
+            check(lost == 0, "the air archive and the base hold all a DS reads of the map");
+            std::printf("test_npac: %s by air: %zu KB of its own, %zu KB with the base\n", maps[m].c_str(),
+                        report.maps[m].bytes / 1024, (report.maps[m].bytes + report.baseBytes) / 1024);
+        }
+        fs::remove_all(card, ec);
+    }
 } // namespace
 
 int main()
@@ -262,6 +478,8 @@ int main()
     testArchive();
     testAgainstEngine();
     testChecksum();
+    testStreamDecoder();
+    testAir();
     if (g_failures == 0)
         std::printf("test_npac: ok\n");
     return g_failures == 0 ? 0 : 1;

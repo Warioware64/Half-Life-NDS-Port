@@ -8,6 +8,7 @@
 
 
 #include "Global.hpp"
+#include "net/GuestLoad.hpp"
 #include "Settings.hpp"
 #include "HlRoomPresets.hpp"
 #include "HlStereoMusic.hpp"
@@ -59,7 +60,7 @@ namespace hlrt
         // The menu's own sounds, for as long as the game runs.
         for (int n = 0; n < kUiSoundCount; ++n)
         {
-            if (global.hasFat)
+            if (global.hasData)
                 readClip(kUiSoundFiles[n], ui_[n]);
         }
         if (dsi)
@@ -126,6 +127,30 @@ namespace hlrt
         return true;
     }
 
+#ifdef HLDS_CHILD
+    bool Sound::borrowClip(const char *name, Clip &clip)
+    {
+        clip = Clip();
+        const std::uint8_t *block = nullptr;
+        std::uint32_t size = 0;
+        SoundHeader header;
+        if (!guest::borrow((std::string("snd/") + name + ".hsn").c_str(), block, size) || size <= sizeof(header))
+            return false;
+        std::memcpy(&header, block, sizeof(header));
+        if (!soundHeaderValid(header, size))
+            return false;
+        auto *data = const_cast<std::uint8_t *>(block + sizeof(header));
+        DC_FlushRange(data, header.dataBytes);
+        clip.data = data;
+        clip.shared = true;
+        clip.bytes = header.dataBytes;
+        clip.loopWord = header.loopWord;
+        clip.rate = header.rate;
+        clip.ms = static_cast<std::uint32_t>((static_cast<std::uint64_t>(header.samples) * 1000) / header.rate);
+        return true;
+    }
+#endif
+
     void Sound::load()
     {
         const LevelView &view = level.view;
@@ -152,6 +177,30 @@ namespace hlrt
         // Left with too little to play in (a DS, in a map with every weapon),
         // the map does without the rest rather than without its memory --
         // and the rest is a weapon's noise, not the map's own.
+#ifdef HLDS_CHILD
+        // Sent the game: every sound the map was sent, in the order it was
+        // sent -- those kept, then the rest -- each borrowed from the group's
+        // base or read as it comes, straight into its clip.
+        for (int pass = 0; pass < 2; ++pass)
+        {
+            for (int i = 0; i < count; ++i)
+            {
+                if (kept[i] != (pass == 0) || view.sounds[i].name[0] == '\0' || (lazy_ != nullptr && lazy_[i]))
+                    continue;
+                if (borrowClip(view.sounds[i].name, clips_[i]) || readClip(view.sounds[i].name, clips_[i]))
+                {
+                    ++loaded_;
+                    bytes_ += static_cast<int>(clips_[i].bytes);
+                    if (!clips_[i].shared)
+                        guest::count(hldata::GuestKind::Sound, clips_[i].bytes);
+                }
+            }
+        }
+        std::free(kept);
+        lastVblank_ = Global::vblanks();
+        resumeMusic();
+        return;
+#endif
         const int laterFrom = static_cast<int>(kCommonSoundsBefore30);
         const int laterTo = static_cast<int>(commonsOf(view.header->version));
         for (int pass = 0; pass < 2; ++pass)
@@ -305,7 +354,8 @@ namespace hlrt
         swiWaitForVBlank();
         for (int i = 0; i < count_; ++i)
         {
-            std::free(clips_[i].data);
+            if (!clips_[i].shared)
+                std::free(clips_[i].data);
         }
         for (Speech &speech : speech_)
         {
@@ -508,7 +558,8 @@ namespace hlrt
         if (lazyClip_[place] >= 0)
         {
             const int gone = lazyClip_[place];
-            std::free(clips_[gone].data);
+            if (!clips_[gone].shared)
+                std::free(clips_[gone].data);
             clips_[gone] = Clip();
             lazyClip_[place] = -1;
         }

@@ -12,6 +12,7 @@
 #include "data/LevelFile.hpp"
 #include "data/TextureCache.hpp"
 #include "data/VramWriter.hpp"
+#include "net/GuestLoad.hpp"
 
 namespace hlrt
 {
@@ -360,6 +361,17 @@ namespace hlrt
                 continue;
             }
             const char *name = level.view.modelRefs[i].name;
+#ifdef HLDS_CHILD
+            // (Sent the game: a model of the group's base was kept when it
+            // came, and is borrowed -- never this cache's to free.)
+            {
+                const std::uint8_t *shared = nullptr;
+                std::uint32_t sharedSize = 0;
+                if (guest::borrow((std::string("mdl/") + name + ".hmd").c_str(), shared, sharedSize) &&
+                    views_[i].open(shared, sharedSize))
+                    continue;
+            }
+#endif
             // A DSi has the memory for the file with the game's own mesh as
             // its finest level, where the converter made one.
             std::uint32_t size = 0;
@@ -376,6 +388,9 @@ namespace hlrt
                 continue;
             }
             blocks_[i] = block;
+#ifdef HLDS_CHILD
+            guest::count(hldata::GuestKind::Model, size);
+#endif
         }
         // Their skins. Without one (not on the card, or no room in video
         // memory) a model is drawn in its lighting alone.
