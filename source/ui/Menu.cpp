@@ -14,6 +14,7 @@
 #include "game/SaveGame.hpp"
 #include "net/NetGame.hpp"
 #include "render/BottomScreen.hpp"
+#include "ui/Keyboard.hpp"
 #include "ui/TouchCanvas.hpp"
 
 namespace hlrt
@@ -180,7 +181,35 @@ namespace hlrt
         int slidLeast(Id id) { return id == kAimSpeed || id == kPitchSpeed ? 1 : 0; }
         int slidMost(Id id) { return id == kAimSpeed || id == kPitchSpeed ? kAimSpeedMost : kVolumeMost; }
         bool isVolume(Id id) { return id == kMusic || id == kEffects || id == kVoices || id == kAmbience; }
+        // What is on the card, for the rows that are there only if it is
+        // (Menu::probeCard): the game, its Hazard Course, Uplink.
+        bool onCard[3] = {true, false, false};
+
+        /// A row that is not shown at all: one that depends on what is not
+        /// on the card (rule: nothing is offered that is not there).
+        bool hiddenRow(Id id)
+        {
+            return (id == kGameTraining && !onCard[1]) || (id == kGameUplink && !onCard[2]);
+        }
+
+        const Row *tableOf(int page, int &count);
+
+        /// A page's rows as they are shown: its table less what is hidden.
         const Row *rowsOf(int page, int &count)
+        {
+            static Row shown[16];
+            int all = 0;
+            const Row *table = tableOf(page, all);
+            count = 0;
+            for (int i = 0; i < all && count < 16; ++i)
+            {
+                if (!hiddenRow(table[i].id))
+                    shown[count++] = table[i];
+            }
+            return shown;
+        }
+
+        const Row *tableOf(int page, int &count)
         {
             // (A sheet -- the settings, the saves, the achievements -- has
             // no rows of these: Menu::drawSheet.)
@@ -212,6 +241,7 @@ namespace hlrt
     void Menu::openTitle()
     {
         open();
+        probeCard();
         title_ = true;
         page_ = Page::Title;
         draw();
@@ -219,14 +249,20 @@ namespace hlrt
 
     /// Which game: the game, its Hazard Course, Uplink -- each one there
     /// only if its first map is on the card.
-    void Menu::openNewGame()
+    void Menu::probeCard()
     {
         static const char *const kFirst[3] = {nullptr, "t0a0", "hldemo1"};
         for (int i = 1; i < 3; ++i)
         {
             hldata::LevelHeader header{};
             gameThere_[i] = Level::peekHeader(kFirst[i], header);
+            onCard[i] = gameThere_[i];
         }
+    }
+
+    void Menu::openNewGame()
+    {
+        probeCard();
         if (skill_ < hldata::kSkillEasy || skill_ > hldata::kSkillHard)
             skill_ = hldata::kSkillMedium;
         page_ = Page::NewGame;
@@ -1731,10 +1767,7 @@ namespace hlrt
         // (A DS has no DSP to switch: the row is there, and says so. A save
         // that cannot be loaded, or is not the player's to write, likewise;
         // and CONTINUE with nothing to continue.)
-        const bool dead = (item.id == kContinue && (saves_ == nullptr || saveMostRecent(*saves_) < 0)) ||
-                          (item.id == kCommand && title_) || (item.id == kMultiplayer && netGame.maps().empty()) ||
-                          (item.id == kGameHalfLife && !gameThere_[0]) || (item.id == kGameTraining && !gameThere_[1]) ||
-                          (item.id == kGameUplink && !gameThere_[2]);
+        const bool dead = whyDead(item.id) != nullptr;
         char text[48];
         switch (item.id)
         {
@@ -1779,10 +1812,50 @@ namespace hlrt
         return row < rowCount() && (y - at.top) % at.pitch < at.height ? row : -1;
     }
 
+    const char *Menu::whyDead(int id) const
+    {
+        switch (id)
+        {
+        case kContinue:
+            return saves_ == nullptr || saveMostRecent(*saves_) < 0 ? "No saved game to go on with" : nullptr;
+        case kCommand:
+            return title_ ? "The console is for a game being played" : nullptr;
+        case kMultiplayer:
+#ifndef HLDS_EXPERIMENTAL
+            return "Multiplayer: experimental, not in this build";
+#else
+            return netGame.maps().empty() ? "No multiplayer map on the card" : nullptr;
+#endif
+        case kGameHalfLife:
+            return gameThere_[0] ? nullptr : "Half-Life is not on the card";
+        case kGameTraining:
+            return gameThere_[1] ? nullptr : "The Hazard Course is not on the card";
+        case kGameUplink:
+            return gameThere_[2] ? nullptr : "Uplink is not on the card";
+        default:
+            return nullptr;
+        }
+    }
+
+    void Menu::showReason(const char *why)
+    {
+        Canvas &canvas = touchCanvas.canvas();
+        const FontView &small = touchCanvas.font(kFontSmall);
+        canvas.fill(0, 168, 256, small.height() + 4, kUiBack);
+        drawTextCentred(canvas, small, 128, 170, why, inkFor(small, kUiGrey));
+    }
+
     Menu::Action Menu::fire(int row)
     {
         int count = 0;
         const Row &item = rowsOf(static_cast<int>(page_), count)[row];
+        // (A row greyed out does nothing but say why.)
+        if (const char *why = whyDead(item.id))
+        {
+            sound.ui(kUiSoundTick);
+            showReason(why);
+            return Action::None;
+        }
         sound.ui(kUiSoundPress);
         switch (item.id)
         {
@@ -1895,8 +1968,7 @@ namespace hlrt
                 std::snprintf(question, sizeof(question), "The wireless would not start (%d)", netlinkFailStage());
                 page_ = Page::Multiplayer;
                 draw();
-                const FontView &small = touchCanvas.font(kFontSmall);
-                drawTextCentred(touchCanvas.canvas(), small, 128, 170, question, inkFor(small, kUiGrey));
+                showReason(question);
             }
             break;
         case kNetJoin:
@@ -2026,7 +2098,6 @@ namespace hlrt
 
     void Menu::console(ConsoleRun run)
     {
-        static const char *const kKeys[4] = {"1234567890", "qwertyuiop", "asdfghjkl_", "zxcvbnm-.<"};
         // What the console has said, kept while the game runs (as the
         // game's own is): closed and opened again, it is all still there.
         static ConsoleLog log;
@@ -2053,16 +2124,13 @@ namespace hlrt
             earlier[earlierCount++] = typed;
         };
         // The screen, from the top: what was said (kShown lines of the plain
-        // letters), the line being typed, the keys, and SPACE / ENTER /
-        // CANCEL, small, along the bottom.
+        // letters), then the keyboard -- the line being typed, the keys,
+        // and SPACE / ENTER / CANCEL along the bottom.
         constexpr int kShown = 7, kLineStep = 9, kLogTop = 0;
-        constexpr int kPromptTop = 64, kPromptHigh = 16;
-        constexpr int kKey = 24, kLeft = 8, kTop = 82;
-        constexpr int kBottom = 180, kWideHigh = 12;
         bottomScreen.release();
         Canvas &canvas = touchCanvas.canvas();
-        const FontView &font = touchCanvas.font(kFontMedium), &small = touchCanvas.font(kFontSmall),
-                       &plain = touchCanvas.plain();
+        const FontView &plain = touchCanvas.plain();
+        Keyboard keyboard(typed, kLongest);
         int scrolled = 0; // lines back from the newest
         auto said = [&]()
         {
@@ -2077,44 +2145,9 @@ namespace hlrt
             if (scrolled > 0)
                 drawText(canvas, plain, 248, kLogTop, "^", inkFor(plain, kUiOrange));
         };
-        auto prompt = [&]()
-        {
-            canvas.fill(0, kPromptTop, 256, kPromptHigh, kUiBack);
-            canvas.frame(6, kPromptTop, 244, kPromptHigh, kUiEdge);
-            // (A long line: its end, which is where the typing is.)
-            char line[48];
-            const std::size_t shown = 27;
-            const char *from = typed.size() > shown ? typed.c_str() + (typed.size() - shown) : typed.c_str();
-            std::snprintf(line, sizeof(line), "%s%s_", typed.size() > shown ? "<" : "] ", from);
-            drawText(canvas, plain, 12, kPromptTop + (kPromptHigh - plain.height()) / 2, line,
-                     inkFor(plain, kUiWhite));
-        };
-        auto key = [&](int row, int col, bool down)
-        {
-            const char text[2] = {kKeys[row][col], '\0'};
-            if (text[0] == ' ')
-                return;
-            canvas.button(kLeft + col * kKey, kTop + row * kKey, kKey - 1, kKey - 1, down);
-            drawTextCentred(canvas, font, kLeft + col * kKey + kKey / 2, kTop + row * kKey + (kKey - font.height()) / 2,
-                            text, inkFor(font, down ? kUiWhite : kUiOrange));
-        };
-        auto wide = [&](int n, bool down)
-        {
-            static const char *const kNames[3] = {"SPACE", "ENTER", "CANCEL"};
-            canvas.button(kLeft + n * 80, kBottom, 79, kWideHigh, down);
-            drawTextCentred(canvas, small, kLeft + n * 80 + 40, kBottom + (kWideHigh - small.height()) / 2, kNames[n],
-                            inkFor(small, down ? kUiWhite : kUiOrange));
-        };
         canvas.clear();
         said();
-        prompt();
-        for (int row = 0; row < 4; ++row)
-        {
-            for (int col = 0; col < 10; ++col)
-                key(row, col, false);
-        }
-        for (int n = 0; n < 3; ++n)
-            wide(n, false);
+        keyboard.draw();
         // The line given: said above, run, and what it said said too.
         // Whether the console is to close now.
         auto enter = [&]() -> bool
@@ -2126,7 +2159,7 @@ namespace hlrt
             scrolled = 0;
             if (line.empty())
             {
-                prompt();
+                keyboard.drawPrompt();
                 return false;
             }
             log.print(("] " + line).c_str());
@@ -2140,97 +2173,77 @@ namespace hlrt
             bottomScreen.release();
             canvas.clear();
             said();
-            prompt();
-            for (int row = 0; row < 4; ++row)
-            {
-                for (int col = 0; col < 10; ++col)
-                    key(row, col, false);
-            }
-            for (int n = 0; n < 3; ++n)
-                wide(n, false);
+            keyboard.draw();
             return false;
         };
 
-        // The touch that asked for this is still down, and may be on a key
-        // now: not until it has lifted is anything typed.
-        bool touching = true;
-        int heldRow = -1, heldCol = -1, heldWide = -1;
         while (true)
         {
             swiWaitForVBlank();
             sound.frame();
             scanKeys();
-            const std::uint32_t pressed = keysDown();
-            if (pressed & (KEY_B | KEY_START))
-                return;
-            if ((pressed & KEY_A) && enter())
-                return;
-            if ((pressed & (KEY_UP | KEY_DOWN)) && earlierCount > 0)
+            switch (keyboard.poll())
             {
-                recalled += (pressed & KEY_UP) ? -1 : 1;
-                recalled = recalled < 0 ? 0 : (recalled > earlierCount ? earlierCount : recalled);
-                typed = recalled < earlierCount ? earlier[recalled] : std::string();
-                sound.ui(kUiSoundTick);
-                prompt();
-            }
-            if (pressed & (KEY_L | KEY_R))
+            case Keyboard::Event::Cancel:
+                return;
+            case Keyboard::Event::Enter:
+                if (enter())
+                    return;
+                break;
+            case Keyboard::Event::Up:
+            case Keyboard::Event::Down:
+                if (earlierCount > 0)
+                {
+                    recalled += (keysDown() & KEY_UP) ? -1 : 1;
+                    recalled = recalled < 0 ? 0 : (recalled > earlierCount ? earlierCount : recalled);
+                    typed = recalled < earlierCount ? earlier[recalled] : std::string();
+                    sound.ui(kUiSoundTick);
+                    keyboard.drawPrompt();
+                }
+                break;
+            case Keyboard::Event::PageBack:
+            case Keyboard::Event::PageOn:
             {
                 // A page back (L) or on (R) through what was said.
                 const int most = log.count() > kShown ? log.count() - kShown : 0;
-                scrolled += (pressed & KEY_L) ? kShown - 1 : -(kShown - 1);
+                scrolled += (keysDown() & KEY_L) ? kShown - 1 : -(kShown - 1);
                 scrolled = scrolled < 0 ? 0 : (scrolled > most ? most : scrolled);
                 said();
+                break;
             }
-            const bool down = (keysHeld() & KEY_TOUCH) != 0;
-            if (down && !touching)
+            default:
+                break;
+            }
+        }
+    }
+
+    bool Menu::typeLine(std::string &text, std::size_t most, const char *heading)
+    {
+        bottomScreen.release();
+        Canvas &canvas = touchCanvas.canvas();
+        const FontView &font = touchCanvas.font(kFontMedium);
+        canvas.clear();
+        drawTextCentred(canvas, font, 128, 30, heading, inkFor(font, kUiOrange));
+        std::string typing = text;
+        Keyboard keyboard(typing, most);
+        keyboard.draw();
+        while (true)
+        {
+            swiWaitForVBlank();
+            sound.frame();
+            scanKeys();
+            switch (keyboard.poll())
             {
-                touchPosition touch;
-                touchRead(&touch);
-                const int col = (touch.px - kLeft) / kKey, row = (touch.py - kTop) / kKey;
-                if (touch.py >= kBottom && touch.py < kBottom + kWideHigh && touch.px >= kLeft && touch.px < kLeft + 240)
-                {
-                    const int n = (touch.px - kLeft) / 80;
-                    sound.ui(kUiSoundPress);
-                    if (n == 1 && enter())
-                        return;
-                    if (n == 2)
-                        return;
-                    if (n == 0 && typed.size() < kLongest)
-                        typed.push_back(' ');
-                    heldWide = n;
-                    wide(n, true);
-                    prompt();
-                }
-                else if (touch.px >= kLeft && touch.py >= kTop && col < 10 && row < 4 && kKeys[row][col] != ' ')
-                {
-                    const char c = kKeys[row][col];
-                    sound.ui(kUiSoundTick);
-                    if (c == '<')
-                    {
-                        if (!typed.empty())
-                            typed.pop_back();
-                    }
-                    else if (typed.size() < kLongest)
-                    {
-                        typed.push_back(c);
-                    }
-                    heldRow = row;
-                    heldCol = col;
-                    key(row, col, true);
-                    prompt();
-                }
+            case Keyboard::Event::Enter:
+                text = typing;
+                draw();
+                return true;
+            case Keyboard::Event::Cancel:
+                draw();
+                return false;
+            default:
+                break;
             }
-            else if (!down && heldRow >= 0)
-            {
-                key(heldRow, heldCol, false);
-                heldRow = heldCol = -1;
-            }
-            else if (!down && heldWide >= 0)
-            {
-                wide(heldWide, false);
-                heldWide = -1;
-            }
-            touching = down;
         }
     }
 } // namespace hlrt

@@ -300,9 +300,9 @@ namespace hlds
         ///  - the hull of something large (a bullsquid's: the world's hull
         ///    2), which only the monsters walk by, where nothing else reaches
         ///    into its nodes;
-        ///  - and its sounds at the full rate where the card's are halved (so
-        ///    that a sound is the same on every map: `whole` says which are).
-        bool guestLevel(std::vector<std::uint8_t> &level, const std::function<bool(const std::string &)> &whole)
+        ///  (Its sounds are the host's own, at the host's own rate: a guest
+        ///  never carries more of one than the host.)
+        bool guestLevel(std::vector<std::uint8_t> &level)
         {
             if (level.size() < hldata::kLevelDataStart)
                 return false;
@@ -310,23 +310,6 @@ namespace hlds
             std::memcpy(&header, level.data(), sizeof(header));
             auto *dir = reinterpret_cast<hldata::SectionDir *>(level.data() + sizeof(hldata::LevelHeader));
             const auto at = [&](hldata::Section s) -> hldata::SectionDir & { return dir[static_cast<int>(s)]; };
-            // Sounds at the full rate: "x.5k" becomes "x.11k" where there is one.
-            {
-                const hldata::SectionDir &d = at(hldata::Section::Sounds);
-                auto *sounds = reinterpret_cast<hldata::SoundRef *>(level.data() + d.offset);
-                for (std::uint32_t i = 0; i < d.count; ++i)
-                {
-                    std::string name = sounds[i].name;
-                    const std::size_t dot = name.rfind('.');
-                    if (dot == std::string::npos || name.compare(dot, 2, ".5") != 0 || name.size() != dot + 3)
-                        continue;
-                    const std::string full = name.substr(0, dot) + ".11" + name.substr(dot + 2);
-                    if (full.size() >= sizeof(sounds[i].name) || !whole(full))
-                        continue;
-                    std::memset(sounds[i].name, 0, sizeof(sounds[i].name));
-                    std::memcpy(sounds[i].name, full.data(), full.size());
-                }
-            }
             // The large hull's nodes, where they are its alone.
             std::vector<std::vector<std::uint8_t>> bytes(hldata::kSectionCount);
             for (int s = 0; s < hldata::kSectionCount; ++s)
@@ -439,9 +422,7 @@ namespace hlds
         {
             std::vector<std::uint8_t> level;
             hldata::LevelView view;
-            const auto whole = [&](const std::string &name)
-            { return fs::exists(stage / "snd" / (name + ".hsn")); };
-            if (!readFile(stage / "maps" / (map + ".hlm"), level, error) || !guestLevel(level, whole) ||
+            if (!readFile(stage / "maps" / (map + ".hlm"), level, error) || !guestLevel(level) ||
                 view.open(level.data(), static_cast<std::uint32_t>(level.size())) != hldata::LevelError::Ok)
             {
                 error = "the staged level does not open, or its guest's does not: " + map;
@@ -524,8 +505,8 @@ namespace hlds
                 if (held.count(name) == 0)
                     gone.insert(member.path);
             }
-            // (The sounds again, in the level's order -- the order the console
-            // asks for them in -- the full rate's where the level now says so.)
+            // (The sounds again, in the level's order: the order the console
+            // asks for them in.)
             std::vector<NpacMember> kept_;
             for (NpacMember &member : packing.members)
             {

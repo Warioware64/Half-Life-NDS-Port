@@ -162,6 +162,13 @@ namespace hlds
                               static_cast<unsigned>(guest.peak / 1024), static_cast<unsigned>(hldata::kGuestRamBytes / 1024),
                               guest.fits ? "fits" : "TOO BIG", map.bytes / 1024);
                 common_.guest.push_back(line);
+                // (The same, every column whole -- the base's models and sounds
+                // counted with the map's -- for a table.)
+                const std::size_t baseModels = of(report.baseRaw, hldata::GuestKind::Model);
+                const std::size_t baseSounds = of(report.baseRaw, hldata::GuestKind::Sound);
+                std::snprintf(line, sizeof(line), "  table %s %zu %zu %zu %zu %u", map.name.c_str(), level,
+                              models + baseModels, packed, sounds + baseSounds, static_cast<unsigned>(guest.peak));
+                common_.guest.push_back(line);
             }
         }
     }
@@ -1059,28 +1066,6 @@ namespace hlds
                         oldHeader.sourceHash == hash)
                         continue;
                     if (!writeFileAtomic(file, packSound(cooked, hash), result.error))
-                        return result;
-                }
-                // (Halved here, a sound is still wanted whole by a console
-                // sent the map for a game between consoles: there, every
-                // sound is at the full rate, the same on every map.)
-                if (multiplayer && kept[one.index] && one.cooked.rate < hldata::kSoundRate)
-                {
-                    const CookedSound whole = encodeSound(one.wav, hldata::kSoundRate, loops);
-                    const std::uint32_t settings[] = {static_cast<std::uint32_t>(whole.rate), loops ? 1u : 0u,
-                                                      hldata::kSoundVersion, 2u};
-                    const std::uint32_t hash =
-                        one.sourceHash ^
-                        hldata::crc32(reinterpret_cast<const std::uint8_t *>(settings), sizeof(settings)) * 131u;
-                    const fs::path file =
-                        stageDir() / "snd" / (soundCardName(level.soundPaths[one.index], whole.rate, loops) + ".hsn");
-                    std::vector<std::uint8_t> existing;
-                    std::string why;
-                    CookedSound old;
-                    hldata::SoundHeader oldHeader;
-                    if (!(readFile(file, existing, why) && unpackSound(existing, old, oldHeader) &&
-                          oldHeader.sourceHash == hash) &&
-                        !writeFileAtomic(file, packSound(whole, hash), result.error))
                         return result;
                 }
             }

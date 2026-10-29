@@ -65,8 +65,19 @@ namespace hlrt
         /// it was (the menu's caller has it paused); the keys' own clicks
         /// are heard.
         void console(ConsoleRun run);
+        /// A line typed on the touch screen's keyboard (the profile's name),
+        /// at most `most` characters, under `heading`: true, with `text` the
+        /// line, if it was given; false if it was not (and `text` is as it
+        /// was).
+        bool typeLine(std::string &text, std::size_t most, const char *heading);
 
     private:
+        /// Why a row is greyed out (a line to show when it is touched), or
+        /// null if it is not.
+        const char *whyDead(int id) const;
+        void showReason(const char *why);
+        /// What is on the card, for the rows that are there only if it is.
+        void probeCard();
         // (The numbers are rowsOf's, in Menu.cpp.)
         enum class Page
         {
