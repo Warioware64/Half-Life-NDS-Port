@@ -31,7 +31,12 @@ namespace hlrt
             NewGame,
             Command,
             Leave, ///< out of a game between consoles, to the title
+            Quit,  ///< the title's QUIT: back to whatever started the game
         };
+
+        /// Whether QUIT is offered: there is somewhere to go back to (the
+        /// loader that started the game said where it was).
+        void setQuittable(bool can);
 
         /// Take the touch screen and show the first page.
         void open();
@@ -78,7 +83,7 @@ namespace hlrt
         void showReason(const char *why);
         /// What is on the card, for the rows that are there only if it is.
         void probeCard();
-        // (The numbers are rowsOf's, in Menu.cpp.)
+        // (The numbers are rowsOf's, in Menu.cpp; a sheet has none.)
         enum class Page
         {
             Main = 0,
@@ -94,6 +99,7 @@ namespace hlrt
             Difficulty = 14,  ///< a new game's: EASY, MEDIUM, DIFFICULT
             Achievements = 15, ///< a sheet: those earned and those not, a chapter at a time
             NewGame = 16,     ///< which game: Half-Life, the Hazard Course, Uplink
+            Profile = 17,     ///< a sheet: the player as the others see them, shown on the top screen
         };
 
         // A sheet: a page of its own, drawn and touched apart from the rows
@@ -105,8 +111,11 @@ namespace hlrt
         // of). The achievements, the settings and the saves are sheets.
         bool sheet() const
         {
-            return page_ == Page::Achievements || page_ == Page::Settings || page_ == Page::Saves;
+            return page_ == Page::Achievements || page_ == Page::Settings || page_ == Page::Saves ||
+                   page_ == Page::Profile;
         }
+        /// A sheet of settings' rows: OPTIONS, PROFILE.
+        bool optionSheet() const { return page_ == Page::Settings || page_ == Page::Profile; }
         int achChapter_ = 0, settingsChapter_ = 0; ///< the chapter each was last on (kept while the console is on)
         int sheetScroll_ = 0;    ///< how far down the list is scrolled, in pixels
         int sheetSelected_ = -1; ///< the row read out in the box; -1: none
@@ -126,6 +135,7 @@ namespace hlrt
         Action sheetFrame();
         Action sheetLeave();
         Action sheetAct(int row);
+        void typeName();
         Action sheetBarPress(int button);
         Action sheetYes();
         void sheetAsk(int what, const char *question);
@@ -169,7 +179,9 @@ namespace hlrt
         Page page_ = Page::Main;
         // A game between consoles: what the host has chosen, and what was
         // last drawn of who is there (to draw again when it changes).
-        int netMap_ = 0, netFrags_ = 20, netMinutes_ = 10;
+        // (The map and the limits are the settings': the match last hosted.)
+        /// Which of netGame.maps() is hosted: the settings' (0 if empty).
+        std::size_t hostMap() const;
         unsigned netShown_ = 0;
         int netTick_ = 0;
         void showFound();

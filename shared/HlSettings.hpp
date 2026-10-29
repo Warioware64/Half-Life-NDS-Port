@@ -21,6 +21,21 @@
 
 namespace hldata
 {
+    /// A name with its end (a match's names are of the same room:
+    /// HlNet.hpp's kNetTextBytes), and a map's.
+    inline constexpr std::size_t kProfileNameBytes = 12;
+    inline constexpr std::size_t kHostMapBytes = 16;
+    /// The kinds of match: every one for themselves, two teams, and the
+    /// story together (which is not built yet).
+    inline constexpr std::uint8_t kModeDeathmatch = 0, kModeTeamplay = 1, kModeCoop = 2, kModeChoices = 3;
+    inline constexpr std::uint8_t kPlayersLeast = 2, kPlayersMost = 8;
+    /// The game's own spray colours (its cl_logocolor): orange, yellow,
+    /// blue, light blue, green, red, brown, light grey, dark grey.
+    inline constexpr std::uint8_t kSprayColours = 9;
+    inline constexpr std::uint8_t kSprayColour[kSprayColours][3] = {
+        {255, 120, 24}, {225, 180, 24}, {0, 60, 255}, {0, 167, 255}, {0, 167, 0},
+        {255, 43, 0},   {123, 73, 0},   {100, 100, 100}, {36, 36, 36}};
+
     struct SettingsData
     {
         /// Deprecated, can be reused for something else later
@@ -76,6 +91,35 @@ namespace hldata
         std::uint8_t outputMode = 0;
         std::uint8_t soundQuality = 0;
 
+        /// The player as the others see them in a match: the name (as typed,
+        /// any bytes but the last, which is always the end; empty: the
+        /// console's owner's), the model, its top and bottom colours (a hue
+        /// each, 0..255, as the game's topcolor and bottomcolor), and the
+        /// spray (a logo of ui/logos.hic, and its colour, kSprayColour*).
+        char name[kProfileNameBytes] = {};
+        std::uint8_t playerModel = 0;
+        std::uint8_t topColour = 30;
+        std::uint8_t bottomColour = 6;
+        std::uint8_t spray = 0;
+        std::uint8_t sprayColour = 0;
+        /// The match this console last hosted, to host it again: the mode
+        /// (kMode*), the map's name (empty: the first there is), the
+        /// limits (0: none), the game's mp_weaponstay, mp_falldamage,
+        /// mp_friendlyfire, mp_flashlight and autoaim, how many may play
+        /// (kPlayersLeast..kPlayersMost), and whether consoles without the
+        /// game are let in.
+        std::uint8_t hostMode = 0;
+        char hostMap[kHostMapBytes] = {};
+        std::uint8_t fragLimit = 20;
+        std::uint8_t minuteLimit = 10;
+        std::uint8_t weaponsStay = 0;
+        std::uint8_t fallDamage = 0;
+        std::uint8_t friendlyFire = 0;
+        std::uint8_t flashlight = 0;
+        std::uint8_t hostAutoaim = 1;
+        std::uint8_t maxPlayers = 4;
+        std::uint8_t allowGuests = 0;
+
         /// What a file of version 8 held: all but the controls.
         template <class Ar>
         void serializeEight(Ar &ar)
@@ -115,11 +159,25 @@ namespace hldata
             serializeEleven(ar);
             ar &achievementPopups;
         }
+        /// ... and of version 13: no profile, nor a match hosted.
         template <class Ar>
-        void serialize(Ar &ar)
+        void serializeThirteen(Ar &ar)
         {
             serializeTwelve(ar);
             ar &roomEffects &outputMode &soundQuality;
+        }
+        template <class Ar>
+        void serialize(Ar &ar)
+        {
+            serializeThirteen(ar);
+            for (char &c : name)
+                ar &c;
+            ar &playerModel &topColour &bottomColour &spray &sprayColour;
+            ar &hostMode;
+            for (char &c : hostMap)
+                ar &c;
+            ar &fragLimit &minuteLimit &weaponsStay &fallDamage &friendlyFire &flashlight &hostAutoaim &maxPlayers &
+                allowGuests;
         }
     };
 
@@ -128,12 +186,14 @@ namespace hldata
     inline constexpr std::uint8_t kQualityStandard = 0, kQualityHigh = 1, kQualityChoices = 2;
 
     inline constexpr char kSettingsMagic[4] = {'H', 'L', 'S', 'T'};
-    inline constexpr std::uint16_t kSettingsVersion = 13;
-    /// The versions before, which are still read: 12 had no room effects,
+    inline constexpr std::uint16_t kSettingsVersion = 14;
+    /// The versions before, which are still read: 13 had no profile and no
+    /// match hosted; 12 had no room effects,
     /// output or quality (its DSP switch is the room effects' Enhanced);
     /// 11 had no achievements' pop-ups to turn off; 10 had no autoaim; 9 had
     /// the layouts but no aim speed, custom buttons or stylus pressure; 8 no
     /// controls to choose.
+    inline constexpr std::uint16_t kSettingsVersionThirteen = 13;
     inline constexpr std::uint16_t kSettingsVersionTwelve = 12;
     inline constexpr std::uint16_t kSettingsVersionEleven = 11;
     inline constexpr std::uint16_t kSettingsVersionTen = 10;
@@ -186,7 +246,8 @@ namespace hldata
             return false;
         std::memcpy(&header, bytes, sizeof(header));
         if (std::memcmp(header.magic, kSettingsMagic, sizeof(header.magic)) != 0 ||
-            (header.version != kSettingsVersion && header.version != kSettingsVersionTwelve &&
+            (header.version != kSettingsVersion && header.version != kSettingsVersionThirteen &&
+             header.version != kSettingsVersionTwelve &&
              header.version != kSettingsVersionEleven &&
              header.version != kSettingsVersionTen &&
              header.version != kSettingsVersionNine && header.version != kSettingsVersionBefore) ||
@@ -207,11 +268,13 @@ namespace hldata
             read.serializeEleven(ia);
         else if (header.version == kSettingsVersionTwelve)
             read.serializeTwelve(ia);
+        else if (header.version == kSettingsVersionThirteen)
+            read.serializeThirteen(ia);
         else
             ia &read;
         // (Before 13: the DSP switched on is the DSP's rooms; else the
         // game's own.)
-        if (header.version != kSettingsVersion)
+        if (header.version < kSettingsVersionThirteen)
             read.roomEffects = read.dspAudio != 0 ? kRoomEnhanced : kRoomClassic;
         if (read.roomEffects >= kRoomChoices || read.outputMode >= kOutputChoices ||
             read.soundQuality >= kQualityChoices)
@@ -235,6 +298,13 @@ namespace hldata
             if (level > kVolumeMost)
                 return false;
         }
+        // (The names are as they were typed, and not judged: only ended.)
+        read.name[kProfileNameBytes - 1] = 0;
+        read.hostMap[kHostMapBytes - 1] = 0;
+        if (read.sprayColour >= kSprayColours || read.hostMode >= kModeChoices || read.weaponsStay > 1 ||
+            read.fallDamage > 1 || read.friendlyFire > 1 || read.flashlight > 1 || read.hostAutoaim > 1 ||
+            read.maxPlayers < kPlayersLeast || read.maxPlayers > kPlayersMost || read.allowGuests > 1)
+            return false;
         out = read;
         return true;
     }

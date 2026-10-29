@@ -208,61 +208,62 @@ namespace hlds
         }
         return true;
     }
+
+    /// An 8-bit, uncompressed Windows bitmap: what the game's sky
+    /// pictures are.
+    bool readBmp8(const std::filesystem::path &path, RgbaImage &out, std::string &error)
+    {
+        std::vector<std::uint8_t> bytes;
+        if (!readFile(path, bytes, error))
+            return false;
+        auto u32 = [&](std::size_t at) -> std::uint32_t
+        {
+            return bytes[at] | (bytes[at + 1] << 8) | (bytes[at + 2] << 16) |
+                   (static_cast<std::uint32_t>(bytes[at + 3]) << 24);
+        };
+        if (bytes.size() < 54 || bytes[0] != 'B' || bytes[1] != 'M')
+        {
+            error = path.filename().string() + " is not a bitmap";
+            return false;
+        }
+        const std::uint32_t pixels = u32(10);
+        const std::uint32_t headerSize = u32(14);
+        const auto width = static_cast<std::int32_t>(u32(18));
+        const auto rawHeight = static_cast<std::int32_t>(u32(22));
+        const int height = rawHeight < 0 ? -rawHeight : rawHeight;
+        const int bits = bytes[28] | (bytes[29] << 8);
+        const std::uint32_t compression = u32(30);
+        const std::size_t palette = 14 + headerSize;
+        const std::size_t stride = (static_cast<std::size_t>(width) + 3) & ~std::size_t(3);
+        if (bits != 8 || compression != 0 || width <= 0 || height <= 0 || width > 1024 ||
+            height > 1024 || palette + 1024 > bytes.size() ||
+            pixels + stride * height > bytes.size())
+        {
+            error = path.filename().string() + " is not an 8-bit uncompressed bitmap";
+            return false;
+        }
+        out.width = width;
+        out.height = height;
+        out.rgba.resize(static_cast<std::size_t>(width) * height * 4);
+        for (int y = 0; y < height; ++y)
+        {
+            // Rows are stored bottom to top unless the height is negative.
+            const std::size_t row = pixels + stride * (rawHeight < 0 ? y : height - 1 - y);
+            for (int x = 0; x < width; ++x)
+            {
+                const std::uint8_t *colour = &bytes[palette + bytes[row + x] * 4];
+                std::uint8_t *to = out.at(x, y);
+                to[0] = colour[2];
+                to[1] = colour[1];
+                to[2] = colour[0];
+                to[3] = 255;
+            }
+        }
+        return true;
+    }
+
     namespace
     {
-        /// An 8-bit, uncompressed Windows bitmap: what the game's sky
-        /// pictures are.
-        bool readBmp8(const std::filesystem::path &path, RgbaImage &out, std::string &error)
-        {
-            std::vector<std::uint8_t> bytes;
-            if (!readFile(path, bytes, error))
-                return false;
-            auto u32 = [&](std::size_t at) -> std::uint32_t
-            {
-                return bytes[at] | (bytes[at + 1] << 8) | (bytes[at + 2] << 16) |
-                       (static_cast<std::uint32_t>(bytes[at + 3]) << 24);
-            };
-            if (bytes.size() < 54 || bytes[0] != 'B' || bytes[1] != 'M')
-            {
-                error = path.filename().string() + " is not a bitmap";
-                return false;
-            }
-            const std::uint32_t pixels = u32(10);
-            const std::uint32_t headerSize = u32(14);
-            const auto width = static_cast<std::int32_t>(u32(18));
-            const auto rawHeight = static_cast<std::int32_t>(u32(22));
-            const int height = rawHeight < 0 ? -rawHeight : rawHeight;
-            const int bits = bytes[28] | (bytes[29] << 8);
-            const std::uint32_t compression = u32(30);
-            const std::size_t palette = 14 + headerSize;
-            const std::size_t stride = (static_cast<std::size_t>(width) + 3) & ~std::size_t(3);
-            if (bits != 8 || compression != 0 || width <= 0 || height <= 0 || width > 1024 ||
-                height > 1024 || palette + 1024 > bytes.size() ||
-                pixels + stride * height > bytes.size())
-            {
-                error = path.filename().string() + " is not an 8-bit uncompressed bitmap";
-                return false;
-            }
-            out.width = width;
-            out.height = height;
-            out.rgba.resize(static_cast<std::size_t>(width) * height * 4);
-            for (int y = 0; y < height; ++y)
-            {
-                // Rows are stored bottom to top unless the height is negative.
-                const std::size_t row = pixels + stride * (rawHeight < 0 ? y : height - 1 - y);
-                for (int x = 0; x < width; ++x)
-                {
-                    const std::uint8_t *colour = &bytes[palette + bytes[row + x] * 4];
-                    std::uint8_t *to = out.at(x, y);
-                    to[0] = colour[2];
-                    to[1] = colour[1];
-                    to[2] = colour[0];
-                    to[3] = 255;
-                }
-            }
-            return true;
-        }
-
         std::filesystem::path skyPath(const std::filesystem::path &gameDir, const std::string &name,
                                       const char *side)
         {

@@ -3,6 +3,8 @@
 #include "net/NetGame.hpp"
 #include "global_header.hpp"
 
+#include <cstdlib>
+
 #include "Achievements.hpp"
 #include "DebugLog.hpp"
 #include "Global.hpp"
@@ -863,6 +865,9 @@ int main(int argc, char *argv[])
 #endif
     std::string error;
     hlrt::menu.setSaves(&hlrt::SaveGame::index());
+    // (QUIT only where there is somewhere to go back to: the loader said
+    // where the game was started from.)
+    hlrt::menu.setQuittable(argc > 0 && argv[0] != nullptr && argv[0][0] != '\0');
     // The title: go on with the last save, load another, begin -- or a game
     // between consoles, which begins when its host says on which map. True
     // if it loaded something; false for a new game.
@@ -914,6 +919,15 @@ int main(int argc, char *argv[])
                 leaving();
                 settings.save();
                 return false;
+            }
+            else if (item == Menu::Action::Quit)
+            {
+                // Back to whatever started the game (TWiLight Menu++, the
+                // console's own menu), the settings and the achievements kept.
+                settings.save();
+                achievements.flush();
+                hlrt::screenFade.curtainDown();
+                std::exit(0);
             }
             // A match: its host has said which map (on the host's own
             // console as on the others).

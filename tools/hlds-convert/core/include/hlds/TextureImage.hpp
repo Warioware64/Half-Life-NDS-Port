@@ -51,5 +51,9 @@ namespace hlds
 
     /// A minimal PNG writer (8-bit RGBA, no compression), enough to hand an
     /// image to the encoder and to look at one.
+    /// An 8-bit, uncompressed Windows bitmap (the game's skies, its spray
+    /// logos), solid.
+    bool readBmp8(const std::filesystem::path &path, RgbaImage &out, std::string &error);
+
     bool writePng(const std::filesystem::path &path, const RgbaImage &image, std::string &error);
 } // namespace hlds

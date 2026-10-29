@@ -67,6 +67,17 @@ namespace hlds
     std::vector<std::uint8_t> weaponIcons(const SprFile &hud, int width = hldata::kWeaponIconWidth,
                                           int height = hldata::kWeaponIconHeight);
 
+    /// A picture and what it is called.
+    struct NamedPicture
+    {
+        std::string name;
+        RgbaImage picture;
+    };
+    /// The spray logos (HlUi.hpp: kLogosFile, LogosView), of `pictures` in
+    /// their order (no more than kLogosMost; names cut to fit): each made
+    /// kLogoSize square by averaging, how bright it is becoming how solid.
+    std::vector<std::uint8_t> logoAtlas(const std::vector<NamedPicture> &pictures);
+
     /// The game's title for the top screen (HlUi.hpp: kTitleFile): the two
     /// halves of it in the 320-wide set (sprites/320hud3.spr), side by
     /// side, as one picture of the icons' form.

@@ -435,6 +435,58 @@ namespace hlds
         return out;
     }
 
+    std::vector<std::uint8_t> logoAtlas(const std::vector<NamedPicture> &pictures)
+    {
+        constexpr int kSize = hldata::kLogoSize;
+        const int count = std::min(static_cast<int>(pictures.size()), hldata::kLogosMost);
+        const int words = hldata::iconRowWords(kSize);
+        const std::size_t rows = sizeof(hldata::IconsHeader) + static_cast<std::size_t>(count) * kSize * words * 4;
+        std::vector<std::uint8_t> out(rows + static_cast<std::size_t>(count) * hldata::kLogoNameBytes, 0);
+        hldata::IconsHeader header{};
+        std::memcpy(header.magic, hldata::kIconsMagic, 4);
+        header.version = hldata::kIconsVersion;
+        header.count = static_cast<std::uint8_t>(count);
+        header.width = static_cast<std::uint8_t>(kSize);
+        header.height = static_cast<std::uint8_t>(kSize);
+        std::memcpy(out.data(), &header, sizeof(header));
+        for (int n = 0; n < count; ++n)
+        {
+            const RgbaImage &picture = pictures[static_cast<std::size_t>(n)].picture;
+            const int wide = picture.width, high = picture.height;
+            for (int y = 0; y < kSize && wide > 0 && high > 0; ++y)
+            {
+                for (int x = 0; x < kSize; ++x)
+                {
+                    // The part of the picture this pixel is, its brightness
+                    // averaged (the game's: as much red as green as blue).
+                    const int sx0 = x * wide / kSize, sx1 = std::max(sx0 + 1, (x + 1) * wide / kSize);
+                    const int sy0 = y * high / kSize, sy1 = std::max(sy0 + 1, (y + 1) * high / kSize);
+                    int sum = 0;
+                    for (int sy = sy0; sy < sy1; ++sy)
+                    {
+                        for (int sx = sx0; sx < sx1; ++sx)
+                        {
+                            const std::uint8_t *c = picture.at(sx, sy);
+                            sum += (c[0] + c[1] + c[2]) / 3;
+                        }
+                    }
+                    const int value = sum / ((sx1 - sx0) * (sy1 - sy0));
+                    const std::uint32_t level = value < 40 ? 0u : (value < 100 ? 1u : (value < 170 ? 2u : 3u));
+                    const std::size_t at =
+                        sizeof(header) + ((static_cast<std::size_t>(n) * kSize + y) * words + (x >> 4)) * 4;
+                    std::uint32_t word;
+                    std::memcpy(&word, out.data() + at, 4);
+                    word |= level << ((x & 15) * 2);
+                    std::memcpy(out.data() + at, &word, 4);
+                }
+            }
+            const std::string &name = pictures[static_cast<std::size_t>(n)].name;
+            std::memcpy(out.data() + rows + static_cast<std::size_t>(n) * hldata::kLogoNameBytes, name.data(),
+                        std::min(name.size(), hldata::kLogoNameBytes - 1));
+        }
+        return out;
+    }
+
     std::vector<std::uint8_t> titlePicture(const SprFile &hud)
     {
         // (Where the two halves are, the game's sprites/hud.txt says.)

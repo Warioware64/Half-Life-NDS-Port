@@ -109,6 +109,15 @@ namespace hlds
         return true;
     }
 
+    std::vector<std::string> WadFile::names() const
+    {
+        std::vector<std::string> out;
+        for (const auto &entry : index_)
+            out.push_back(entry.first);
+        std::sort(out.begin(), out.end());
+        return out;
+    }
+
     bool WadFile::contains(std::string_view lowerName) const
     {
         return index_.find(std::string(lowerName)) != index_.end();

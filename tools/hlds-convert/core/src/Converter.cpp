@@ -17,6 +17,7 @@
 #include <mutex>
 #include <thread>
 #include <cctype>
+#include <set>
 
 #include "HlGuest.hpp"
 #include "HlLevelReader.hpp"
@@ -1509,6 +1510,66 @@ namespace hlds
                 result.title = true;
             else
                 result.warnings.push_back("the game's title was not made" + (why.empty() ? std::string() : ": " + why));
+        }
+        {
+            // The spray logos: the game's logos/ folder (the player's own, as
+            // on a PC), then what spraypaint.wad has that it has not.
+            std::vector<NamedPicture> logos;
+            std::set<std::string> named;
+            const fs::path folder = findNoCase(options_.gameDir, "logos");
+            std::vector<fs::path> files;
+            std::error_code ec;
+            for (auto it = fs::directory_iterator(folder, ec); !folder.empty() && !ec && it != fs::directory_iterator();
+                 it.increment(ec))
+            {
+                std::string extension = it->path().extension().string();
+                for (char &c : extension)
+                    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                if (it->is_regular_file(ec) && extension == ".bmp")
+                    files.push_back(it->path());
+            }
+            std::sort(files.begin(), files.end());
+            int unread = 0;
+            for (const fs::path &file : files)
+            {
+                std::string name = file.stem().string();
+                for (char &c : name)
+                    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                NamedPicture logo;
+                std::string ignored;
+                if (!readBmp8(file, logo.picture, ignored))
+                {
+                    ++unread;
+                    continue;
+                }
+                if (named.insert(name).second)
+                {
+                    logo.name = name;
+                    logos.push_back(std::move(logo));
+                }
+            }
+            WadFile paint;
+            const fs::path wad = findNoCase(options_.gameDir, "spraypaint.wad");
+            if (!wad.empty() && paint.open(wad, why))
+            {
+                for (const std::string &name : paint.names())
+                {
+                    IndexedImage image;
+                    std::string ignored;
+                    if (named.count(name) != 0 || !paint.read(name, image, ignored))
+                        continue;
+                    named.insert(name);
+                    logos.push_back(NamedPicture{name, toRgba(image, false)});
+                }
+            }
+            if (logos.empty() || !put(ui / hldata::kLogosFile, logoAtlas(logos)))
+                result.warnings.push_back("the spray logos were not made: neither logos/ nor spraypaint.wad was read");
+            if (unread > 0)
+                result.warnings.push_back(std::to_string(unread) +
+                                          " of the spray logos were not 8-bit bitmaps, and were left out");
+            if (static_cast<int>(logos.size()) > hldata::kLogosMost)
+                result.warnings.push_back("there are " + std::to_string(logos.size()) + " spray logos: the first " +
+                                          std::to_string(hldata::kLogosMost) + " are kept");
         }
         {
             std::vector<std::uint8_t> lump;

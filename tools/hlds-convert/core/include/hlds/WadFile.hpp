@@ -36,6 +36,8 @@ namespace hlds
         /// Read one texture by its lower-cased name.
         bool read(std::string_view lowerName, IndexedImage &out, std::string &error) const;
         const std::filesystem::path &path() const { return path_; }
+        /// The textures' names, lower-cased, in order.
+        std::vector<std::string> names() const;
 
     private:
         struct Entry

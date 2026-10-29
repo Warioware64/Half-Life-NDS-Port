@@ -22,6 +22,9 @@ namespace hlds
 {
     namespace
     {
+        /// The player model (EntityCook.hpp's kPlayerModelName).
+        constexpr const char *kPlayerModel = "player";
+
         struct Packing
         {
             std::vector<NpacMember> members;
@@ -227,21 +230,38 @@ namespace hlds
                 if (header.atlasWidth != 0)
                     skins.push_back(hldata::modelSkinFile(name, header.atlasWidth, header.atlasHeight));
             };
+            // On a multiplayer map, the others in the game are the player
+            // model with its skin in 256 colours (stage gst/, as a guest has
+            // it), each player's colours laid over it -- on a card as much
+            // as on a console sent the map; and no DSi's beside it.
+            bool multiplayer = false;
+            for (std::uint32_t e = 0; e < view.entityCount; ++e)
+                multiplayer = multiplayer || view.entities[e].classId ==
+                                                 static_cast<std::uint16_t>(hldata::EntityClass::InfoPlayerDeathmatch);
+            const fs::path playerModel = stage / "gst" / (std::string(kPlayerModel) + ".hmd");
+            const bool coloured = multiplayer && fs::exists(playerModel);
+            std::set<std::string> colouredSkins;
             // (Not a weapon the map has not: that is in the common archive.)
             for (std::uint32_t i = 0; i < view.modelRefCount; ++i)
             {
                 const char *name = view.modelRefs[i].name;
                 if (hldata::modelRefLazy(view.modelRefs[i]))
                     continue;
-                if (packing.add(stage / "mdl" / map / (std::string(name) + ".hmd"),
+                const bool player = coloured && std::strcmp(name, kPlayerModel) == 0;
+                const std::size_t skinsBefore = skins.size();
+                if (packing.add(player ? playerModel : stage / "mdl" / map / (std::string(name) + ".hmd"),
                                 std::string("mdl/") + name + ".hmd", true))
+                {
                     skinOf(packing.members.back(), name);
+                    if (player && skins.size() != skinsBefore)
+                        colouredSkins.insert(skins.back());
+                }
             }
             const std::size_t skinsAt = packing.members.size();
             for (std::uint32_t i = 0; i < view.modelRefCount && !air; ++i)
             {
                 const char *name = view.modelRefs[i].name;
-                if (hldata::modelRefLazy(view.modelRefs[i]))
+                if (hldata::modelRefLazy(view.modelRefs[i]) || (coloured && std::strcmp(name, kPlayerModel) == 0))
                     continue;
                 if (packing.add(stage / "mdl" / map / (std::string(name) + ".dsi.hmd"),
                                 std::string("mdl/") + name + ".dsi.hmd", true, false))
@@ -254,7 +274,7 @@ namespace hlds
                 skinsOnly.report = packing.report;
                 skinsOnly.named = packing.named;
                 for (const std::string &skin : skins)
-                    skinsOnly.add(stage / "mdl" / skin, "mdl/" + skin, true);
+                    skinsOnly.add(stage / (colouredSkins.count(skin) != 0 ? "gst" : "mdl") / skin, "mdl/" + skin, true);
                 packing.members.insert(packing.members.begin() + skinsAt,
                                        std::make_move_iterator(skinsOnly.members.begin()),
                                        std::make_move_iterator(skinsOnly.members.end()));
@@ -833,6 +853,21 @@ namespace hlds
             }
             for (const std::string &skin : skins)
                 packing.add(stage / "mdl" / skin, "wpn/" + skin, true);
+        }
+        // The player model as the others see it in a match, with its skin in
+        // 256 colours: what PROFILE turns on the top screen, in the player's
+        // own (kProfileModelFile). Not there if no multiplayer map was cooked.
+        {
+            const std::size_t before = packing.members.size();
+            packing.add(stage / "gst" / (std::string(kPlayerModel) + ".hmd"), hldata::kProfileModelFile, true, false);
+            if (packing.members.size() != before && packing.members.back().data.size() >= sizeof(hldata::ModelHeader))
+            {
+                hldata::ModelHeader header;
+                std::memcpy(&header, packing.members.back().data.data(), sizeof(header));
+                if (header.atlasWidth != 0)
+                    packing.add(stage / "gst" / hldata::modelSkinFile(kPlayerModel, header.atlasWidth, header.atlasHeight),
+                                hldata::kProfileSkinFile, true);
+            }
         }
         if (packing.members.empty())
         {

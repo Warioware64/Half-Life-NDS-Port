@@ -20,6 +20,7 @@
 #include "game/Game.hpp"
 #include "game/Player.hpp"
 #include "render/Camera.hpp"
+#include "render/ProfileView.hpp"
 
 namespace hlrt
 {
@@ -65,13 +66,17 @@ namespace hlrt
         // (kPixel is the camera's hudPixel: it follows the picture.)
         constexpr int kDepth = 3058;
 
+        /// How far off the flat pictures are drawn: a sixteenth, at the
+        /// display's depth; further, for the same pixels, behind PROFILE's
+        /// model (ProfileView: which stands nearer than they would be).
+        int flatScale = 256;
         void beginFlat()
         {
             MATRIX_CONTROL = GL_MODELVIEW;
             MATRIX_IDENTITY = 0;
-            MATRIX_SCALE = 256; // a sixteenth: whole numbers below are exact
-            MATRIX_SCALE = 256;
-            MATRIX_SCALE = 256;
+            MATRIX_SCALE = flatScale; // a sixteenth: whole numbers below are exact
+            MATRIX_SCALE = flatScale;
+            MATRIX_SCALE = flatScale;
         }
 
         void corner(int sx, int sy, int s, int t)
@@ -331,13 +336,8 @@ namespace hlrt
             corner(256, 0, kLoadingSize, 0);
         }
 
-        void drawMenu()
+        void drawMenuLogo()
         {
-            if (menuShown == nullptr)
-                return;
-            screenPicture(menuShown);
-            if (logoShown == nullptr)
-                return;
             // The animated title over it, across the top as the game has it:
             // see-through by its own alpha, and on the picture's own depth
             // (drawn where that depth is: over it).
@@ -351,6 +351,20 @@ namespace hlrt
             corner(0, kTop + kLogoHeight, 0, kLogoHeight);
             corner(256, kTop + kLogoHeight, kLogoWidth, kLogoHeight);
             corner(256, kTop, kLogoWidth, 0);
+        }
+
+        void drawMenu()
+        {
+            if (menuShown == nullptr)
+                return;
+            // (PROFILE's model, 84 units off: the picture and the title 32
+            // times as far as they are, about 190.)
+            flatScale = profileView.shown() ? 256 * 32 : 256;
+            screenPicture(menuShown);
+            if (logoShown != nullptr)
+                drawMenuLogo();
+            flatScale = 256;
+            profileView.draw();
         }
 
         // Where the intro's picture is on the screen, and how big.

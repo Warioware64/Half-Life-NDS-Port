@@ -6,6 +6,7 @@
 #include <nds.h>
 
 #include "Global.hpp"
+#include "Settings.hpp"
 #include "data/LevelFile.hpp"
 #include "game/Game.hpp"
 #include "game/GameApi.hpp"
@@ -43,10 +44,13 @@ namespace hlrt
         return netlink::failStage();
     }
 
+    // (The profile's name is a match's: the same room.)
+    static_assert(hldata::kProfileNameBytes == static_cast<std::size_t>(kNetTextBytes));
+
     bool NetGame::host()
     {
         char name[kNetTextBytes];
-        netlink::ownerName(name, sizeof(name));
+        std::snprintf(name, sizeof(name), "%s", settings.playerName());
         if (!netlink::host(name))
             return false;
         netBegin(match_, NetMatch::Role::Host, 0, name);
@@ -90,7 +94,7 @@ namespace hlrt
         if (phase_ != Phase::Scanning || !netlink::join(index))
             return false;
         char name[kNetTextBytes];
-        netlink::ownerName(name, sizeof(name));
+        std::snprintf(name, sizeof(name), "%s", settings.playerName());
         netBegin(match_, NetMatch::Role::Client, tokenOfThisConsole(), name);
         phase_ = Phase::Joining;
         lostFrames_ = 0;
@@ -107,7 +111,7 @@ namespace hlrt
         if (phase_ != Phase::Joining)
         {
             char name[kNetTextBytes];
-            netlink::ownerName(name, sizeof(name));
+            std::snprintf(name, sizeof(name), "%s", settings.playerName());
             netBegin(match_, NetMatch::Role::Client, tokenOfThisConsole(), name);
         }
         phase_ = Phase::Joining;

@@ -37,6 +37,12 @@ namespace hlrt
         const hldata::FontView &font(int which);
         /// The ROM's own 8x8 letters.
         const hldata::FontView &plain();
+        /// A block of cells, `w` by `h` from cell (`x`, `y`), in colours of
+        /// its own: the sixteen as ever but 1, 2 and 3, which are `three`
+        /// (a picture in a colour of the player's: PROFILE's spray). Only
+        /// what is drawn there in those three is changed, so the block is
+        /// for that alone. Again with `three` null: as every cell is.
+        void tint(int x, int y, int w, int h, const std::uint16_t *three);
 
     private:
         bool created_ = false;

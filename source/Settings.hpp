@@ -70,16 +70,40 @@ public:
     bool viewBob = false;
     /// The fog, and how much detail is given up for speed (HlFog.hpp).
     hldata::GraphicsSettings graphics;
+    /// The player in a match (HlSettings.hpp): the name (the console
+    /// owner's until another is typed), the model and its colours, the spray.
+    char name[hldata::kProfileNameBytes] = {};
+    std::uint8_t playerModel = 0;
+    std::uint8_t topColour = 30;
+    std::uint8_t bottomColour = 6;
+    std::uint8_t spray = 0;
+    std::uint8_t sprayColour = 0;
+    /// The match last hosted, as it was set up (HlSettings.hpp).
+    std::uint8_t hostMode = hldata::kModeDeathmatch;
+    char hostMap[hldata::kHostMapBytes] = {};
+    std::uint8_t fragLimit = 20;
+    std::uint8_t minuteLimit = 10;
+    bool weaponsStay = false;
+    std::uint8_t fallDamage = 0;
+    bool friendlyFire = false;
+    bool flashlight = false;
+    bool hostAutoaim = true;
+    std::uint8_t maxPlayers = 4;
+    bool allowGuests = false;
 
     /// Read settings.dat. An absent or unreadable file is a first boot, not an
     /// error: the defaults stand.
     void load();
     /// Write settings.dat. False if the card cannot be written.
     bool save() const;
+    /// The profile's name as it is to be shown: the console owner's while
+    /// none was typed.
+    const char *playerName() const;
     /// One of OPTIONS' categories (0 SOUND, 1 GRAPHICS, 2 CONTROLS, 3 TOUCH
-    /// AIM, 4 BUTTONS, 5 OTHER) as it is at first. (Not saved, nor the
-    /// sound told: the caller's.)
+    /// AIM, 4 BUTTONS, 5 OTHER), or the profile (kProfileCategory), as it is
+    /// at first. (Not saved, nor the sound told: the caller's.)
     void reset(int category);
+    static constexpr int kProfileCategory = 6;
 };
 
 extern Settings settings;

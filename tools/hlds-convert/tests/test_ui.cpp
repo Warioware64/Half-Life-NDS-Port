@@ -256,6 +256,82 @@ namespace
                   dsp ? "a file of version 12 with the DSP on: the DSP's rooms"
                       : "a file of version 12 with the DSP off: the game's own rooms");
         }
+        // A file of version 13 keeps all it had; the profile and the match
+        // hosted are as they are at first.
+        {
+            SettingsData thirteen;
+            thirteen.volume[kVolumeMusic] = 4;
+            thirteen.roomEffects = kRoomOff;
+            thirteen.leftHanded = 1;
+            std::memcpy(thirteen.name, "lost", 5);
+            constexpr std::size_t flags = yas::mem | yas::binary | yas::no_header;
+            yas::mem_ostream os;
+            yas::binary_oarchive<yas::mem_ostream, flags> oa(os);
+            thirteen.serializeThirteen(oa);
+            const auto buf = os.get_intrusive_buffer();
+            SettingsHeader header{};
+            std::memcpy(header.magic, kSettingsMagic, sizeof(header.magic));
+            header.version = kSettingsVersionThirteen;
+            header.payloadBytes = static_cast<std::uint16_t>(buf.size);
+            header.crc32 = crc32(reinterpret_cast<const std::uint8_t *>(buf.data), static_cast<std::uint32_t>(buf.size));
+            std::vector<std::uint8_t> file(sizeof(header) + buf.size);
+            std::memcpy(file.data(), &header, sizeof(header));
+            std::memcpy(file.data() + sizeof(header), buf.data, buf.size);
+            SettingsData read;
+            check(readSettings(file.data(), file.size(), read) && read.volume[kVolumeMusic] == 4 &&
+                      read.roomEffects == kRoomOff && read.leftHanded == 1 && read.name[0] == 0 &&
+                      read.topColour == 30 && read.bottomColour == 6 && read.maxPlayers == 4 &&
+                      read.fragLimit == 20 && read.hostMode == kModeDeathmatch,
+                  "a file of version 13 keeps its settings, and the profile is as at first");
+        }
+        // The profile and the match: there and back; a name of any bytes is
+        // kept, only ended; a number out of range is not believed.
+        {
+            SettingsData mine;
+            for (std::size_t i = 0; i < kProfileNameBytes; ++i)
+                mine.name[i] = static_cast<char>(0x80 + i * 9);
+            mine.topColour = 255;
+            mine.bottomColour = 0;
+            mine.spray = 17;
+            mine.sprayColour = kSprayColours - 1;
+            mine.hostMode = kModeTeamplay;
+            std::memcpy(mine.hostMap, "rocket_frenzy", 14);
+            mine.fragLimit = 50;
+            mine.minuteLimit = 0;
+            mine.weaponsStay = mine.fallDamage = mine.friendlyFire = mine.flashlight = 1;
+            mine.hostAutoaim = 0;
+            mine.maxPlayers = kPlayersMost;
+            mine.allowGuests = 1;
+            for (std::uint16_t &key : mine.keys)
+                key = kAssignable;
+            bytes = writeSettings(mine);
+            SettingsData read;
+            check(bytes.size() <= kSettingsMostBytes, "settings with every field in use still fit their file");
+            check(readSettings(bytes.data(), bytes.size(), read) && read.topColour == 255 && read.bottomColour == 0 &&
+                      read.spray == 17 && read.sprayColour == kSprayColours - 1 && read.hostMode == kModeTeamplay &&
+                      std::strcmp(read.hostMap, "rocket_frenzy") == 0 && read.fragLimit == 50 &&
+                      read.minuteLimit == 0 && read.weaponsStay == 1 && read.fallDamage == 1 &&
+                      read.friendlyFire == 1 && read.flashlight == 1 && read.hostAutoaim == 0 &&
+                      read.maxPlayers == kPlayersMost && read.allowGuests == 1,
+                  "the profile and the match hosted read back as they were written");
+            bool same = read.name[kProfileNameBytes - 1] == 0;
+            for (std::size_t i = 0; i + 1 < kProfileNameBytes; ++i)
+                same = same && read.name[i] == mine.name[i];
+            check(same, "a name of any bytes is kept as typed, and never makes the file unread");
+            const auto refused = [&](void (*spoil)(SettingsData &), const char *what)
+            {
+                SettingsData bad = mine;
+                spoil(bad);
+                const std::vector<std::uint8_t> file = writeSettings(bad);
+                SettingsData untouched;
+                check(!readSettings(file.data(), file.size(), untouched) && untouched.maxPlayers == 4, what);
+            };
+            refused([](SettingsData &d) { d.maxPlayers = kPlayersMost + 1; }, "nine players are not believed");
+            refused([](SettingsData &d) { d.maxPlayers = 1; }, "nor one alone");
+            refused([](SettingsData &d) { d.hostMode = kModeChoices; }, "nor a mode there is not");
+            refused([](SettingsData &d) { d.sprayColour = kSprayColours; }, "nor a spray colour there is not");
+            refused([](SettingsData &d) { d.friendlyFire = 2; }, "nor a switch that is neither on nor off");
+        }
     }
 
     /// The lamp's rules: the game's.
@@ -683,6 +759,54 @@ namespace
         }
     }
 
+    /// The spray logos: each picture's brightness its four levels, in order,
+    /// with its name; nothing the console cannot trust is opened.
+    void testLogos()
+    {
+        std::vector<NamedPicture> pictures(3);
+        for (int n = 0; n < 3; ++n)
+        {
+            RgbaImage &p = pictures[static_cast<std::size_t>(n)].picture;
+            p.width = n == 2 ? 50 : 64; // (one of the player's own, of its own size)
+            p.height = 64;
+            p.rgba.assign(static_cast<std::size_t>(p.width) * p.height * 4, 0);
+            for (int y = 0; y < p.height; ++y)
+            {
+                for (int x = 0; x < p.width; ++x)
+                {
+                    // 0: its left half white; 1: grey all over; 2: black.
+                    const std::uint8_t v = n == 0 ? (x < p.width / 2 ? 255 : 0) : (n == 1 ? 120 : 0);
+                    std::uint8_t *c = p.at(x, y);
+                    c[0] = c[1] = c[2] = v;
+                    c[3] = 255;
+                }
+            }
+        }
+        pictures[0].name = "lambda";
+        pictures[1].name = "a_name_far_too_long_for_it";
+        pictures[2].name = "black";
+        const std::vector<std::uint8_t> cooked = logoAtlas(pictures);
+        std::vector<std::uint32_t> aligned((cooked.size() + 3) / 4);
+        std::memcpy(aligned.data(), cooked.data(), cooked.size());
+        const auto *bytes = reinterpret_cast<const std::uint8_t *>(aligned.data());
+        LogosView view;
+        check(view.open(bytes, cooked.size()) && view.count() == 3 && view.icons.width() == kLogoSize,
+              "the spray logos open, three of them, each the logos' size");
+        check(view.level(0, 0, 5) == 3 && view.level(0, kLogoSize - 1, 5) == 0 && view.level(1, 10, 10) == 2 &&
+                  view.level(2, 10, 10) == 0,
+              "... each as bright as its picture was: white solid, grey half, black nothing");
+        check(std::strcmp(view.name(0), "lambda") == 0 && std::strlen(view.name(1)) == kLogoNameBytes - 1 &&
+                  std::strcmp(view.name(3), "") == 0,
+              "... named, a long name cut to fit with its end, and one there is not none");
+        check(!view.open(bytes, cooked.size() - 1), "a logos file short of its names is not opened");
+        std::vector<std::uint32_t> spoilt = aligned;
+        auto *b = reinterpret_cast<std::uint8_t *>(spoilt.data());
+        std::memset(b + cooked.size() - kLogoNameBytes, 'x', kLogoNameBytes);
+        check(!view.open(b, cooked.size()) && view.count() == 0, "nor one with a name that never ends");
+        IconsView icons;
+        check(!icons.open(bytes, cooked.size()), "nor is it taken for the HUD's icons, which are smaller");
+    }
+
     /// A slider slid: heard once where it rests, not at each step; let go
     /// before it rests, heard then; let go where it was heard, not again.
     void testSettle()
@@ -716,6 +840,7 @@ int main()
     testGraphics();
     testLayout();
     testLamp();
+    testLogos();
     const char *dir = std::getenv("HLDS_VALVE_DIR");
     if (dir != nullptr && dir[0] != '\0')
         testGame(dir);

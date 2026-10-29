@@ -2,7 +2,10 @@
 
 #include "Settings.hpp"
 
+#include <cstring>
+
 #include "Global.hpp"
+#include "net/NetLink.hpp"
 
 Settings settings;
 
@@ -42,7 +45,34 @@ void Settings::load()
             keys[a] = data.keys[a];
         autoaim = data.autoaim != 0;
         achievementPopups = data.achievementPopups != 0;
+        std::memcpy(name, data.name, sizeof(name));
+        playerModel = data.playerModel;
+        topColour = data.topColour;
+        bottomColour = data.bottomColour;
+        spray = data.spray;
+        sprayColour = data.sprayColour;
+        hostMode = data.hostMode;
+        std::memcpy(hostMap, data.hostMap, sizeof(hostMap));
+        fragLimit = data.fragLimit;
+        minuteLimit = data.minuteLimit;
+        weaponsStay = data.weaponsStay != 0;
+        fallDamage = data.fallDamage;
+        friendlyFire = data.friendlyFire != 0;
+        flashlight = data.flashlight != 0;
+        hostAutoaim = data.hostAutoaim != 0;
+        maxPlayers = data.maxPlayers;
+        allowGuests = data.allowGuests != 0;
     }
+}
+
+const char *Settings::playerName() const
+{
+    static char owner[hldata::kProfileNameBytes];
+    if (name[0] != 0)
+        return name;
+    if (owner[0] == 0)
+        hlrt::netlink::ownerName(owner, sizeof(owner));
+    return owner;
 }
 
 void Settings::reset(int category)
@@ -84,6 +114,14 @@ void Settings::reset(int category)
         if (controlScheme == hldata::kControlsCustom)
             controlScheme = first.controlScheme;
         break;
+    case kProfileCategory:
+        std::memcpy(name, first.name, sizeof(name));
+        playerModel = first.playerModel;
+        topColour = first.topColour;
+        bottomColour = first.bottomColour;
+        spray = first.spray;
+        sprayColour = first.sprayColour;
+        break;
     default:
         viewBob = first.viewBob;
         debugReadout = first.debugReadout;
@@ -121,6 +159,23 @@ bool Settings::save() const
         data.keys[a] = keys[a];
     data.autoaim = autoaim ? 1 : 0;
     data.achievementPopups = achievementPopups ? 1 : 0;
+    std::memcpy(data.name, name, sizeof(name));
+    data.playerModel = playerModel;
+    data.topColour = topColour;
+    data.bottomColour = bottomColour;
+    data.spray = spray;
+    data.sprayColour = sprayColour;
+    data.hostMode = hostMode;
+    std::memcpy(data.hostMap, hostMap, sizeof(hostMap));
+    data.fragLimit = fragLimit;
+    data.minuteLimit = minuteLimit;
+    data.weaponsStay = weaponsStay ? 1 : 0;
+    data.fallDamage = fallDamage;
+    data.friendlyFire = friendlyFire ? 1 : 0;
+    data.flashlight = flashlight ? 1 : 0;
+    data.hostAutoaim = hostAutoaim ? 1 : 0;
+    data.maxPlayers = maxPlayers;
+    data.allowGuests = allowGuests ? 1 : 0;
     const std::vector<std::uint8_t> bytes = hldata::writeSettings(data);
 
     std::FILE *file = std::fopen(global.dataPath("settings.dat").c_str(), "wb");

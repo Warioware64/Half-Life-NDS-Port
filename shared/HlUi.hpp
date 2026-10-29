@@ -297,15 +297,16 @@ namespace hldata
         const std::uint32_t *rows = nullptr;
 
         /// `data` must be aligned for 32-bit words and outlive the view.
-        /// `widest`: what the caller has room for.
-        bool open(const std::uint8_t *data, std::size_t size, int widest = kIconMaxWidth)
+        /// `widest`, `tallest`: what the caller has room for.
+        bool open(const std::uint8_t *data, std::size_t size, int widest = kIconMaxWidth,
+                  int tallest = kIconMaxHeight)
         {
             header = nullptr;
             if (data == nullptr || size < sizeof(IconsHeader))
                 return false;
             const auto *h = reinterpret_cast<const IconsHeader *>(data);
             if (std::memcmp(h->magic, kIconsMagic, 4) != 0 || h->version != kIconsVersion || h->count == 0 ||
-                h->width == 0 || h->width > widest || h->height == 0 || h->height > kIconMaxHeight)
+                h->width == 0 || h->width > widest || h->height == 0 || h->height > tallest)
                 return false;
             if (size < sizeof(IconsHeader) +
                            static_cast<std::size_t>(h->count) * h->height * iconRowWords(h->width) * 4)
@@ -329,6 +330,65 @@ namespace hldata
         }
     };
 
+    // ------------------------------------------------------------- spray logos
+    //
+    // The pictures a player may spray on a wall in a match: the game's
+    // logos/*.bmp (the player's own folder, as on a PC: what is put there is
+    // offered) and those of its spraypaint.wad that the folder has not, by
+    // name. Icons of the same form as the weapons', kLogoSize square, how
+    // bright the picture was becoming how solid the paint is (it is sprayed
+    // in one colour, HlSettings.hpp's kSprayColour); then each one's name,
+    // kLogoNameBytes with its end. The profile keeps which by its number.
+
+    inline constexpr const char *kLogosFile = "ui/logos.hic";
+    inline constexpr int kLogoSize = 32;
+    inline constexpr std::size_t kLogoNameBytes = 16;
+    inline constexpr int kLogosMost = 128;
+
+    struct LogosView
+    {
+        IconsView icons;
+        const char *names = nullptr;
+
+        /// `data` must be aligned for 32-bit words and outlive the view.
+        bool open(const std::uint8_t *data, std::size_t size)
+        {
+            names = nullptr;
+            if (!icons.open(data, size, kLogoSize, kLogoSize) || icons.width() != kLogoSize ||
+                icons.height() != kLogoSize || icons.count() > kLogosMost)
+            {
+                icons.header = nullptr;
+                return false;
+            }
+            const std::size_t rows =
+                sizeof(IconsHeader) + static_cast<std::size_t>(icons.count()) * kLogoSize * iconRowWords(kLogoSize) * 4;
+            if (size < rows + static_cast<std::size_t>(icons.count()) * kLogoNameBytes)
+            {
+                icons.header = nullptr;
+                return false;
+            }
+            const char *at = reinterpret_cast<const char *>(data + rows);
+            for (int n = 0; n < icons.count(); ++n)
+            {
+                if (std::memchr(at + n * kLogoNameBytes, 0, kLogoNameBytes) == nullptr)
+                {
+                    icons.header = nullptr;
+                    return false;
+                }
+            }
+            names = at;
+            return true;
+        }
+        int count() const { return names != nullptr ? icons.count() : 0; }
+        /// 0 to 3; 0 for anything outside.
+        int level(int logo, int x, int y) const { return names != nullptr ? icons.level(logo, x, y) : 0; }
+        /// "" for one there is not.
+        const char *name(int logo) const
+        {
+            return logo >= 0 && logo < count() ? names + static_cast<std::size_t>(logo) * kLogoNameBytes : "";
+        }
+    };
+
     // ------------------------------------------------------------- loading
     //
     // The game's own loading picture, in the top 192 rows of a texture.
@@ -345,6 +405,12 @@ namespace hldata
     // and before it all, at every start, the Valve intro (valve.avi).
 
     inline constexpr const char *kMenuFile = "ui/menu.256x256.htx";
+    /// The player model as the others see it in a match, and its skin in 256
+    /// colours (a player's own laid over its runs: HlRemap.hpp): what PROFILE
+    /// turns on the top screen. In the common archive where a multiplayer
+    /// map was cooked.
+    inline constexpr const char *kProfileModelFile = "ply/player.hmd";
+    inline constexpr const char *kProfileSkinFile = "ply/player.htx";
 
     /// The animated title: `frames` pictures of `width` x `height` texels, a
     /// byte each, A3I5 -- how bright as both the alpha (top 3 bits) and the
