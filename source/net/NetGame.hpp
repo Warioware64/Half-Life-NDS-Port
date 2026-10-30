@@ -106,6 +106,19 @@ namespace hlrt
         bool sending(const char *&what, int &consoles, int &percent) const;
         /// How many of its clients are consoles it gave the game to.
         int guests() const;
+        /// The host: the least of how far up their memory the heaps of the
+        /// consoles sent the game that are here reach (KB; 0: none has said),
+        /// and one's -- with what of it was free in its lobby.
+        std::uint32_t guestRoom() const;
+        std::uint32_t roomOf(int p) const;
+        std::uint32_t freeOf(int p) const;
+        /// A console sent the game: how far up its memory its heap reaches,
+        /// and what of it is free (KB).
+        void sayRoom(std::uint32_t top, std::uint32_t free);
+        /// The radio's account of the last second, in a line (the host's
+        /// STARTING page, while it sends): exchanges sent and done, done
+        /// again, refused for a full queue.
+        void radioLine(char *line, int room);
 #ifdef HLDS_CHILD
         /// A console that was sent the game: a stream the host has begun
         /// sending it, to be taken now (GuestLoad's receiveAir, or a map
@@ -196,6 +209,8 @@ namespace hlrt
         int previewReply(std::uint8_t *bytes);
         void previewEnd();
         unsigned ready_ = 0;
+        std::uint32_t rooms_[hldata::kNetPlayers] = {}; ///< (the host's: KB, by client; 0 not said)
+        std::uint32_t frees_[hldata::kNetPlayers] = {};
         std::uint32_t loadedAt_ = 0;
         /// How long the host waits for those not ready once it is.
         static constexpr std::uint32_t kReadyVblanks = 20 * 60;

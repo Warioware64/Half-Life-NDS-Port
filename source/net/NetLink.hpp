@@ -78,6 +78,13 @@ namespace hlrt::netlink
     int take(std::uint8_t *into, int &from);
     /// How many frames were dropped because nobody read them in time.
     unsigned dropped();
+    /// A client: what may take a frame of the host's as it arrives, in the
+    /// interrupt, before it is put in the ring -- a stream's pieces, put
+    /// straight where they go (GuestLoad), so that a loader busy for a while
+    /// loses none. True if it took it. (In an interrupt: it may not
+    /// allocate, print, or wait.)
+    using Sink = bool (*)(const std::uint8_t *bytes, int size);
+    void setSink(Sink sink);
 
     /// This console's own address, and the name its owner gave it.
     void address(std::uint8_t out[6]);
@@ -108,6 +115,10 @@ namespace hlrt::netlink
     /// that failed aside), and there is one.
     bool dlAllReady();
     void dlLock(bool locked); ///< no more guests
+    /// How fast the program goes out: the library's own pace (Nintendo's:
+    /// six blocks ahead of what the consoles have said they have), or far
+    /// ahead of it -- they keep any block they are sent.
+    void dlFast(bool fast);
     /// The radio's own counts while it sends (they wrap; what matters is how
     /// much they move): exchanges begun, done, done again for a client that
     /// did not answer, frames the sending could not queue; and the most
@@ -117,5 +128,7 @@ namespace hlrt::netlink
         unsigned armed = 0, done = 0, retried = 0, refused = 0, blocks = 0;
     };
     DlCounts dlCounts();
+    /// Frames the library could not queue, for want of room (all along).
+    unsigned txRefused();
     bool dlBootAll();         ///< start the program on all of them
 } // namespace hlrt::netlink

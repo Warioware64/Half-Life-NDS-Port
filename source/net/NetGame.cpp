@@ -34,6 +34,8 @@ namespace hlrt
 
     namespace
     {
+        /// The pieces of a stream sent a frame while a match waits for it.
+        constexpr int kAirServeFrames = 4;
         /// Frames a client may be out of touch with its host before it is
         /// taken for lost: two seconds. (A console loading a map says
         /// nothing for longer than that, but stays the host's client all
@@ -183,6 +185,8 @@ namespace hlrt
         phase_ = Phase::Hosting;
         clientsWere_ = 0;
         starting_ = goAsked_ = cancelled_ = false;
+        for (std::uint32_t &room : rooms_)
+            room = 0;
         ended_ = "";
         startPending_ = false;
         return true;
@@ -612,6 +616,29 @@ namespace hlrt
         return true;
     }
 
+    void NetGame::radioLine(char *line, int room)
+    {
+        // (Counted once a second; the counts wrap.)
+        static netlink::DlCounts was;
+        static unsigned refusedWas = 0;
+        static std::uint32_t at = 0;
+        static char said[64] = "";
+        if (Global::vblanks() - at >= 60)
+        {
+            const netlink::DlCounts now = netlink::dlCounts();
+            const unsigned refused = netlink::txRefused();
+            std::snprintf(said, sizeof(said), "sent %u/s, done %u, again %u, full %u",
+                          static_cast<unsigned>(static_cast<std::uint16_t>(now.armed - was.armed)),
+                          static_cast<unsigned>(static_cast<std::uint16_t>(now.done - was.done)),
+                          static_cast<unsigned>(static_cast<std::uint16_t>(now.retried - was.retried)),
+                          refused - refusedWas);
+            was = now;
+            refusedWas = refused;
+            at = Global::vblanks();
+        }
+        std::snprintf(line, static_cast<std::size_t>(room), "%s", said);
+    }
+
     int NetGame::guests() const
     {
         int n = 0;
@@ -650,6 +677,7 @@ namespace hlrt
     int NetGame::startStatus(int, char *, int) const { return 0; }
     bool NetGame::sending(const char *&, int &, int &) const { return false; }
     int NetGame::guests() const { return 0; }
+    void NetGame::radioLine(char *line, int room) { std::snprintf(line, static_cast<std::size_t>(room), "%s", ""); }
 
     bool NetGame::airAsked(AirHead &head)
     {
@@ -660,6 +688,35 @@ namespace hlrt
         return true;
     }
 #endif
+
+    std::uint32_t NetGame::guestRoom() const
+    {
+        std::uint32_t least = 0;
+        for (int c = 1; c < kNetPlayers; ++c)
+        {
+            if (rooms_[c] != 0 && netHere(match_, c) && (least == 0 || rooms_[c] < least))
+                least = rooms_[c];
+        }
+        return least;
+    }
+
+    std::uint32_t NetGame::roomOf(int p) const
+    {
+        return p > 0 && p < kNetPlayers && netHere(match_, p) ? rooms_[p] : 0;
+    }
+
+    std::uint32_t NetGame::freeOf(int p) const
+    {
+        return roomOf(p) != 0 ? frees_[p] : 0;
+    }
+
+    void NetGame::sayRoom(std::uint32_t top, std::uint32_t free)
+    {
+        if (on() && !isHost())
+            netSay(match_, netEvent(NetEventType::Room, 0, static_cast<std::int16_t>(top & 0xFFFF),
+                                    static_cast<std::int16_t>(top >> 16), static_cast<std::int16_t>(free & 0xFFFF),
+                                    static_cast<std::int16_t>(free >> 16)));
+    }
 
     void NetGame::loadedMap()
     {
@@ -818,6 +875,7 @@ namespace hlrt
                     air_.drop(c);
                     guests_ &= ~bit;
 #endif
+                    rooms_[c] = 0;
                     netHostLeave(match_.host, c);
                     match_.names[c][0] = 0;
                     NetEvent gone;
@@ -926,9 +984,11 @@ namespace hlrt
                 // to say for itself would wait for nothing.)
                 if (phase_ == Phase::Serving && air_.sending())
                 {
+                    // (Four a frame: queued, they go back to back -- the radio
+                    // starts the next as each exchange ends.)
                     if ((++ticks_ & 7) == 0)
                         send();
-                    if (airSend((ticks_ & 7) == 0 ? 1 : 2) == 0 && (ticks_ & 7) != 0)
+                    if (airSend((ticks_ & 7) == 0 ? kAirServeFrames - 1 : kAirServeFrames) == 0 && (ticks_ & 7) != 0)
                         send();
                 }
                 else if (!(air_.sending() && (++ticks_ & 1) && airSend(1) > 0))
@@ -985,6 +1045,14 @@ namespace hlrt
             if (event.type == NetEventType::Ready && isHost() && event.from > 0 && event.from < kNetPlayers)
             {
                 ready_ |= 1u << event.from;
+                continue;
+            }
+            if (event.type == NetEventType::Room && isHost() && event.from > 0 && event.from < kNetPlayers)
+            {
+                rooms_[event.from] = static_cast<std::uint16_t>(event.v[0]) |
+                                     static_cast<std::uint32_t>(static_cast<std::uint16_t>(event.v[1])) << 16;
+                frees_[event.from] = static_cast<std::uint16_t>(event.v[2]) |
+                                     static_cast<std::uint32_t>(static_cast<std::uint16_t>(event.v[3])) << 16;
                 continue;
             }
             if (event.type == NetEventType::Go && !isHost())

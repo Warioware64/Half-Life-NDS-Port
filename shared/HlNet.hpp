@@ -109,6 +109,8 @@ namespace hldata
         Ready,    ///< client: the match's map is loaded here
         Go,       ///< host: everyone is ready (or long enough has gone by): the match begins, on all at once
         Cancel,   ///< host: the match about to begin is not to; back to the lobby
+        Room,     ///< a console sent the game: v[0..1] how far up its memory its heap reaches, v[2..3] what of it
+                  ///< is free in its lobby (KB)
     };
 
     /// The rules' flags (Rules' v[1]): the game's mp_weaponstay,

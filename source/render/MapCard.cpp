@@ -156,7 +156,18 @@ namespace hlrt
         {
             std::snprintf(line, sizeof(line), "For up to %d players", netMapPlayers(*map));
             say(line, kUiWhite);
-            if (map->guestFits)
+            if (room_ != 0)
+            {
+                // (Consoles sent the game here: whether it fits them all.)
+                if (netMapFits(*map, room_))
+                    say("Fits every console", kUiWhite);
+                else
+                {
+                    say("Too big for a console", kUiGrey);
+                    say("sent the game", kUiGrey);
+                }
+            }
+            else if (map->guestFits)
             {
                 say("Fits a console", kUiWhite);
                 say("without the game", kUiWhite);

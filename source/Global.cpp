@@ -5,6 +5,7 @@
 #include <nds/arm9/dldi.h>
 
 #include "HlManifest.hpp"
+#include "HlGuest.hpp"
 #include "net/AirDevice.hpp"
 #include "net/GuestLoad.hpp"
 #include "data/VramWriter.hpp"
@@ -338,7 +339,12 @@ Global::DataStatus Global::ReadManifest(std::string &startMap, std::vector<hldat
     for (const hldata::ManifestMap &map : manifest.maps)
     {
         if (multiplayer != nullptr && map.spawns != 0)
-            multiplayer->push_back(hldata::NetMapInfo{map.name, map.spawns, map.guestFits, map.airGroup});
+        {
+            // (How far up the memory of a console sent it, and to play.)
+            const std::uint32_t need =
+                map.guestPeakBytes != 0 ? (map.guestPeakBytes + hldata::kGuestPlayBytes + 1023) / 1024 : 0;
+            multiplayer->push_back(hldata::NetMapInfo{map.name, map.spawns, map.guestFits, map.airGroup, need});
+        }
     }
     return DataStatus::Ok;
 }

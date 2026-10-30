@@ -64,24 +64,71 @@ namespace hlrt::guest
         /// would otherwise leave the host waiting for it).
         constexpr int kAirLingerVblanks = 30;
 
+        /// When the stream was last heard of, and when the host was last
+        /// answered.
+        volatile std::uint32_t quietSince = 0;
+        std::uint32_t askedAt = 0;
+        void (*mapProgress)(int) = nullptr;
+        std::uint32_t streamSince = 0; ///< (when the stream being taken began)
+
+        /// (The receiver is the interrupt's as well as this code's -- sinkTake
+        /// -- so what is done to it here is done with interrupts held.)
+        struct Hold
+        {
+            int ime = enterCriticalSection();
+            ~Hold() { leaveCriticalSection(ime); }
+        };
+
+        volatile bool heardInIrq = false; ///< a piece taken by sinkTake since pump last looked
+
+        /// What the radio's interrupt does with a frame of the host's: a
+        /// piece of the stream being taken goes where it belongs, at once
+        /// (a loader busy for a few frames would otherwise see the radio's
+        /// ring overflow, and the piece sent again). Anything else -- the
+        /// game's, another stream's, this one's before the host has been
+        /// heard sending it -- to the ring, for whoever reads it.
+        bool sinkTake(const std::uint8_t *bytes, int size)
+        {
+            if (receiver.ring == nullptr || !receiver.known || size < 4 || bytes[3] != hldata::kNetFrameAirData)
+                return false;
+            hldata::AirHead head;
+            if (!hldata::airRead(bytes, size, head) || head.stream != receiver.stream || head.serve != receiver.serve)
+                return false;
+            receiver.frame(head);
+            quietSince = Global::vblanks();
+            heardInIrq = true;
+            return true;
+        }
+
         bool ringOn(hldata::AirStream stream, const char *name)
         {
-            std::free(receiver.ring);
+            streamSince = Global::vblanks();
             auto *ring = static_cast<std::uint8_t *>(std::malloc(hldata::kAirWindow * hldata::kAirPiece));
-            receiver.want(stream, name, ring);
+            std::uint8_t *was;
+            {
+                const Hold hold;
+                was = receiver.ring;
+                receiver.want(stream, name, ring);
+            }
+            std::free(was);
             airLost = false;
+            netlink::setSink(sinkTake);
             return ring != nullptr;
         }
         void ringOff()
         {
-            std::free(receiver.ring);
-            receiver.ring = nullptr;
+            std::uint8_t *was;
+            {
+                const Hold hold;
+                was = receiver.ring;
+                receiver.ring = nullptr;
+            }
+            std::free(was);
         }
 
         /// The host's frames, as many as have come: the stream's pieces
         /// kept, the rest let go (the game's: they are sent again). An
         /// answer once a vblank. False once the host has been quiet too long.
-        std::uint32_t quietSince = 0, askedAt = 0;
         bool pump()
         {
             std::uint8_t frame[hldata::kNetCmdBytes];
@@ -91,9 +138,12 @@ namespace hlrt::guest
             {
                 heard = true;
                 hldata::AirHead head;
+                const Hold hold;
                 if (hldata::airRead(frame, size, head) && receiver.frame(head))
                     quietSince = Global::vblanks();
             }
+            heard = heard || heardInIrq;
+            heardInIrq = false;
             // (An answer for a frame of the host's that has come, the latest
             // there is: answers sent with nothing to answer wait in a queue,
             // and what reaches the host is then old news.)
@@ -101,7 +151,11 @@ namespace hlrt::guest
             {
                 askedAt = Global::vblanks();
                 std::uint8_t ask[hldata::kNetReplyBytes];
-                const int size = receiver.ask(ask);
+                int size;
+                {
+                    const Hold hold;
+                    size = receiver.ask(ask);
+                }
                 if (size > 0)
                     netlink::send(ask, size);
             }
@@ -135,12 +189,18 @@ namespace hlrt::guest
                     return false;
                 while (true)
                 {
-                    if (receiver.next(out, length))
+                    // (How far, said as it changes: a hundred times at most.)
+                    if (progress != nullptr && receiver.percent() != shown)
+                        progress(shown = receiver.percent());
+                    bool got;
+                    {
+                        const Hold hold;
+                        got = receiver.next(out, length);
+                    }
+                    if (got)
                         return true;
                     if (receiver.done() || !pump())
                         return false;
-                    if (progress != nullptr && receiver.percent() != shown)
-                        progress(shown = receiver.percent());
                     swiWaitForVBlank();
                 }
             }
@@ -279,7 +339,8 @@ namespace hlrt::guest
                 if (receiver.stream != hldata::AirStream::Map || receiver.ring == nullptr ||
                     map != receiver.name)
                     return false;
-                airSupply.progress = nullptr;
+                airSupply.progress = mapProgress;
+                airSupply.shown = -1;
                 supply = &airSupply;
                 mapOnAir = true;
             }
@@ -328,8 +389,11 @@ namespace hlrt::guest
             // (The last piece read let go of: then it is all handed on.)
             const std::uint8_t *rest;
             std::size_t size;
-            while (receiver.next(rest, size))
             {
+                const Hold hold;
+                while (receiver.next(rest, size))
+                {
+                }
             }
             if (receiver.done())
             {
@@ -372,7 +436,10 @@ namespace hlrt::guest
             return false;
         if (!ringOn(head.stream, head.name))
             return false;
-        receiver.frame(head);
+        {
+            const Hold hold;
+            receiver.frame(head);
+        }
         quietSince = Global::vblanks();
         return true;
     }
@@ -425,6 +492,16 @@ namespace hlrt::guest
         }
         if (offerCount < kOffersMost)
             offers[offerCount++] = Offer{map, nullptr, 0, std::string(), true};
+    }
+
+    void onMapProgress(void (*progress)(int percent)) { mapProgress = progress; }
+
+    std::uint32_t airLength() { return receiver.known ? receiver.length : 0; }
+
+    int airRate()
+    {
+        const std::uint32_t frames = Global::vblanks() - streamSince;
+        return frames < 30 ? 0 : static_cast<int>(static_cast<std::uint64_t>(receiver.given) * hldata::kAirPiece * 60 / 1024 / frames);
     }
 
     const char *baseGroup() { return heldBase; }

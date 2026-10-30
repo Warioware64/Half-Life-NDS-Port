@@ -1,6 +1,7 @@
 #include "net/NetLink.hpp"
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 #include <nds.h>
@@ -40,9 +41,11 @@ namespace hlrt::netlink
         // What has come, and has not been read: a ring that the interrupt
         // fills and the frame empties. (One writer, one reader: the indices
         // are each written by one side only.) One pool, in slots as big as
-        // what comes: a client's, twelve of the host's frames; a host's,
-        // the clients' smaller ones -- thirty-nine of them, room for what
-        // seven answer to five frames of its own.
+        // what comes: a client's, twenty-four of the host's frames (four a
+        // frame while a map is sent, and a loader busy for a few); a host's,
+        // the clients' smaller ones -- seventy-seven of them. On the heap
+        // while the radio is on: a console sent the game has not 17 KB to
+        // keep for it.
         struct Frame
         {
             std::uint16_t size;
@@ -50,8 +53,8 @@ namespace hlrt::netlink
             std::uint8_t bytes[1]; ///< (as many as the slot has room for)
         };
         constexpr int kSlotHead = 4;
-        constexpr int kPoolBytes = 12 * (kSlotHead + kNetCmdBytes);
-        alignas(4) std::uint8_t pool[kPoolBytes];
+        constexpr int kPoolBytes = 24 * (kSlotHead + kNetCmdBytes);
+        std::uint8_t *pool = nullptr;
         int slotBytes = kSlotHead + kNetCmdBytes;
         int slotCount = kPoolBytes / (kSlotHead + kNetCmdBytes);
         volatile int ringHead = 0; ///< the next to read
@@ -62,7 +65,7 @@ namespace hlrt::netlink
         void keep(int from, int base, int len)
         {
             const int next = (ringTail + 1) % slotCount;
-            if (len <= 0 || len > slotBytes - kSlotHead || next == ringHead)
+            if (pool == nullptr || len <= 0 || len > slotBytes - kSlotHead || next == ringHead)
             {
                 if (next == ringHead)
                     ++ringDropped;
@@ -80,10 +83,16 @@ namespace hlrt::netlink
             if (type == WIFI_MPTYPE_REPLY && aid >= 1 && aid < kNetPlayers)
                 keep(aid, base, len);
         }
+        volatile Sink sink = nullptr;
         void fromHost(Wifi_MPPacketType type, int base, int len)
         {
-            if (type == WIFI_MPTYPE_CMD)
-                keep(0, base, len);
+            if (type != WIFI_MPTYPE_CMD)
+                return;
+            const Sink take = sink;
+            if (take != nullptr && len > 0 &&
+                take(static_cast<const std::uint8_t *>(Wifi_RxRawReadPacketPointer(static_cast<u32>(base))), len))
+                return;
+            keep(0, base, len);
         }
 
         void waitForMode()
@@ -95,7 +104,9 @@ namespace hlrt::netlink
         {
             if (started)
                 return true;
-            if (!Wifi_InitDefault(INIT_ONLY | WIFI_LOCAL_ONLY))
+            if (pool == nullptr)
+                pool = static_cast<std::uint8_t *>(std::malloc(kPoolBytes));
+            if (pool == nullptr || !Wifi_InitDefault(INIT_ONLY | WIFI_LOCAL_ONLY))
                 return false;
             started = true;
             return true;
@@ -160,6 +171,12 @@ namespace hlrt::netlink
             swiWaitForVBlank();
         }
         started = false;
+        // (Nothing comes in now: the handlers are gone with the library.)
+        const int ime = enterCriticalSection();
+        std::free(pool);
+        pool = nullptr;
+        forget();
+        leaveCriticalSection(ime);
     }
 
     bool host(const char *name, int most)
@@ -358,6 +375,11 @@ namespace hlrt::netlink
         return ringDropped;
     }
 
+    void setSink(Sink take)
+    {
+        sink = take;
+    }
+
     void address(std::uint8_t out[6])
     {
         std::memset(out, 0, 6);
@@ -504,6 +526,16 @@ namespace hlrt::netlink
                 counts.blocks = static_cast<unsigned>(current);
         }
         return counts;
+    }
+
+    unsigned txRefused()
+    {
+        return started ? Wifi_GetStats(WSTAT_TXQUEUEDREJECTED) : 0;
+    }
+
+    void dlFast(bool fast)
+    {
+        Wifi_DlPlaySetPace(4, fast ? 64 : 6);
     }
 
     void dlLock(bool locked)

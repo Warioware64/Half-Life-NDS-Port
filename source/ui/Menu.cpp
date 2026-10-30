@@ -343,7 +343,7 @@ namespace hlrt
     {
         const NetMatch &match = netGame.match();
         unsigned sum = static_cast<unsigned>(netGame.phase()) * 7919u + match.profileStamp * 104729u +
-                       static_cast<unsigned>(match.rules.mode) * 31u + match.rules.most;
+                       static_cast<unsigned>(match.rules.mode) * 31u + match.rules.most + netGame.guestRoom() * 977u;
         // (What is being sent to the consoles given the game, and how far.)
         const char *what = "";
         int consoles = 0, percent = 0;
@@ -894,6 +894,14 @@ namespace hlrt
             }
             return maps.empty() ? -1 : 0;
         }
+        /// HOST's map fits every console sent the game that is here (as they
+        /// have said what a map may take of them), or none is.
+        bool hostMapFits()
+        {
+            const int at = hostIndex();
+            return !settings.allowGuests || at < 0 ||
+                   netMapOffered(netGame.mapInfo()[static_cast<std::size_t>(at)], true, netGame.guestRoom());
+        }
         void setHostMap(int index)
         {
             const std::vector<NetMapInfo> &maps = netGame.mapInfo();
@@ -935,8 +943,9 @@ namespace hlrt
             case kNetFriendly:
                 return settings.hostMode == kModeTeamplay ? nullptr : "Only in teamplay: there are no teams.";
             case kNetGuests:
-                return netAnyGuestMap(netGame.mapInfo()) ? nullptr
-                                                         : "No map on this card fits a console without the game.";
+                return netAnyGuestMap(netGame.mapInfo(), netGame.guestRoom())
+                           ? nullptr
+                           : "No map on this card fits a console without the game.";
             case kNetMap:
                 return netGame.mapInfo().empty() ? "No multiplayer map on the card." : nullptr;
             default:
@@ -1220,7 +1229,7 @@ namespace hlrt
                 return true;
             case kNetMap:
             {
-                const int next = netMapStep(netGame.mapInfo(), hostIndex(), step, settings.allowGuests);
+                const int next = netMapStep(netGame.mapInfo(), hostIndex(), step, settings.allowGuests, netGame.guestRoom());
                 if (next < 0)
                     return false;
                 setHostMap(next);
@@ -1269,7 +1278,7 @@ namespace hlrt
                 settings.allowGuests = !settings.allowGuests;
                 // (Let in: a map that does not fit them gives way to one that does.)
                 if (settings.allowGuests)
-                    setHostMap(netMapKept(netGame.mapInfo(), hostIndex(), true));
+                    setHostMap(netMapKept(netGame.mapInfo(), hostIndex(), true, netGame.guestRoom()));
                 netGame.hostChanged();
                 return true;
             case kNetTeam:
@@ -1706,15 +1715,16 @@ namespace hlrt
             switch (dlsend::state())
             {
             case dlsend::State::Gathering:
-                std::snprintf(said, sizeof(said), "%d console%s here%s. START sends the game to them all at once.",
+                std::snprintf(said, sizeof(said), "%d console%s here%s. START sends the game to them all at once. X: %s.",
                               here, here == 1 ? "" : "s", dlsend::full() ? " (the most there is room for)"
-                                                                         : "; more can still come");
+                                                                         : "; more can still come",
+                              dlsend::fast() ? "fast" : "standard pace");
                 break;
             case dlsend::State::Sending:
                 // (And what the radio is doing: the rate, and the counts that
-                // say why it is not more.)
-                std::snprintf(said, sizeof(said), "Sending the game: %d%%. Leave the consoles on. %s", dlsend::percent(),
-                              dlsend::rate());
+                // say why it is not more; X, the other pace, to compare.)
+                std::snprintf(said, sizeof(said), "Sending the game (%s, X): %d%%. %s",
+                              dlsend::fast() ? "fast" : "standard", dlsend::percent(), dlsend::rate());
                 break;
             case dlsend::State::Starting:
             case dlsend::State::Done:
@@ -1739,9 +1749,13 @@ namespace hlrt
             const char *what = "";
             int consoles = 0, percent = 0;
             if (netGame.sending(what, consoles, percent))
-                std::snprintf(said, sizeof(said), "Sending %s to %d console%s: %d%%. Every console loads the map; the "
-                                                  "match begins on all of them together.",
-                              what, consoles, consoles == 1 ? "" : "s", percent);
+            {
+                // (And what the radio is doing: how fast, and why not faster.)
+                char radio[64];
+                netGame.radioLine(radio, sizeof(radio));
+                std::snprintf(said, sizeof(said), "Sending %s to %d console%s: %d%%. %s", what, consoles,
+                              consoles == 1 ? "" : "s", percent, radio);
+            }
             else
                 std::snprintf(said, sizeof(said), "Every console loads the map; the match begins on all of them "
                                                   "together. CANCEL: back to the lobby.");
@@ -1808,9 +1822,19 @@ namespace hlrt
                 }
                 static const char *const kLinks[] = {"lost", "weak", "fair", "good", "strong"};
                 const int bars = netGame.bars(p);
-                std::snprintf(said, sizeof(said), "%s: %d frags, %d deaths.%s%s", match.names[p][0] ? match.names[p] : "...",
+                // (A console sent the game: its memory, and what of it is free.)
+                char room[56] = "";
+                if (const std::uint32_t kb = netGame.roomOf(p))
+                {
+                    const std::uint32_t free = netGame.freeOf(p);
+                    std::snprintf(room, sizeof(room), " Sent the game: %lu.%lu MB, %lu.%lu free.",
+                                  static_cast<unsigned long>(kb / 1024), static_cast<unsigned long>(kb % 1024 * 10 / 1024),
+                                  static_cast<unsigned long>(free / 1024),
+                                  static_cast<unsigned long>(free % 1024 * 10 / 1024));
+                }
+                std::snprintf(said, sizeof(said), "%s: %d frags, %d deaths.%s%s%s", match.names[p][0] ? match.names[p] : "...",
                               match.frags[p], match.deaths[p], bars >= 0 && p != match.me ? " Link: " : "",
-                              bars >= 0 && p != match.me ? kLinks[bars > 4 ? 4 : bars] : "");
+                              bars >= 0 && p != match.me ? kLinks[bars > 4 ? 4 : bars] : "", room);
                 drawWrapped(canvas, small, x, y, g.line, 0, kLast, said, inkFor(small, kUiWhite), kWidth);
                 return;
             }
@@ -1961,7 +1985,7 @@ namespace hlrt
             // before anyone has come: the host's game is closed meanwhile.)
             const int buttons = sheetButtons();
             drawSheetButton(sheetBarBox(0, buttons), "START", sheetPressed_ == kSheetBar,
-                            hostIndex() < 0 || netGame.phase() == NetGame::Phase::Serving);
+                            hostIndex() < 0 || netGame.phase() == NetGame::Phase::Serving || !hostMapFits());
             if (buttons == 3)
                 drawSheetButton(sheetBarBox(1, 3), "SEND GAME", sheetPressed_ == kSheetBar - 1, playersHere() > 1);
             drawSheetButton(sheetBarBox(buttons - 1, buttons), "BACK", sheetPressed_ == kSheetBar - (buttons - 1));
@@ -2268,7 +2292,7 @@ namespace hlrt
             // host alone may look round a map, too -- though nobody can come
             // once it has begun.)
             const int at = hostIndex();
-            if (at < 0 || netGame.phase() == NetGame::Phase::Serving)
+            if (at < 0 || netGame.phase() == NetGame::Phase::Serving || !hostMapFits())
                 return Action::None;
             settings.save();
             untintSeats();
@@ -3101,6 +3125,9 @@ namespace hlrt
                 if (card == nullptr && page_ == Page::NetLobby && name[0] != 0)
                     elsewhere = name;
             }
+            // (What fits is what fits the consoles sent the game that are
+            // here, as the host has it.)
+            mapCard.setRoom(page_ == Page::NetHost || page_ == Page::NetStarting ? netGame.guestRoom() : 0);
             mapCard.show(card, elsewhere);
         }
 #ifndef HLDS_CHILD
@@ -3108,6 +3135,13 @@ namespace hlrt
         // the consoles have been started, the host's game again.
         if (page_ == Page::NetSend)
         {
+            // (X: the other pace, to compare on a console's own radio.)
+            if (keysDown() & KEY_X)
+            {
+                dlsend::setFast(!dlsend::fast());
+                sound.ui(kUiSoundTick);
+                drawSheetDetail();
+            }
             dlsend::frame();
             if (dlsend::state() == dlsend::State::Done)
             {
@@ -3150,6 +3184,10 @@ namespace hlrt
                 return Action::None;
             }
             unsigned sum = netSignature();
+            char radio[64];
+            netGame.radioLine(radio, sizeof(radio));
+            for (const char *c = radio; *c != 0; ++c)
+                sum = sum * 31u + static_cast<unsigned char>(*c);
             for (int p = 0; p < kNetPlayers; ++p)
             {
                 char status[24] = "";
@@ -3181,6 +3219,19 @@ namespace hlrt
             if (netSignature() != netShown_ && !sheetTouching_ && sheetSlide_ == 0 && sheetDrag_ == 0)
             {
                 netShown_ = netSignature();
+                // (A console sent the game come, gone, or said what it has
+                // room for: a map it cannot hold gives way to one it can.)
+                if (page_ == Page::NetHost && settings.allowGuests && !hostMapFits())
+                {
+                    const int kept = netMapKept(netGame.mapInfo(), hostIndex(), true, netGame.guestRoom());
+                    if (kept >= 0)
+                    {
+                        setHostMap(kept);
+                        netGame.hostChanged();
+                        settings.save();
+                        netShown_ = netSignature();
+                    }
+                }
                 // (Fewer places than before: nothing past them read out.)
                 if (sheetSelected_ >= sheetCount(sheetChapter()))
                     sheetSelected_ = -1;

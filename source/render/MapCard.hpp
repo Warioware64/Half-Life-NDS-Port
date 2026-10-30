@@ -30,6 +30,16 @@ namespace hlrt
         void givePicture(const char *name, const std::uint8_t *file);
         /// ... and let go (a match begins: its memory is the map's).
         void dropPicture();
+        /// What a console sent the game that is here has room for (KB, the
+        /// least of them; 0: none, or not said): what the card says fits.
+        void setRoom(std::uint32_t kb)
+        {
+            if (kb != room_)
+            {
+                room_ = kb;
+                shownName_.clear(); // (said again)
+            }
+        }
         bool shown() const { return text_ != nullptr; }
         /// Inside NEA_Process, after the picture behind it.
         void draw(void (*corner)(int sx, int sy, int s, int t));
@@ -37,6 +47,7 @@ namespace hlrt
     private:
         std::string shownName_;
         std::string givenName_;
+        std::uint32_t room_ = 0;
         std::uint8_t *given_ = nullptr; ///< (a .hpv, kPreviewBytes)
         void *picture_ = nullptr; ///< (NEA_Material), when there is a picture
         void *text_ = nullptr;    ///< (NEA_Material)

@@ -4,6 +4,7 @@
 #include "global_header.hpp"
 
 #include <cstdlib>
+#include <malloc.h>
 
 #include "Achievements.hpp"
 #include <sys/stat.h>
@@ -72,13 +73,41 @@ namespace
     /// Sent the game: what is said while there is nothing else to show.
     void guestSay(const char *l1, const char *l2)
     {
-        hlrt::bottomScreen.showFatal(l1, l2, nullptr);
+        hlrt::bottomScreen.showProgress("HALF-LIFE DS", l1, l2, 0, 0, false);
     }
-    void guestProgress(int percent)
+    /// What is being taken from the host, how big and how fast, how far.
+    void guestPage(const char *title, const char *step, int percent)
     {
-        char line[24];
-        std::snprintf(line, sizeof(line), "%d%%", percent);
-        guestSay("Receiving the game from the host...", line);
+        char note[64];
+        const std::uint32_t length = hlrt::guest::airLength();
+        const int rate = hlrt::guest::airRate();
+        if (length == 0)
+            std::snprintf(note, sizeof(note), "From the host");
+        else if (rate == 0)
+            std::snprintf(note, sizeof(note), "%lu KB from the host", static_cast<unsigned long>(length / 1024));
+        else
+            std::snprintf(note, sizeof(note), "%lu KB from the host, %d KB a second",
+                          static_cast<unsigned long>(length / 1024), rate);
+        hlrt::bottomScreen.showProgress(title, step, note, percent, 100, false, true);
+    }
+    void guestProgress(int percent) { guestPage("HALF-LIFE DS", "Receiving the game", percent); }
+    void guestBaseProgress(int percent) { guestPage("JOINING THE MATCH", "Receiving the map's models and sounds", percent); }
+    std::string guestMapName;
+    /// What the host is told of this console's memory (KB): how far up it
+    /// the heap reaches -- what the converter's guestPeak is measured
+    /// against, which a DS's 4 MB and a DSi's 8 or 16 differ in -- and what
+    /// of it is free now, in the lobby (said on the host's PLAYERS page).
+    void guestSayRoom()
+    {
+        const struct mallinfo info = mallinfo();
+        const std::uint32_t top = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(getHeapLimit()) - 0x02000000u);
+        const std::size_t free = global.heapHeadroom() + info.fordblks;
+        hlrt::netGame.sayRoom(top / 1024, static_cast<std::uint32_t>(free / 1024));
+    }
+    void guestMapProgress(int percent)
+    {
+        const std::string step = "Receiving " + guestMapName;
+        guestPage("JOINING THE MATCH", step.c_str(), percent);
     }
     /// Waited for, a frame at a time with the radio heard, until the match
     /// says this console is in the host's lobby (or `frames` pass).
@@ -400,8 +429,13 @@ namespace
             return LoadResult::NotOnCard;
         }
         clock.mark("peek");
+#ifdef HLDS_CHILD
+        // (Sent the game: the map comes as it is read -- how far, as it does.)
+        guestMapProgress(0);
+#else
         if (!quietLoad)
             hlrt::bottomScreen.showMessage("LOADING", name.c_str());
+#endif
         // The last picture of the map being left stays on the screen while
         // this one loads, if there is one (FrameFreeze). Otherwise nothing of
         // the old picture is seen from here on: the hardware would go on
@@ -571,7 +605,12 @@ namespace
         if (hlrt::netGame.isHost())
             takePreview(map);
         hlrt::screenFade.curtainDown();
+#ifdef HLDS_CHILD
+        hlrt::bottomScreen.showProgress("JOINING THE MATCH", "Ready", "Waiting for the host to begin", 100, 100, false,
+                                        true);
+#else
         hlrt::bottomScreen.showMessage("WAITING", "for the others to load the map");
+#endif
         hlrt::netGame.loadedMap();
         for (int n = 0; n < 3 * 60 * 60; ++n)
         {
@@ -1189,6 +1228,11 @@ int main(int argc, char *argv[])
             hlrt::menu.openLobby();
         else
             hlrt::menu.openTitle();
+#ifdef HLDS_CHILD
+        // (Sent the game: the host told what a map may take of it, for the
+        // maps it offers -- a DSi's room is not a DS's.)
+        guestSayRoom();
+#endif
         while (true)
         {
             if (moving)
@@ -1212,6 +1256,7 @@ int main(int argc, char *argv[])
                 guestArrive(false);
                 back();
                 hlrt::menu.openLobby();
+                guestSayRoom();
                 continue;
             }
             // A match about to begin: its group's base, and its map as it
@@ -1222,8 +1267,8 @@ int main(int argc, char *argv[])
                 leaving();
                 if (air.stream == hldata::AirStream::Base)
                 {
-                    hlrt::bottomScreen.showMessage("RECEIVING", air.name);
-                    if (!hlrt::guest::receiveAir(nullptr))
+                    guestBaseProgress(0);
+                    if (!hlrt::guest::receiveAir(guestBaseProgress))
                     {
                         char why[48];
                         hlrt::guest::airStatus(why, sizeof(why));
@@ -1239,6 +1284,8 @@ int main(int argc, char *argv[])
                     hlrt::SaveGame::newRun(Global::vblanks() * 2654435761u + 1u);
                     leavingAbandoned = true;
                     hlrt::guest::offerAir(air.name);
+                    guestMapName = air.name;
+                    hlrt::guest::onMapProgress(guestMapProgress);
                     // (The host's picture of it goes: its memory is the map's.)
                     hlrt::mapCard.dropPicture();
                     holdLoad = true;

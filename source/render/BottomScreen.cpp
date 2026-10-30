@@ -454,7 +454,8 @@ namespace hlrt
         drawTextCentred(canvas, font, 128, 112, cut, inkFor(font, kUiWhite));
     }
 
-    void BottomScreen::showProgress(const char *title, const char *step, const char *note, int done, int total)
+    void BottomScreen::showProgress(const char *title, const char *step, const char *note, int done, int total,
+                                    bool stop, bool percent)
     {
         create();
         Canvas &canvas = touchCanvas.canvas();
@@ -474,12 +475,23 @@ namespace hlrt
         }
         // How far: a bar, and in words under it.
         constexpr int kBarX = 28, kBarY = 108, kBarW = 200, kBarH = 10;
-        canvas.fill(kBarX, kBarY, kBarW, kBarH, kUiTrack);
-        canvas.frame(kBarX - 1, kBarY - 1, kBarW + 2, kBarH + 2, kUiEdge);
-        const int filled = total > 0 ? kBarW * (done < total ? done : total) / total : 0;
-        canvas.fill(kBarX, kBarY, filled, kBarH, kUiOrange + 1);
-        std::snprintf(cut, sizeof(cut), "%d of %d", done, total);
-        drawTextCentred(canvas, small, 128, kBarY + kBarH + 6, cut, inkFor(small, kUiGrey));
+        if (total > 0)
+        {
+            canvas.fill(kBarX, kBarY, kBarW, kBarH, kUiTrack);
+            canvas.frame(kBarX - 1, kBarY - 1, kBarW + 2, kBarH + 2, kUiEdge);
+            const int filled = kBarW * (done < total ? done : total) / total;
+            canvas.fill(kBarX, kBarY, filled, kBarH, kUiOrange + 1);
+            if (percent)
+                std::snprintf(cut, sizeof(cut), "%d%%", done * 100 / total);
+            else
+                std::snprintf(cut, sizeof(cut), "%d of %d", done, total);
+            drawTextCentred(canvas, small, 128, kBarY + kBarH + 6, cut, inkFor(small, kUiGrey));
+        }
+        if (!stop)
+        {
+            stopShown = false;
+            return;
+        }
         canvas.button(kStopX, kStopY, kStopW, kStopH, stopHit);
         drawTextCentred(canvas, medium, kStopX + kStopW / 2, kStopY + (kStopH - medium.height()) / 2,
                         stopHit ? "STOPPING" : "STOP", inkFor(medium, stopHit ? kUiWhite : kUiOrange));

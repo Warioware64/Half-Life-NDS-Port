@@ -36,6 +36,25 @@ namespace
               "a map is for as many as it has places, no more than a match has, and two at the least");
         check(netModeOffered(kNetModeDeathmatch, true) && netModeOffered(kNetModeTeamplay, false) && !netModeOffered(2, false),
               "deathmatch and teamplay are played; co-op is not yet");
+
+        // How far up its memory the heap of a console sent the game reaches
+        // (the Room event, in KB) is what fits it: a DSi's 8 MB takes the
+        // big maps a DS's 4 MB does not; none said, the DS's answer.
+        std::vector<NetMapInfo> sized = {{"boot_camp", 17, false, 1, 4400}, {"bounce", 10, true, 1, 3300},
+                                         {"crossfire", 20, true, 1, 3600}, {"rustmill", 4, false, 1, 4000},
+                                         {"nothing", 4, false, 0, 0}};
+        check(netMapOffered(sized[0], true, 7800) && !netMapOffered(sized[0], true, 3700) &&
+                  !netMapOffered(sized[0], true, 0) && netMapOffered(sized[1], true, 0),
+              "a map fits a console sent the game that has room for it; none said, the DS's answer");
+        check(netMapOffered(sized[3], true, 4000) && !netMapOffered(sized[3], true, 3999) && !netMapOffered(sized[4], true, 99999),
+              "... exactly as much fits, a byte less does not, and a map never sent fits no room");
+        check(netMapStep(sized, 1, 1, true, 3700) == 2 && netMapStep(sized, 2, 1, true, 3700) == 1 &&
+                  netMapStep(sized, 1, 1, true, 7800) == 2 && netMapStep(sized, 2, 1, true, 7800) == 3,
+              "stepping through the maps passes over what the least room there cannot hold");
+        check(netMapKept(sized, 0, true, 3700) == 1 && netMapKept(sized, 0, true, 7800) == 0,
+              "a chosen map too big for a console that comes gives way; with the room, it stays");
+        check(netAnyGuestMap(sized, 3000) == false && netAnyGuestMap(sized, 3300),
+              "... and with too little room for any, there is none to choose");
     }
 
     void testPreview()

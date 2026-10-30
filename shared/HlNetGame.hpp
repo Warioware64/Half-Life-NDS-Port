@@ -648,6 +648,7 @@ namespace hldata
             case NetEventType::Ready:
             case NetEventType::Go:
             case NetEventType::Cancel:
+            case NetEventType::Room:
                 if (match.passedCount < NetMatch::kMostNotices)
                     match.passed[match.passedCount++] = event;
                 break;

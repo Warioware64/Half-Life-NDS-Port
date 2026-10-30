@@ -88,6 +88,13 @@ namespace hlrt::guest
     /// The map being sent, to be loaded from the air: beginMap reads it as
     /// it comes.
     void offerAir(const std::string &map);
+    /// What is told how far a map's stream has got as it loads (0..100), as
+    /// receiveAir's `progress` is for the others.
+    void onMapProgress(void (*progress)(int percent));
+    /// The stream being taken: how long it is, and how fast it has come
+    /// (KB a second, since it began).
+    std::uint32_t airLength();
+    int airRate();
     /// The group whose base is held ("": none).
     const char *baseGroup();
     /// How the stream being taken stands, in a line (for when it was not).
