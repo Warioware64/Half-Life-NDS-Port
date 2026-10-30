@@ -321,7 +321,12 @@ namespace hlrt
         const std::uint8_t effects = extended_                         ? kAudioEffectsEnhanced
                                      : settings.roomEffects == kRoomOff ? kAudioEffectsOff
                                                                        : kAudioEffectsClassic;
+#ifdef HLDS_CHILD
+        // (Sent the game, the speakers stay at their one rate: dsiSpeakers.)
+        const std::uint8_t quality = kQualityStandard;
+#else
         const std::uint8_t quality = extended_ ? kQualityHigh : settings.soundQuality;
+#endif
         // A DSi's speakers fed at the pipeline's rate: 47.6 kHz at the high
         // quality (and for the DSP, which is made for it), else 32.7.
         const int hz = quality == kQualityHigh ? 47 : 32;

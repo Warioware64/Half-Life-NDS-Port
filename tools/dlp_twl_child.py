@@ -17,7 +17,10 @@ What this tool does:
         child the NTR BIOS, e.g. nds-bootstrap + dlplay forced DSi mode);
       - builds a minimal TWL header at 0x02FFE000 (NTR header copy,
         arm9i LMA == VMA so crt0 skips the copy, arm7i LMA -> blob,
-        MBK values and appflags from the original header).
+        MBK values from the original header, appflags = 0: the loader leaves
+        the DSi's codec in its DS mode (nds-bootstrap's NDSTouchscreenMode),
+        and with that flag libnds reads the touch screen the DSi's way, where
+        nothing answers: seen on a DSi, 2026-10-30).
   * That only if 16 MB of RAM is mapped too (SCFG_EXT9 bit 15): the ARM7's
     second program then moves to high memory, out of the heap's way; the NTR
     header is found wherever the loader left it, and the game told by a
@@ -141,8 +144,7 @@ def main(inp, outp):
 
     mbk = struct.unpack_from('<12I', d, 0x180)  # 0x180..0x1AF
     hdr_words = [(0x1C8, arm9i_vma), (0x1CC, a9isize),
-                 (0x1D8, BLOB_HIGH), (0x1DC, a7isize),
-                 (0x1BC, u32(d, 0x1BC))]  # appflags: the DSi's sound and touch
+                 (0x1D8, BLOB_HIGH), (0x1DC, a7isize)]
     # MBK1-5 + ARM9/ARM7 MBK6-8 + MBK9 copied for libnds/info purposes
     for k in range(12):
         hdr_words.append((0x180 + 4 * k, mbk[k]))

@@ -319,9 +319,9 @@ namespace hlrt
 #ifdef HLDS_CHILD
         // (Sent the game, it runs as a DS: what start-up read of a DSi --
         // SCFG left open, and a DSi header in memory that is the Download
-        // Play program's, not this one's -- is not to be acted on. Only what
-        // its own start has made of itself: tools/dlp_twl_child.py.)
-        return global.twlChild && (__DSiHeader->appflags & 0x01) != 0;
+        // Play program's, not this one's -- is not to be acted on. In DSi mode
+        // too: the codec is left in its DS mode, tools/dlp_twl_child.py.)
+        return false;
 #else
         return isDSiMode() && (__DSiHeader->appflags & 0x01) != 0;
 #endif

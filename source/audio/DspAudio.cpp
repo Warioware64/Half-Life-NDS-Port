@@ -65,7 +65,12 @@ namespace hlrt
 
     bool DspAudio::available()
     {
+#ifdef HLDS_CHILD
+        // (Sent the game, it has not the speakers' mix it needs: dsiSpeakers.)
+        return false;
+#else
         return hlDspProgramBytes != 0 && nwramIsAvailable();
+#endif
     }
 
     void DspAudio::stop()
