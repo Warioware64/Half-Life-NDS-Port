@@ -7,6 +7,8 @@
 // Capture the screen first into bank D, then display it in front of the 3D layer
 // until the new map's first picture is ready.
 
+#include <cstdint>
+
 namespace hlrt
 {
     class FrameFreeze
@@ -20,6 +22,11 @@ namespace hlrt
         /// shows at that moment is not yet the new map.)
         void thaw();
         bool frozen() const { return frozen_; }
+        /// The 3D alone of the next whole frame -- what is drawn, before the
+        /// screen's brightness or anything over it -- shrunk by half into
+        /// `out` (HlPreview.hpp: a map's picture). Through bank D, as a
+        /// freeze is; not while one is. False if it could not be.
+        bool capturePreview(std::uint16_t *out);
 
     private:
         bool frozen_ = false;

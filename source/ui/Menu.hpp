@@ -12,6 +12,7 @@
 #include <string>
 #include <vector>
 
+#include "HlFont.hpp"
 #include "HlSaveFiles.hpp"
 #include "HlUi.hpp"
 
@@ -83,6 +84,8 @@ namespace hlrt
         /// Why a row is greyed out (a line to show when it is touched), or
         /// null if it is not.
         const char *whyDead(int id) const;
+        /// ... and why a room found on JOIN cannot be joined (null: it can).
+        const char *foundDead(int row) const;
         void showReason(const char *why);
         /// What is on the card, for the rows that are there only if it is.
         void probeCard();
@@ -95,9 +98,9 @@ namespace hlrt
             Saves = 4,        ///< a sheet: the saves, to load from or to save into
             Confirm = 5,      ///< "new game?"
             Multiplayer = 7,  ///< host a game between consoles, or join one
-            NetHost = 8,      ///< the host's lobby: which map, what limits, who is there
+            NetHost = 8,      ///< a sheet: the host's lobby -- the match (MATCH), who is there (PLAYERS)
             NetJoin = 9,      ///< the games found
-            NetLobby = 10,    ///< a client waiting for the host to start
+            NetLobby = 10,    ///< a sheet: a client waiting for the host to start (who is there)
             NetPause = 11,    ///< the pause menu of a game between consoles (which goes on)
             Difficulty = 14,  ///< a new game's: EASY, MEDIUM, DIFFICULT
             Achievements = 15, ///< a sheet: those earned and those not, a chapter at a time
@@ -115,10 +118,20 @@ namespace hlrt
         bool sheet() const
         {
             return page_ == Page::Achievements || page_ == Page::Settings || page_ == Page::Saves ||
-                   page_ == Page::Profile;
+                   page_ == Page::Profile || page_ == Page::NetHost || page_ == Page::NetLobby;
         }
-        /// A sheet of settings' rows: OPTIONS, PROFILE.
-        bool optionSheet() const { return page_ == Page::Settings || page_ == Page::Profile; }
+        /// A sheet of settings' rows: OPTIONS, PROFILE, HOST, the lobby.
+        bool optionSheet() const
+        {
+            return page_ == Page::Settings || page_ == Page::Profile || page_ == Page::NetHost ||
+                   page_ == Page::NetLobby;
+        }
+        /// How many buttons along a sheet's bottom: the last is BACK (LEAVE).
+        int sheetButtons() const { return page_ == Page::Saves ? 3 : (page_ == Page::NetLobby ? 1 : 2); }
+        /// That last button, or B: back -- the host asked first, if anyone
+        /// has joined its game.
+        Action sheetBack();
+        int hostChapter_ = 0; ///< HOST's chapter: MATCH, PLAYERS
         int achChapter_ = 0, settingsChapter_ = 0; ///< the chapter each was last on (kept while the console is on)
         int sheetScroll_ = 0;    ///< how far down the list is scrolled, in pixels
         int sheetSelected_ = -1; ///< the row read out in the box; -1: none
@@ -155,6 +168,7 @@ namespace hlrt
         void drawSheetHeader();
         void drawSheetList();
         void drawSheetRows(int chapter, int x, int scroll);
+        void drawSeat(hldata::Canvas &band, int x, int y, int textY, int seat, bool tinted);
         void drawSheetDetail();
         void drawSheetBar();
 
@@ -183,8 +197,6 @@ namespace hlrt
         // A game between consoles: what the host has chosen, and what was
         // last drawn of who is there (to draw again when it changes).
         // (The map and the limits are the settings': the match last hosted.)
-        /// Which of netGame.maps() is hosted: the settings' (0 if empty).
-        std::size_t hostMap() const;
         unsigned netShown_ = 0;
         int netTick_ = 0;
         void showFound();

@@ -110,6 +110,8 @@ namespace hlrt
             (settings.friendlyFire ? kRuleFriendlyFire : 0) | (settings.flashlight ? kRuleFlashlight : 0) |
             (settings.hostAutoaim ? kRuleAutoaim : 0) | (settings.allowGuests ? kRuleGuests : 0));
         rules.most = settings.maxPlayers;
+        const std::string *hosted = hostedMap(maps_);
+        rules.mapHash = hosted != nullptr ? nameHash(hosted->c_str()) : 0;
         netSetRules(match_, rules);
         // What the beacon says of it.
         NetRoomInfo room;
@@ -157,7 +159,11 @@ namespace hlrt
     {
         char name[kNetTextBytes];
         std::snprintf(name, sizeof(name), "%s", settings.playerName());
-        if (!netlink::host(name, settings.maxPlayers))
+        // (The radio for as many as a match can have: how many may play is the
+        // rules', which can change in the lobby, and the host refuses the
+        // rest -- the radio's own count could not change without everyone
+        // being let go.)
+        if (!netlink::host(name, kNetPlayers))
             return false;
         netBegin(match_, NetMatch::Role::Host, 0, name);
         sayRules();
@@ -213,8 +219,39 @@ namespace hlrt
         return count;
     }
 
+    const char *NetGame::lobbyMap() const
+    {
+        if (isHost())
+        {
+            const std::string *map = hostedMap(maps_);
+            return map != nullptr ? map->c_str() : "";
+        }
+        // (What the host's rules say now; else what its beacon said.)
+        for (const std::string &map : maps_)
+        {
+            if (match_.rules.mapHash != 0 && nameHash(map.c_str()) == match_.rules.mapHash)
+                return map.c_str();
+        }
+        return lobbyMap_.c_str();
+    }
+
     bool NetGame::join(int index)
     {
+        // (What its beacon says of its map, kept for the lobby's card.)
+        lobbyMap_.clear();
+        {
+            std::uint8_t bytes[16];
+            int size = 0, rssi = 0;
+            NetRoomInfo room;
+            if (phase_ == Phase::Scanning && netlink::hostRoomAt(index, bytes, size, rssi) && netRoomRead(bytes, size, room))
+            {
+                for (const std::string &map : maps_)
+                {
+                    if (room.mapHash != 0 && nameHash(map.c_str()) == room.mapHash)
+                        lobbyMap_ = map;
+                }
+            }
+        }
         if (phase_ != Phase::Scanning || !netlink::join(index))
             return false;
         char name[kNetTextBytes];

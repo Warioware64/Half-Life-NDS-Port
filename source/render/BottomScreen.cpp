@@ -386,6 +386,7 @@ namespace hlrt
         create();
         Canvas &canvas = touchCanvas.canvas();
         canvas.clear();
+        touchCanvas.untintAll(); // (a menu's colours of its own go)
         shown_ = Shown::Pad;
         padPending_ = false; // (drawn on the screen now, all of it)
         mirrored_ = settings.leftHanded;

@@ -6,6 +6,7 @@
 #include "ui/Menu.hpp"
 
 #include "HlCommands.hpp"
+#include "HlRemap.hpp"
 #include "HlSkill.hpp"
 #include "Achievements.hpp"
 #include "Global.hpp"
@@ -17,6 +18,7 @@
 #include "game/SaveGame.hpp"
 #include "net/NetGame.hpp"
 #include "render/BottomScreen.hpp"
+#include "render/MapCard.hpp"
 #include "render/ProfileView.hpp"
 #include "ui/Keyboard.hpp"
 #include "ui/TouchCanvas.hpp"
@@ -112,6 +114,16 @@ namespace hlrt
             kProfBottom,
             kProfSpray,    ///< ... the logo sprayed (into ui/logos.hic)
             kProfSprayColour,
+            kNetMode,      ///< HOST's MATCH: deathmatch or teamplay
+            kNetMost,      ///< ... how many may play
+            kNetStay,      ///< ... weapons stay
+            kNetFall,      ///< ... fall damage
+            kNetFriendly,  ///< ... friendly fire
+            kNetLamp,      ///< ... the flashlight allowed
+            kNetAim,       ///< ... autoaim
+            kNetGuests,    ///< ... consoles without the game let in
+            kNetTeam,      ///< PLAYERS': the team this console's player would be on
+            kSeat,         ///< ... a player's place (which, by its row)
         };
         struct Row
         {
@@ -142,13 +154,6 @@ namespace hlrt
                                   {Kind::Button, kSendDemo, "SEND A DEMO"},
                                   {Kind::Button, kProfile, "PROFILE"},
                                   {Kind::Button, kBack, "BACK"}};
-        const Row kHostRows[] = {{Kind::Value, kNetMap, "Map"},
-                                 {Kind::Value, kNetFrags, "Frag limit"},
-                                 {Kind::Value, kNetMinutes, "Time limit"},
-                                 {Kind::Value, kNetSkill, "Difficulty"},
-                                 {Kind::Button, kNetStart, "START"},
-                                 {Kind::Button, kBack, "BACK"}};
-        const Row kLobbyRows[] = {{Kind::Button, kBack, "LEAVE"}};
         const Row kNetPauseRows[] = {{Kind::Button, kResume, "RESUME"}, {Kind::Button, kOptions, "OPTIONS"},
                                      {Kind::Button, kLeave, "LEAVE GAME"}};
         // The games found: made when they are shown, then BACK.
@@ -253,9 +258,7 @@ namespace hlrt
             case 3: count = static_cast<int>(sizeof(kTitleRows) / sizeof(kTitleRows[0])); return kTitleRows;
             case 5: count = 2; return kConfirmRows;
             case 7: count = static_cast<int>(sizeof(kMultiRows) / sizeof(kMultiRows[0])); return kMultiRows;
-            case 8: count = static_cast<int>(sizeof(kHostRows) / sizeof(kHostRows[0])); return kHostRows;
             case 9: count = foundCount + 1; return foundRows;
-            case 10: count = static_cast<int>(sizeof(kLobbyRows) / sizeof(kLobbyRows[0])); return kLobbyRows;
             case 11: count = static_cast<int>(sizeof(kNetPauseRows) / sizeof(kNetPauseRows[0])); return kNetPauseRows;
             case 14: count = static_cast<int>(sizeof(kSkillRows) / sizeof(kSkillRows[0])); return kSkillRows;
             case 16: count = static_cast<int>(sizeof(kNewGameRows) / sizeof(kNewGameRows[0])); return kNewGameRows;
@@ -285,8 +288,7 @@ namespace hlrt
         open();
         probeCard();
         title_ = true;
-        page_ = netGame.isHost() ? Page::NetHost : Page::NetLobby;
-        draw();
+        openSheet(netGame.isHost() ? Page::NetHost : Page::NetLobby);
     }
 
     /// Which game: the game, its Hazard Course, Uplink -- each one there
@@ -335,9 +337,11 @@ namespace hlrt
     unsigned Menu::netSignature() const
     {
         const NetMatch &match = netGame.match();
-        unsigned sum = static_cast<unsigned>(netGame.phase()) * 7919u;
+        unsigned sum = static_cast<unsigned>(netGame.phase()) * 7919u + match.profileStamp * 104729u +
+                       static_cast<unsigned>(match.rules.mode) * 31u + match.rules.most;
         for (int p = 0; p < kNetPlayers; ++p)
         {
+            sum = sum * 7u + static_cast<unsigned>(netGame.bars(p) + 1);
             sum = sum * 31u + (netHere(match, p) ? 1u : 0u);
             for (const char *c = match.names[p]; *c != 0; ++c)
                 sum = sum * 31u + static_cast<unsigned char>(*c);
@@ -418,19 +422,13 @@ namespace hlrt
         }
         for (int row = 0; row < rowCount(); ++row)
             drawRow(row, false);
-        if (page_ == Page::NetHost || page_ == Page::NetLobby || page_ == Page::NetJoin)
+        if (page_ == Page::NetJoin)
         {
             const FontView &small = touchCanvas.font(kFontSmall);
             const int top = kOptionLayout.top + rowCount() * kOptionLayout.pitch + 4;
-            const char *said = page_ == Page::NetHost
-                                   ? "In the game:"
-                                   : (page_ == Page::NetJoin
-                                          ? (netGame.phase() == NetGame::Phase::Joining ? "Joining..."
-                                                                                        : "Looking for games...")
-                                          : "Waiting for the host to start");
-            drawTextCentred(canvas, small, 128, top, said, inkFor(small, kUiOrange));
-            if (page_ != Page::NetJoin)
-                drawPlayers(top + small.height() + 5, false);
+            drawTextCentred(canvas, small, 128, top,
+                            netGame.phase() == NetGame::Phase::Joining ? "Joining..." : "Looking for games...",
+                            inkFor(small, kUiOrange));
         }
         if (page_ == Page::NetPause)
             drawPlayers(kMainLayout.top + rowCount() * kMainLayout.pitch + 6, true);
@@ -522,12 +520,14 @@ namespace hlrt
         /// The `n`th of `count` buttons along the bottom.
         SheetBox sheetBarBox(int n, int count)
         {
+            if (count == 1)
+                return SheetBox{4, kSheetBarTop, 248, kSheetBarHeight};
             if (count == 2)
                 return n == 0 ? SheetBox{4, kSheetBarTop, 148, kSheetBarHeight} : SheetBox{156, kSheetBarTop, 96, kSheetBarHeight};
             return SheetBox{4 + n * 84, kSheetBarTop, 80, kSheetBarHeight};
         }
         // What YES does, once asked.
-        constexpr int kAskReset = 1, kAskOverwrite = 2, kAskLoad = 3, kAskDelete = 4;
+        constexpr int kAskReset = 1, kAskOverwrite = 2, kAskLoad = 3, kAskDelete = 4, kAskLeave = 5;
 
         /// What depends on the letters' height.
         struct SheetGeometry
@@ -621,6 +621,48 @@ namespace hlrt
                                      lit ? (c == 'o' ? kUiWhite + 2 : kUiOrange + 2) : (c == 'o' ? kUiGrey : kUiGrey + 1));
                 }
             }
+        }
+
+        // --- MULTIPLAYER's tiles: four, two by two, each with a picture of
+        // our own (none of the console maker's), then BACK under them.
+
+        /// The pictures, twelve by twelve ('#' lit, 'o' bright, '.' nothing),
+        /// drawn twice the size: sending (an antenna, waves out), receiving
+        /// (an antenna, an arrow in), a demo (a console, an arrow out), a
+        /// profile (a head and shoulders).
+        constexpr const char *kTileIcons[4][12] = {
+            {"............", ".#........#.", "#..#....#..#", "#.#..##..#.#", "#.#.#oo#.#.#", "#..#.oo.#..#",
+             ".#...##...#.", ".....##.....", ".....##.....", "....####....", "...######...", "............"},
+            {".....##.....", ".....##.....", "...#.##.#...", "....####....", ".....##.....", "............",
+             "....#..#....", "...#.oo.#...", ".....oo.....", ".....##.....", "....####....", "...######..."},
+            {"..########..", "..#oooooo#..", "..#oooooo#..", "..########..", "..#......#..", "..#.#..#.#..",
+             "..########..", "............", ".....##.....", "...######...", "....####....", ".....##....."},
+            {"....####....", "...######...", "...##oo##...", "...######...", "....####....", "............",
+             "..########..", ".##########.", ".####oo####.", ".##########.", ".##########.", "............"}};
+        void drawTileIcon(Canvas &canvas, int x, int y, int which, bool lit)
+        {
+            for (int row = 0; row < 12; ++row)
+            {
+                for (int col = 0; col < 12; ++col)
+                {
+                    const char c = kTileIcons[which][row][col];
+                    if (c == '.')
+                        continue;
+                    const int colour = lit ? (c == 'o' ? kUiWhite + 2 : kUiOrange + 2) : (c == 'o' ? kUiGrey + 1 : kUiGrey);
+                    canvas.fill(x + col * 2, y + row * 2, 2, 2, colour);
+                }
+            }
+        }
+        struct TileBox
+        {
+            int x, y, w, h;
+        };
+        /// Where MULTIPLAYER's row `row` is: a tile (the first four), or BACK.
+        TileBox multiTile(int row)
+        {
+            if (row >= 4)
+                return TileBox{28, 142, 200, 20};
+            return TileBox{16 + (row % 2) * 116, 28 + (row / 2) * 56, 108, 52};
         }
 
         // --- The settings: a category a page, each a list of rows.
@@ -720,13 +762,138 @@ namespace hlrt
         /// Where the spray is shown, in the box under PROFILE's list: a block
         /// of cells of the touch screen in colours of their own (its colour).
         constexpr int kSprayCellX = 27, kSprayCellY = 17;
-        /// A sheet's rows, OPTIONS' category `chapter`'s or PROFILE's.
-        const Row *sheetRows(bool profile, int chapter, int &count)
+        // (The pages that are sheets of settings' rows, by their numbers:
+        // Menu::Page's.)
+        constexpr int kPageSettings = 1, kPageHost = 8, kPageLobby = 10, kPageProfile = 17;
+        /// HOST's MATCH: the settings of the match it is to start.
+        const Row kHostRows[] = {{Kind::Value, kNetMode, "Mode"},
+                                 {Kind::Value, kNetMap, "Map"},
+                                 {Kind::Value, kNetFrags, "Frag limit"},
+                                 {Kind::Value, kNetMinutes, "Time limit"},
+                                 {Kind::Value, kNetMost, "Players"},
+                                 {Kind::Value, kNetStay, "Weapons stay"},
+                                 {Kind::Value, kNetFall, "Fall damage"},
+                                 {Kind::Value, kNetFriendly, "Friendly fire"},
+                                 {Kind::Value, kNetLamp, "Flashlight"},
+                                 {Kind::Value, kNetAim, "Autoaim"},
+                                 {Kind::Value, kNetSkill, "Difficulty"},
+                                 {Kind::Value, kNetGuests, "Without the game"}};
+        /// PLAYERS (the host's second chapter, a client's lobby): the team
+        /// asked for, in teamplay; then a row for each place the match has.
+        const Row *seatRows(int &count)
         {
-            if (!profile)
-                return settingsRows(chapter, count);
-            count = static_cast<int>(sizeof(kProfileRows) / sizeof(kProfileRows[0]));
-            return kProfileRows;
+            static Row rows[kNetPlayers + 1];
+            count = 0;
+            if (netGame.match().rules.teams())
+                rows[count++] = Row{Kind::Value, kNetTeam, "Your team"};
+            const int most = netGame.match().rules.most;
+            for (int n = 0; n < most && n < kNetPlayers; ++n)
+                rows[count++] = Row{Kind::Value, kSeat, ""};
+            return rows;
+        }
+        /// A sheet's rows: OPTIONS' category `chapter`'s, PROFILE's, HOST's
+        /// (MATCH, PLAYERS), the lobby's.
+        const Row *sheetRows(int page, int chapter, int &count)
+        {
+            if (page == kPageProfile)
+            {
+                count = static_cast<int>(sizeof(kProfileRows) / sizeof(kProfileRows[0]));
+                return kProfileRows;
+            }
+            if (page == kPageHost && chapter == 0)
+            {
+                count = static_cast<int>(sizeof(kHostRows) / sizeof(kHostRows[0]));
+                return kHostRows;
+            }
+            if (page == kPageHost || page == kPageLobby)
+                return seatRows(count);
+            return settingsRows(chapter, count);
+        }
+
+        // --- HOST and the lobby: the match's settings (settings v14's), and
+        // who is there.
+
+        /// Which of the card's multiplayer maps is hosted: the settings', if
+        /// the card has it; else the first (-1: none).
+        int hostIndex()
+        {
+            const std::vector<NetMapInfo> &maps = netGame.mapInfo();
+            for (std::size_t i = 0; i < maps.size(); ++i)
+            {
+                if (maps[i].name == settings.hostMap)
+                    return static_cast<int>(i);
+            }
+            return maps.empty() ? -1 : 0;
+        }
+        void setHostMap(int index)
+        {
+            const std::vector<NetMapInfo> &maps = netGame.mapInfo();
+            if (index < 0 || index >= static_cast<int>(maps.size()))
+                return;
+            const std::string &name = maps[static_cast<std::size_t>(index)].name;
+            std::memset(settings.hostMap, 0, sizeof(settings.hostMap));
+            std::memcpy(settings.hostMap, name.data(),
+                        name.size() < sizeof(settings.hostMap) ? name.size() : sizeof(settings.hostMap) - 1);
+        }
+        /// How many are in the game (the host among them).
+        int playersHere()
+        {
+            int here = 0;
+            for (int p = 0; p < kNetPlayers; ++p)
+                here += netHere(netGame.match(), p) ? 1 : 0;
+            return here;
+        }
+        /// The player in place `n` of PLAYERS: those there, in turn; then
+        /// -1, an open place.
+        int seatPlayer(int n)
+        {
+            for (int p = 0; p < kNetPlayers; ++p)
+            {
+                if (netHere(netGame.match(), p) && n-- == 0)
+                    return p;
+            }
+            return -1;
+        }
+        /// The players' swatches back to the touch screen's own colours
+        /// (Menu::drawSeat).
+        void untintSeats();
+        /// Why a row of HOST or of the lobby can do nothing now (null: it
+        /// can).
+        const char *hostDead(Id id)
+        {
+            switch (id)
+            {
+            case kNetFriendly:
+                return settings.hostMode == kModeTeamplay ? nullptr : "Only in teamplay: there are no teams.";
+            case kNetGuests:
+                return netAnyGuestMap(netGame.mapInfo()) ? nullptr
+                                                         : "No map on this card fits a console without the game.";
+            case kNetMap:
+                return netGame.mapInfo().empty() ? "No multiplayer map on the card." : nullptr;
+            default:
+                return nullptr;
+            }
+        }
+        /// Signal bars: four of them, rising, lit up to `bars` (-1: not known,
+        /// none drawn).
+        void drawBars(Canvas &canvas, int x, int y, int bars)
+        {
+            if (bars < 0)
+                return;
+            for (int b = 0; b < 4; ++b)
+            {
+                const int high = 3 + b * 2;
+                canvas.fill(x + b * 3, y + 9 - high, 2, high, b < bars ? kUiOrange + 2 : kUiGrey + 1);
+            }
+        }
+        /// A player's colours, as their swatch shows them: a hue each, strong
+        /// and bright (a hue is laid over a colour keeping how strong it is:
+        /// a grey's would stay grey).
+        std::uint16_t hueColour(int hue)
+        {
+            std::uint8_t c[1][3] = {{230, 60, 50}};
+            hueReplace(c, hue, 0, 0);
+            return static_cast<std::uint16_t>((c[0][0] >> 3) | (c[0][1] >> 3) << 5 | (c[0][2] >> 3) << 10);
         }
 
         /// What a setting is now, as its row says it.
@@ -734,6 +901,44 @@ namespace hlrt
         {
             switch (id)
             {
+            case kNetMode: std::snprintf(out, size, "%s", settings.hostMode == kModeTeamplay ? "teamplay" : "deathmatch"); break;
+            case kNetMap:
+            {
+                const int at = hostIndex();
+                std::snprintf(out, size, "%s", at < 0 ? "none" : netGame.mapInfo()[static_cast<std::size_t>(at)].name.c_str());
+                break;
+            }
+            case kNetFrags:
+                if (settings.fragLimit == 0)
+                    std::snprintf(out, size, "none");
+                else
+                    std::snprintf(out, size, "%d", settings.fragLimit);
+                break;
+            case kNetMinutes:
+                if (settings.minuteLimit == 0)
+                    std::snprintf(out, size, "none");
+                else
+                    std::snprintf(out, size, "%d minutes", settings.minuteLimit);
+                break;
+            case kNetMost: std::snprintf(out, size, "up to %d", settings.maxPlayers); break;
+            case kNetStay: std::snprintf(out, size, "%s", settings.weaponsStay ? "on" : "off"); break;
+            case kNetFall: std::snprintf(out, size, "%s", settings.fallDamage != 0 ? "realistic" : "normal"); break;
+            case kNetFriendly: std::snprintf(out, size, "%s", settings.friendlyFire ? "on" : "off"); break;
+            case kNetLamp: std::snprintf(out, size, "%s", settings.flashlight ? "allowed" : "not allowed"); break;
+            case kNetAim: std::snprintf(out, size, "%s", settings.hostAutoaim ? "on" : "off"); break;
+            case kNetGuests: std::snprintf(out, size, "%s", settings.allowGuests ? "let in" : "not let in"); break;
+            case kNetTeam:
+            {
+                const NetMatch &match = netGame.match();
+                const int team = match.profiles[match.me].team, asked = match.myProfile.asked;
+                if (team == 0)
+                    std::snprintf(out, size, "...");
+                else if (asked != 0 && asked != team)
+                    std::snprintf(out, size, "%d (%d is full)", team, asked);
+                else
+                    std::snprintf(out, size, "%d", team);
+                break;
+            }
             case kProfName: std::snprintf(out, size, "%s", settings.playerName()); break;
             case kProfModel: std::snprintf(out, size, "HEV suit"); break;
             case kProfSpray:
@@ -837,6 +1042,21 @@ namespace hlrt
             case kPopups: return "An achievement earned is shown on the top screen as it is. Off, it is still earned.";
             case kKey: return "Touch an action, then press its button. START: leave it as it was.";
             case kProfName: return "The name the others see in a match. Touch it again to type another.";
+            case kNetMode:
+                return "Deathmatch: every one for themselves. Teamplay: two teams, the frags of each added up. Co-op: coming later.";
+            case kNetMap: return "Where the match is played. The top screen shows it.";
+            case kNetFrags: return "The match ends when a player (in teamplay, a team) has this many frags.";
+            case kNetMinutes: return "The match ends after this long.";
+            case kNetMost: return "How many may play, this console among them: the rest are told the game is full.";
+            case kNetStay: return "A weapon taken stays where it lay for the others; whoever has it cannot take it again.";
+            case kNetFall: return "Normal: any hard fall costs 10. Realistic: the harder the fall, the more it costs.";
+            case kNetFriendly: return "In teamplay: whether teammates' shots hurt each other.";
+            case kNetLamp: return "Whether the suit's flashlight may be lit in the match.";
+            case kNetAim: return "Whether the guns' aim bends towards a player near it.";
+            case kNetSkill: return "How hard the map's chargers and anything of its own are, on every console.";
+            case kNetGuests:
+                return "Consoles without Half-Life can join, sent the game: only the maps that fit them are offered.";
+            case kNetTeam: return "The team you would be on. The host puts you there if it keeps the teams even.";
             case kProfModel: return "The player in the others' eyes. More models: coming later.";
             case kProfTop: return "The colour of the top of the suit, as the others see it.";
             case kProfBottom: return "The colour of the rest of the suit.";
@@ -924,6 +1144,71 @@ namespace hlrt
                                                            logos.count());
                 return true;
             case kProfSprayColour: cycle(settings.sprayColour, kSprayColours); return true;
+            case kNetMode:
+                // (Deathmatch and teamplay: co-op is not played yet.)
+                settings.hostMode = settings.hostMode == kModeTeamplay ? kModeDeathmatch : kModeTeamplay;
+                netGame.hostChanged();
+                return true;
+            case kNetMap:
+            {
+                const int next = netMapStep(netGame.mapInfo(), hostIndex(), step, settings.allowGuests);
+                if (next < 0)
+                    return false;
+                setHostMap(next);
+                netGame.hostChanged();
+                return true;
+            }
+            case kNetFrags:
+            case kNetMinutes:
+            {
+                static const std::uint8_t kFrags[] = {0, 5, 10, 20, 30, 50};
+                static const std::uint8_t kMinutes[] = {0, 5, 10, 15, 20, 30};
+                const std::uint8_t *limits = id == kNetFrags ? kFrags : kMinutes;
+                std::uint8_t &value = id == kNetFrags ? settings.fragLimit : settings.minuteLimit;
+                int at = 0;
+                for (int i = 0; i < 6; ++i)
+                    at = limits[i] == value ? i : at;
+                value = limits[(at + 6 + step) % 6];
+                netGame.hostChanged();
+                return true;
+            }
+            case kNetMost:
+            {
+                // (Not fewer than are in already.)
+                const int here = playersHere();
+                int most = settings.maxPlayers + step;
+                most = most > kPlayersMost ? kPlayersLeast : (most < kPlayersLeast ? kPlayersMost : most);
+                if (most < here)
+                    most = step > 0 ? here : kPlayersMost;
+                settings.maxPlayers = static_cast<std::uint8_t>(most);
+                netGame.hostChanged();
+                return true;
+            }
+            case kNetStay: settings.weaponsStay = !settings.weaponsStay; netGame.hostChanged(); return true;
+            case kNetFall: settings.fallDamage = settings.fallDamage != 0 ? 0 : 1; netGame.hostChanged(); return true;
+            case kNetFriendly:
+                if (hostDead(id) != nullptr)
+                    return false;
+                settings.friendlyFire = !settings.friendlyFire;
+                netGame.hostChanged();
+                return true;
+            case kNetLamp: settings.flashlight = !settings.flashlight; netGame.hostChanged(); return true;
+            case kNetAim: settings.hostAutoaim = !settings.hostAutoaim; netGame.hostChanged(); return true;
+            case kNetGuests:
+                if (hostDead(id) != nullptr)
+                    return false;
+                settings.allowGuests = !settings.allowGuests;
+                // (Let in: a map that does not fit them gives way to one that does.)
+                if (settings.allowGuests)
+                    setHostMap(netMapKept(netGame.mapInfo(), hostIndex(), true));
+                netGame.hostChanged();
+                return true;
+            case kNetTeam:
+            {
+                const int asked = netGame.match().myProfile.asked;
+                netGame.askTeam((asked + 3 + step) % 3);
+                return true;
+            }
             case kProfTop:
             case kProfBottom:
             {
@@ -1017,12 +1302,18 @@ namespace hlrt
     {
         static int none = 0;
         none = 0;
-        return page_ == Page::Achievements ? achChapter_ : (page_ == Page::Settings ? settingsChapter_ : none);
+        return page_ == Page::Achievements ? achChapter_
+               : page_ == Page::Settings   ? settingsChapter_
+               : page_ == Page::NetHost    ? hostChapter_
+                                           : none;
     }
 
     int Menu::sheetChapters() const
     {
-        return page_ == Page::Achievements ? hldata::kAchChapterCount : (page_ == Page::Settings ? kSettingsChapters : 1);
+        return page_ == Page::Achievements ? hldata::kAchChapterCount
+               : page_ == Page::Settings   ? kSettingsChapters
+               : page_ == Page::NetHost    ? 2
+                                           : 1;
     }
 
     int Menu::sheetCount(int chapter) const
@@ -1032,7 +1323,7 @@ namespace hlrt
         if (optionSheet())
         {
             int count = 0;
-            sheetRows(page_ == Page::Profile, chapter, count);
+            sheetRows(static_cast<int>(page_), chapter, count);
             return count;
         }
         return static_cast<int>(savesListed_.size()) + (saving_ ? 1 : 0);
@@ -1062,6 +1353,8 @@ namespace hlrt
         const char *name = page_ == Page::Achievements ? hldata::kAchChapterNames[chapter]
                            : page_ == Page::Settings   ? kSettingsChapterNames[chapter]
                            : page_ == Page::Profile    ? "PROFILE"
+                           : page_ == Page::NetHost    ? (chapter == 0 ? "MATCH" : "PLAYERS")
+                           : page_ == Page::NetLobby   ? "LOBBY"
                            : saving_                   ? "SAVE GAME"
                                                        : "LOAD GAME";
         const int left = arrows ? kSheetLeftBox.x + kSheetLeftBox.w + 4 : 4;
@@ -1075,6 +1368,9 @@ namespace hlrt
     /// while it is slid aside, the next or the last chapter's coming in.
     void Menu::drawSheetList()
     {
+        // (The players' colours are drawn again where they are now.)
+        if (page_ == Page::NetHost || page_ == Page::NetLobby)
+            untintSeats();
         const SheetGeometry g = sheetGeometry();
         Canvas band = sheetBand(g);
         band.fill(0, 0, 256, g.listHeight, kUiBack);
@@ -1102,7 +1398,7 @@ namespace hlrt
         const FontView &small = touchCanvas.font(kFontSmall);
         const bool current = chapter == sheetChapter() && x == sheetSlide_;
         int settingCount = 0;
-        const Row *rows = optionSheet() ? sheetRows(page_ == Page::Profile, chapter, settingCount) : nullptr;
+        const Row *rows = optionSheet() ? sheetRows(static_cast<int>(page_), chapter, settingCount) : nullptr;
         for (int n = 0; n < sheetCount(chapter); ++n)
         {
             const int y = n * g.row - scroll;
@@ -1130,9 +1426,14 @@ namespace hlrt
             else if (optionSheet())
             {
                 const Row &item = rows[n];
+                if (item.id == kSeat)
+                {
+                    drawSeat(band, x, y, textY, n - (rows[0].id == kNetTeam ? 1 : 0), x == 0 && current);
+                    continue;
+                }
                 const bool dead = (item.id == kFirmPress && !Input::pressureSeen()) ||
                                   (item.id == kQuality && !isDSiMode()) || item.id == kProfModel ||
-                                  (item.id == kProfSpray && logos.count() == 0);
+                                  (item.id == kProfSpray && logos.count() == 0) || hostDead(item.id) != nullptr;
                 drawText(band, small, x + 8, textY, item.label, inkFor(small, dead ? kUiGrey : kUiWhite));
                 if (item.kind == Kind::Slider)
                 {
@@ -1150,8 +1451,11 @@ namespace hlrt
                 else
                 {
                     char value[40];
+                    static const char *const kSkillNames[] = {"easy", "medium", "difficult"};
                     if (item.id == kKey && capturing_ == n)
                         std::snprintf(value, sizeof(value), "press a button");
+                    else if (item.id == kNetSkill)
+                        std::snprintf(value, sizeof(value), "%s", kSkillNames[(skill_ - 1) % 3]);
                     else
                         settingValue(item.id, n, value, sizeof(value));
                     const int room = kSheetListWidth - 16 - textWidth(small, item.label);
@@ -1188,6 +1492,60 @@ namespace hlrt
                 drawText(band, small, x + kSheetListWidth - 4 - whenWide, textY, when, inkFor(small, kUiGrey));
             }
         }
+    }
+
+    namespace
+    {
+        // Where the players' swatches are: cells of the touch screen in
+        // colours of their own, a palette bank a place (2.., after the
+        // spray's).
+        constexpr int kSwatchCellX = 1, kSwatchFirstBank = 2;
+        void untintSeats()
+        {
+            for (int bank = 0; bank < kNetPlayers; ++bank)
+                touchCanvas.tint(kSwatchCellX, kSheetListTop / 8, 2, 18, nullptr, kSwatchFirstBank + bank);
+        }
+    } // namespace
+
+    /// Place `seat` of PLAYERS, its row `y` down the list's band: a player's
+    /// colours, their name, their team and how their link is; or an open
+    /// place. `tinted`: the list stands still, and the swatch is drawn in
+    /// the player's own colours (cells of their own).
+    void Menu::drawSeat(Canvas &band, int x, int y, int textY, int seat, bool tinted)
+    {
+        const SheetGeometry g = sheetGeometry();
+        const FontView &small = touchCanvas.font(kFontSmall);
+        const NetMatch &match = netGame.match();
+        const int p = seatPlayer(seat);
+        if (p < 0)
+        {
+            drawText(band, small, x + 28, textY, "open", inkFor(small, kUiGrey));
+            return;
+        }
+        // The swatch: the first whole row of cells inside the row.
+        const int screenY = kSheetListTop + y;
+        const int cellY = (screenY + 2 + 7) / 8;
+        if (tinted && cellY * 8 + 8 <= screenY + g.row - 1 && cellY < 24)
+        {
+            const NetProfile &profile = match.profiles[p];
+            const int bandY = cellY * 8 - kSheetListTop;
+            band.fill(kSwatchCellX * 8, bandY, 8, 8, 1);
+            band.fill(kSwatchCellX * 8 + 8, bandY, 8, 8, 2);
+            const std::uint16_t three[3] = {hueColour(profile.known ? profile.top : 30),
+                                            hueColour(profile.known ? profile.bottom : 6), uiColour(kUiEdge)};
+            touchCanvas.tint(kSwatchCellX, cellY, 2, 1, three, kSwatchFirstBank + seat);
+        }
+        char name[40];
+        std::snprintf(name, sizeof(name), "%s%s%s", match.names[p][0] != 0 ? match.names[p] : "...",
+                      p == 0 ? " (host)" : "", p == match.me ? " (you)" : "");
+        drawFitted(band, small, x + 28, textY, name, inkFor(small, p == match.me ? kUiWhite : kUiOrange), 150);
+        if (match.rules.teams() && match.profiles[p].team != 0)
+        {
+            char team[4];
+            std::snprintf(team, sizeof(team), "T%d", match.profiles[p].team);
+            drawText(band, small, x + 192, textY, team, inkFor(small, kUiWhite));
+        }
+        drawBars(band, x + kSheetListWidth - 20, y + (g.row - 10) / 2, p == match.me ? -1 : netGame.bars(p));
     }
 
     /// The box under the list: the row touched, read out in full; or, with
@@ -1239,6 +1597,59 @@ namespace hlrt
                         inkFor(small, kUiGrey), kWidth);
             return;
         }
+        if (page_ == Page::NetHost || page_ == Page::NetLobby)
+        {
+            const NetMatch &match = netGame.match();
+            char said[160];
+            if (!chosen)
+            {
+                if (page_ == Page::NetHost)
+                    std::snprintf(said, sizeof(said), "%s",
+                                  chapter == 0 ? "Touch a setting to change it. START when everyone is in; slide the "
+                                                 "list, or touch < >, for who is here."
+                                               : "Who is in the game, their colours, their team, how good their "
+                                                 "link is. START when everyone is in.");
+                else
+                {
+                    // What the host has set up, as its rules say.
+                    const NetRules &rules = match.rules;
+                    std::snprintf(said, sizeof(said), "%s on %s, up to %d. Weapons %s, falls %s%s, flashlight %s. "
+                                                      "Waiting for the host to start.",
+                                  rules.teams() ? "Teamplay" : "Deathmatch",
+                                  netGame.lobbyMap()[0] != 0 ? netGame.lobbyMap() : "the host's map", rules.most,
+                                  rules.has(kRuleWeaponsStay) ? "stay" : "go when taken",
+                                  rules.has(kRuleRealisticFall) ? "realistic" : "normal",
+                                  rules.teams() ? (rules.has(kRuleFriendlyFire) ? ", friendly fire" : ", no friendly fire")
+                                                : "",
+                                  rules.has(kRuleFlashlight) ? "allowed" : "not allowed");
+                }
+                drawWrapped(canvas, small, x, y, g.line, 0, kLast, said, inkFor(small, kUiGrey), kWidth);
+                return;
+            }
+            int count = 0;
+            const Row &item = sheetRows(static_cast<int>(page_), chapter, count)[sheetSelected_];
+            if (item.id == kSeat)
+            {
+                const int p = seatPlayer(sheetSelected_ - (sheetRows(static_cast<int>(page_), chapter, count)[0].id == kNetTeam ? 1 : 0));
+                if (p < 0)
+                {
+                    drawWrapped(canvas, small, x, y, g.line, 0, kLast, "An open place: a console looking for a game "
+                                "can join.", inkFor(small, kUiGrey), kWidth);
+                    return;
+                }
+                static const char *const kLinks[] = {"lost", "weak", "fair", "good", "strong"};
+                const int bars = netGame.bars(p);
+                std::snprintf(said, sizeof(said), "%s: %d frags, %d deaths.%s%s", match.names[p][0] ? match.names[p] : "...",
+                              match.frags[p], match.deaths[p], bars >= 0 && p != match.me ? " Link: " : "",
+                              bars >= 0 && p != match.me ? kLinks[bars > 4 ? 4 : bars] : "");
+                drawWrapped(canvas, small, x, y, g.line, 0, kLast, said, inkFor(small, kUiWhite), kWidth);
+                return;
+            }
+            const char *why = hostDead(item.id);
+            drawWrapped(canvas, small, x, y, g.line, 0, kLast, why != nullptr ? why : settingHelp(item.id),
+                        inkFor(small, why != nullptr ? kUiGrey : kUiWhite), kWidth);
+            return;
+        }
         if (page_ == Page::Profile)
         {
             if (!chosen)
@@ -1250,7 +1661,7 @@ namespace hlrt
                 return;
             }
             int count = 0;
-            const Row &item = sheetRows(true, 0, count)[sheetSelected_];
+            const Row &item = sheetRows(kPageProfile, 0, count)[sheetSelected_];
             const bool spray = (item.id == kProfSpray || item.id == kProfSprayColour) && logos.count() > 0;
             drawWrapped(canvas, small, x, y, g.line, 0, kLast, settingHelp(item.id), inkFor(small, kUiWhite),
                         spray ? kSprayCellX * 8 - x - 6 : kWidth);
@@ -1375,6 +1786,17 @@ namespace hlrt
             drawSheetButton(sheetBarBox(1, 2), "BACK", sheetPressed_ == kSheetBar - 1);
             return;
         }
+        if (page_ == Page::NetHost)
+        {
+            drawSheetButton(sheetBarBox(0, 2), "START", sheetPressed_ == kSheetBar, hostIndex() < 0);
+            drawSheetButton(sheetBarBox(1, 2), "BACK", sheetPressed_ == kSheetBar - 1);
+            return;
+        }
+        if (page_ == Page::NetLobby)
+        {
+            drawSheetButton(sheetBarBox(0, 1), "LEAVE", sheetPressed_ == kSheetBar);
+            return;
+        }
         if (optionSheet())
         {
             drawSheetButton(sheetBarBox(0, 2), "RESET", sheetPressed_ == kSheetBar);
@@ -1404,7 +1826,7 @@ namespace hlrt
             if (kSheetRightBox.has(x, y))
                 return kSheetRight;
         }
-        const int buttons = page_ == Page::Saves ? 3 : 2;
+        const int buttons = sheetButtons();
         for (int b = 0; b < buttons; ++b)
         {
             if (sheetBarBox(b, buttons).has(x, y))
@@ -1454,7 +1876,7 @@ namespace hlrt
         if (!optionSheet() || row < 0)
             return false;
         int count = 0;
-        const Row *rows = sheetRows(page_ == Page::Profile, settingsChapter_, count);
+        const Row *rows = sheetRows(static_cast<int>(page_), sheetChapter(), count);
         if (row >= count)
             return false;
         // (The name: typed, by sheetAct, not stepped.)
@@ -1469,8 +1891,21 @@ namespace hlrt
             drawSheetDetail();
             return true;
         }
+        // (HOST's difficulty: the menu's own, as NEW GAME's is.)
+        if (rows[row].id == kNetSkill)
+        {
+            skill_ = (skill_ - 1 + 3 + step) % 3 + 1;
+            sound.ui(kUiSoundPress);
+            drawSheetList();
+            drawSheetDetail();
+            return true;
+        }
         if (!settingStep(rows[row].id, step))
             return false;
+        // (The match hosted is kept as it changes: a console switched off in
+        // the lobby has it next time.)
+        if (page_ == Page::NetHost)
+            settings.save();
         sound.ui(rows[row].kind == Kind::Slider ? kUiSoundTick : kUiSoundPress);
         drawSheetList();
         drawSheetDetail();
@@ -1482,7 +1917,7 @@ namespace hlrt
     bool Menu::sheetSlider(int row, int x)
     {
         int count = 0;
-        const Row *rows = sheetRows(page_ == Page::Profile, settingsChapter_, count);
+        const Row *rows = sheetRows(static_cast<int>(page_), sheetChapter(), count);
         if (row < 0 || row >= count || rows[row].kind != Kind::Slider)
             return false;
         const Id id = rows[row].id;
@@ -1505,7 +1940,7 @@ namespace hlrt
     int Menu::sheetSliderLevel(int row)
     {
         int count = 0;
-        const Row *rows = sheetRows(page_ == Page::Profile, settingsChapter_, count);
+        const Row *rows = sheetRows(static_cast<int>(page_), sheetChapter(), count);
         if (row < 0 || row >= count || rows[row].kind != Kind::Slider)
             return -1;
         return slid(rows[row].id);
@@ -1544,6 +1979,8 @@ namespace hlrt
             return Action::SaveTo;
         case kAskLoad:
             return Action::Load;
+        case kAskLeave:
+            return sheetLeave();
         case kAskDelete:
             SaveGame::remove(slot_);
             listSaves();
@@ -1580,7 +2017,7 @@ namespace hlrt
         if (optionSheet())
         {
             int count = 0;
-            const Row *rows = sheetRows(page_ == Page::Profile, settingsChapter_, count);
+            const Row *rows = sheetRows(static_cast<int>(page_), sheetChapter(), count);
             if (row >= 0 && row < count && rows[row].id == kProfName)
                 typeName();
             else
@@ -1630,6 +2067,21 @@ namespace hlrt
             }
             return sheetLeave();
         }
+        if (page_ == Page::NetHost && button == 0)
+        {
+            // START: the match, on every console. (Whoever runs the screens
+            // loads the map when the match says it has begun: main.cpp. A
+            // host alone may look round a map, too -- though nobody can come
+            // once it has begun.)
+            const int at = hostIndex();
+            if (at < 0)
+                return Action::None;
+            settings.save();
+            netGame.start(netGame.maps()[static_cast<std::size_t>(at)], settings.fragLimit, settings.minuteLimit, skill_);
+            return Action::None;
+        }
+        if (page_ == Page::NetHost || page_ == Page::NetLobby)
+            return sheetBack();
         if (optionSheet())
         {
             if (button == 0)
@@ -1671,8 +2123,16 @@ namespace hlrt
             dropLogos();
             touchCanvas.tint(kSprayCellX, kSprayCellY, 4, 4, nullptr);
         }
-        page_ = page_ == Page::Saves      ? asker_
-                : page_ == Page::Profile ? Page::Multiplayer
+        // (Out of the game: the others are told, the radio is silent.)
+        const bool lobby = page_ == Page::NetHost || page_ == Page::NetLobby;
+        if (lobby)
+        {
+            netGame.leave();
+            untintSeats();
+            mapCard.hide();
+        }
+        page_ = page_ == Page::Saves                  ? asker_
+                : page_ == Page::Profile || lobby ? Page::Multiplayer
                 : title_                 ? Page::Title
                 : netGame.playing()      ? Page::NetPause
                                          : Page::Main;
@@ -1681,6 +2141,18 @@ namespace hlrt
         touching_ = (keysHeld() & KEY_TOUCH) != 0;
         draw();
         return Action::None;
+    }
+
+    Menu::Action Menu::sheetBack()
+    {
+        // (The host, with others in its game: they are let go too, so asked.)
+        if (page_ == Page::NetHost && playersHere() > 1 && sheetAsking_ == 0)
+        {
+            sound.ui(kUiSoundPress);
+            sheetAsk(kAskLeave, "LEAVE THE GAME?");
+            return Action::None;
+        }
+        return sheetLeave();
     }
 
     Menu::Action Menu::sheetFrame()
@@ -1762,7 +2234,7 @@ namespace hlrt
             }
             else if (pressed & KEY_B)
             {
-                return sheetLeave();
+                return sheetBack();
             }
         }
 
@@ -1815,7 +2287,7 @@ namespace hlrt
             {
                 // A slider touched on its track: it follows the stylus.
                 int count = 0;
-                const Row *rows = optionSheet() ? sheetRows(page_ == Page::Profile, settingsChapter_, count) : nullptr;
+                const Row *rows = optionSheet() ? sheetRows(static_cast<int>(page_), sheetChapter(), count) : nullptr;
                 if (rows != nullptr && sheetPressed_ < count && rows[sheetPressed_].kind == Kind::Slider &&
                     sheetX_ >= 2 + kSheetTrackLeft - 6)
                 {
@@ -1930,10 +2402,10 @@ namespace hlrt
             else if (same && was <= kSheetBar)
             {
                 sound.ui(kUiSoundPress);
-                if (kSheetBar - was == (page_ == Page::Saves ? 2 : 1))
+                if (kSheetBar - was == sheetButtons() - 1)
                 {
                     sheetTouching_ = false;
-                    return sheetLeave();
+                    return sheetBack();
                 }
                 action = sheetBarPress(kSheetBar - was);
                 drawSheetBar();
@@ -1955,7 +2427,7 @@ namespace hlrt
                     // (A name is typed only when touched again: once, it is
                     // read out.)
                     int shown = 0;
-                    const Row *rows = sheetRows(page_ == Page::Profile, settingsChapter_, shown);
+                    const Row *rows = sheetRows(static_cast<int>(page_), sheetChapter(), shown);
                     if (rows[was].id != kProfName)
                         sheetAdjust(was, 1);
                     else if (again)
@@ -1992,6 +2464,39 @@ namespace hlrt
         const bool main = big();
         int count = 0;
         const Row &item = rowsOf(static_cast<int>(page_), count)[row];
+        if (page_ == Page::Multiplayer)
+        {
+            // A tile: its picture, its word under it.
+            const TileBox box = multiTile(row);
+            const FontView &font = touchCanvas.font(kFontMedium);
+            const bool dead = whyDead(item.id) != nullptr;
+            canvas.button(box.x, box.y, box.w, box.h, down && !dead);
+            if (row < 4)
+                drawTileIcon(canvas, box.x + (box.w - 24) / 2, box.y + 4, row, !dead);
+            drawTextCentred(canvas, font, box.x + box.w / 2,
+                            row < 4 ? box.y + box.h - font.height() - 4 : box.y + (box.h - font.height()) / 2,
+                            item.label, inkFor(font, dead ? kUiGrey : (down ? kUiWhite : kUiOrange)));
+            return;
+        }
+        if (page_ == Page::NetJoin && item.id == kNetFound && row < foundCount)
+        {
+            // A room's card: the host, its match, how many, its signal.
+            const NetGame::Found &found = foundList[row];
+            const FontView &small = touchCanvas.font(kFontSmall);
+            const int y = kOptionLayout.top + row * kOptionLayout.pitch;
+            const bool dead = foundDead(row) != nullptr;
+            canvas.button(kOptionLayout.x, y, kOptionLayout.width, kOptionLayout.height, down && !dead);
+            char text[64];
+            std::snprintf(text, sizeof(text), "%s  %s  %s  %d/%d", found.name,
+                          found.room.version == 0 ? "" : (found.room.mode == kNetModeTeamplay ? "teamplay" : "deathmatch"),
+                          found.map != nullptr ? found.map : (found.room.mapHash != 0 ? "(not on this card)" : ""),
+                          found.players, found.room.version != 0 ? found.room.most : found.most);
+            const int textY = y + (kOptionLayout.height - small.height()) / 2;
+            drawFitted(canvas, small, kOptionLayout.x + 6, textY, text,
+                       inkFor(small, dead ? kUiGrey : (down ? kUiWhite : kUiOrange)), kOptionLayout.width - 30);
+            drawBars(canvas, kOptionLayout.x + kOptionLayout.width - 18, y + (kOptionLayout.height - 10) / 2, found.bars);
+            return;
+        }
         const Layout &at = main ? ((page_ == Page::Main || page_ == Page::Title) ? kPauseLayout : kMainLayout) : kOptionLayout;
         const int y = at.top + row * at.pitch;
         const FontView &font = touchCanvas.font(main ? kFontMedium : kFontSmall);
@@ -2003,23 +2508,6 @@ namespace hlrt
         char text[48];
         switch (item.id)
         {
-        case kNetMap:
-            std::snprintf(text, sizeof(text), "%s: %s", item.label,
-                          netGame.maps().empty() ? "none" : netGame.maps()[hostMap()].c_str());
-            break;
-        case kNetFrags:
-            if (settings.fragLimit == 0)
-                std::snprintf(text, sizeof(text), "%s: none", item.label);
-            else
-                std::snprintf(text, sizeof(text), "%s: %d", item.label, settings.fragLimit);
-            break;
-        case kNetMinutes:
-            if (settings.minuteLimit == 0)
-                std::snprintf(text, sizeof(text), "%s: none", item.label);
-            else
-                std::snprintf(text, sizeof(text), "%s: %d minutes", item.label, settings.minuteLimit);
-            break;
-        case kNetSkill:
         case kNewSkill:
         {
             static const char *const kNames[] = {"easy", "medium", "difficult"};
@@ -2037,6 +2525,16 @@ namespace hlrt
 
     int Menu::rowAt(int x, int y) const
     {
+        if (page_ == Page::Multiplayer)
+        {
+            for (int row = 0; row < rowCount(); ++row)
+            {
+                const TileBox box = multiTile(row);
+                if (x >= box.x && x < box.x + box.w && y >= box.y && y < box.y + box.h)
+                    return row;
+            }
+            return -1;
+        }
         const Layout &at = big() ? ((page_ == Page::Main || page_ == Page::Title) ? kPauseLayout : kMainLayout) : kOptionLayout;
         if (x < at.x || x >= at.x + at.width || y < at.top)
             return -1;
@@ -2071,16 +2569,17 @@ namespace hlrt
         }
     }
 
-    std::size_t Menu::hostMap() const
+    const char *Menu::foundDead(int row) const
     {
-        // The one hosted last, if the card still has it; else the first.
-        const std::vector<std::string> &maps = netGame.maps();
-        for (std::size_t i = 0; i < maps.size(); ++i)
-        {
-            if (maps[i] == settings.hostMap)
-                return i;
-        }
-        return 0;
+        if (row < 0 || row >= foundCount)
+            return nullptr;
+        const NetGame::Found &found = foundList[row];
+        if (found.room.version != 0 && found.room.version != kNetVersion)
+            return "Another version of the game: it cannot be joined from this one";
+        const int most = found.room.version != 0 ? found.room.most : found.most;
+        if (found.players >= most)
+            return "Full";
+        return nullptr;
     }
 
     void Menu::showReason(const char *why)
@@ -2207,8 +2706,8 @@ namespace hlrt
         case kNetHost:
             if (netGame.host())
             {
-                page_ = Page::NetHost;
-                draw();
+                hostChapter_ = 0;
+                openSheet(Page::NetHost);
             }
             else
             {
@@ -2226,53 +2725,14 @@ namespace hlrt
             openSheet(Page::Profile);
             break;
         case kNetFound:
+            if (const char *why = foundDead(row))
+            {
+                sound.ui(kUiSoundDeny);
+                showReason(why);
+                break;
+            }
             if (row < foundCount && netGame.join(foundList[row].index))
                 draw();
-            break;
-        case kNetMap:
-            // (Kept by its name: the card's maps may be others next time.)
-            if (!netGame.maps().empty())
-            {
-                const std::string &next = netGame.maps()[(hostMap() + 1) % netGame.maps().size()];
-                std::memset(settings.hostMap, 0, sizeof(settings.hostMap));
-                std::memcpy(settings.hostMap, next.data(),
-                            next.size() < sizeof(settings.hostMap) ? next.size() : sizeof(settings.hostMap) - 1);
-                netGame.hostChanged(); // (what the beacon says of the match)
-            }
-            drawRow(row, false);
-            break;
-        case kNetFrags:
-        {
-            static const int kLimits[] = {0, 5, 10, 20, 30, 50};
-            int at = 0;
-            for (int i = 0; i < 6; ++i)
-                at = kLimits[i] == settings.fragLimit ? i : at;
-            settings.fragLimit = static_cast<std::uint8_t>(kLimits[(at + 1) % 6]);
-            drawRow(row, false);
-            break;
-        }
-        case kNetMinutes:
-        {
-            static const int kLimits[] = {0, 5, 10, 15, 20, 30};
-            int at = 0;
-            for (int i = 0; i < 6; ++i)
-                at = kLimits[i] == settings.minuteLimit ? i : at;
-            settings.minuteLimit = static_cast<std::uint8_t>(kLimits[(at + 1) % 6]);
-            drawRow(row, false);
-            break;
-        }
-        case kNetSkill:
-            skill_ = skill_ % hldata::kSkillHard + 1;
-            drawRow(row, false);
-            break;
-        case kNetStart:
-            // (Whoever runs the screens loads the map when the match says
-            // it has been started: main.cpp.)
-            // (Alone, too: a host may look round a map before anyone comes --
-            // though nobody can then, a match under way lets no one in.)
-            if (!netGame.maps().empty())
-                settings.save();
-                netGame.start(netGame.maps()[hostMap()], settings.fragLimit, settings.minuteLimit, skill_);
             break;
         case kLeave:
             // (Out of a game alone, to the title: asked first, as NEW GAME
@@ -2292,6 +2752,54 @@ namespace hlrt
 
     Menu::Action Menu::frame()
     {
+        // The map's card on the top screen: HOST's map, the host's in the
+        // lobby, the touched room's while looking.
+        {
+            const std::vector<NetMapInfo> &maps = netGame.mapInfo();
+            const NetMapInfo *card = nullptr;
+            const char *elsewhere = nullptr;
+            if (page_ == Page::NetHost && hostIndex() >= 0)
+                card = &maps[static_cast<std::size_t>(hostIndex())];
+            else if (page_ == Page::NetLobby || page_ == Page::NetJoin)
+            {
+                const char *name = page_ == Page::NetLobby ? netGame.lobbyMap()
+                                   : foundCount > 0       ? (foundList[active_ >= 0 && active_ < foundCount ? active_ : 0].map
+                                                                 ? foundList[active_ >= 0 && active_ < foundCount ? active_ : 0].map
+                                                                 : "")
+                                                          : "";
+                for (const NetMapInfo &map : maps)
+                {
+                    if (name[0] != 0 && map.name == name)
+                        card = &map;
+                }
+                if (card == nullptr && page_ == Page::NetJoin && foundCount > 0)
+                    elsewhere = "?";
+            }
+            mapCard.show(card, elsewhere);
+        }
+        // HOST and the lobby change without being touched: who comes, how
+        // they stand. Out of the game (the host gone, the link lost): back.
+        if (page_ == Page::NetHost || page_ == Page::NetLobby)
+        {
+            if (netGame.phase() == NetGame::Phase::Off)
+            {
+                untintSeats();
+                mapCard.hide();
+                page_ = Page::Multiplayer;
+                draw();
+                return Action::None;
+            }
+            if (netSignature() != netShown_ && !sheetTouching_ && sheetSlide_ == 0 && sheetDrag_ == 0)
+            {
+                netShown_ = netSignature();
+                // (Fewer places than before: nothing past them read out.)
+                if (sheetSelected_ >= sheetCount(sheetChapter()))
+                    sheetSelected_ = -1;
+                drawSheetList();
+                drawSheetDetail();
+                drawSheetBar();
+            }
+        }
         if (sheet())
             return sheetFrame();
         // A game between consoles: the lobby changes without being touched.
@@ -2300,8 +2808,8 @@ namespace hlrt
             // Let in: the host's lobby. Not let in, or the host gone: out.
             if (netGame.phase() == NetGame::Phase::Lobby)
             {
-                page_ = Page::NetLobby;
-                draw();
+                openSheet(Page::NetLobby);
+                return Action::None;
             }
             else if (netGame.phase() == NetGame::Phase::Off)
             {
@@ -2314,14 +2822,9 @@ namespace hlrt
                 showFound();
             }
         }
-        else if (page_ == Page::NetHost || page_ == Page::NetLobby || page_ == Page::NetPause)
+        else if (page_ == Page::NetPause)
         {
-            if (page_ != Page::NetPause && netGame.phase() == NetGame::Phase::Off)
-            {
-                page_ = Page::Multiplayer;
-                draw();
-            }
-            else if (netSignature() != netShown_ && active_ < 0)
+            if (netSignature() != netShown_ && active_ < 0)
                 draw();
         }
         const bool down = (keysHeld() & KEY_TOUCH) != 0;

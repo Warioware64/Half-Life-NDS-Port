@@ -131,6 +131,8 @@ namespace hlds
                     record.classId = static_cast<std::uint16_t>(EntityClass::InfoPlayerStart);
                 else if (cls == "info_player_deathmatch")
                     record.classId = static_cast<std::uint16_t>(EntityClass::InfoPlayerDeathmatch);
+                else if (cls == "info_intermission")
+                    record.classId = static_cast<std::uint16_t>(EntityClass::InfoIntermission);
                 else
                     continue; // everything else arrives with the milestone that runs it
 
@@ -150,6 +152,27 @@ namespace hlds
                     // The older single-number form: a yaw.
                     const std::string yaw(entity.value("angle", "0"));
                     record.angles[1] = angleFromDegrees(std::atof(yaw.c_str()));
+                }
+                // An intermission looks at what it targets, if it does (the
+                // game's CInfoIntermission::Think: UTIL_VecToAngles to it),
+                // whatever its own angles say.
+                const std::string_view target = entity.value("target", "");
+                if (record.classId == static_cast<std::uint16_t>(EntityClass::InfoIntermission) && !target.empty())
+                {
+                    double from[3], to[3];
+                    for (const Entity &other : entities)
+                    {
+                        if (other.value("targetname", "") != target || !entity.vec3("origin", from) ||
+                            !other.vec3("origin", to))
+                            continue;
+                        const double d[3] = {to[0] - from[0], to[1] - from[1], to[2] - from[2]};
+                        const double across = std::sqrt(d[0] * d[0] + d[1] * d[1]);
+                        constexpr double kDegrees = 180.0 / 3.14159265358979;
+                        record.angles[0] = angleFromDegrees(-std::atan2(d[2], across) * kDegrees);
+                        record.angles[1] = angleFromDegrees(std::atan2(d[1], d[0]) * kDegrees);
+                        record.angles[2] = 0;
+                        break;
+                    }
                 }
                 level.entities.push_back(record);
             }

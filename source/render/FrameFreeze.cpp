@@ -4,6 +4,8 @@
 
 #include "render/ScreenFade.hpp"
 
+#include "HlPreview.hpp"
+
 
 namespace hlrt
 {
@@ -56,6 +58,27 @@ namespace hlrt
         REG_BG0CNT = (savedBg0_ & ~3) | BG_PRIORITY(1);
         REG_DISPCNT = ((savedControl_ & ~7ul) | 5ul | DISPLAY_BG2_ACTIVE) &
                       ~static_cast<unsigned long>(DISPLAY_BG0_ACTIVE | DISPLAY_SPR_ACTIVE);
+        return true;
+    }
+
+    bool FrameFreeze::capturePreview(std::uint16_t *out)
+    {
+#ifdef HLDS_CHILD
+        (void)out;
+        return false; // (bank D is the ARM7's)
+#endif
+        if (frozen_)
+            return false;
+        screenFade.layerLost();
+        vramSetBankD(VRAM_D_LCD);
+        swiWaitForVBlank();
+        REG_DISPCAPCNT = DCAP_BANK(DCAP_BANK_VRAM_D) | DCAP_SIZE(DCAP_SIZE_256x192) | DCAP_MODE(DCAP_MODE_A) |
+                         DCAP_SRC_A(DCAP_SRC_A_3DONLY) | DCAP_ENABLE;
+        for (int n = 0; n < 4 && (n < 2 || (REG_DISPCAPCNT & DCAP_ENABLE)); ++n)
+            swiWaitForVBlank();
+        if (REG_DISPCAPCNT & DCAP_ENABLE)
+            return false;
+        hldata::previewShrink(VRAM_D, out);
         return true;
     }
 

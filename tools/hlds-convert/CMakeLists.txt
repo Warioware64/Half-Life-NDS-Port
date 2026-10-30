@@ -129,6 +129,7 @@ if(HLDS_BUILD_TESTS)
             test_commands
             test_avi
             test_net
+            test_netmaps
             test_people
             test_boxes
             test_families

@@ -1,0 +1,121 @@
+// What the menus offer for a match (shared/HlNetMaps.hpp), a map's picture
+// for its card (HlPreview.hpp), and where that picture is taken from: the
+// map's info_intermission, kept by the converter, facing what it looks at.
+
+#include <cstdio>
+#include <cstdlib>
+#include <memory>
+#include <vector>
+
+#include "HlNetMaps.hpp"
+#include "HlPreview.hpp"
+#include "TestGame.hpp"
+
+using namespace hldata;
+using namespace hldstest;
+
+namespace
+{
+    void testMaps()
+    {
+        std::vector<NetMapInfo> maps = {{"boot_camp", 17, false}, {"bounce", 10, true}, {"crossfire", 20, true},
+                                        {"rustmill", 4, false}};
+        check(netMapOffered(maps[0], false) && !netMapOffered(maps[0], true) && netMapOffered(maps[1], true),
+              "every map is offered; with consoles without the game, only those that fit them");
+        check(netMapStep(maps, 1, 1, true) == 2 && netMapStep(maps, 2, 1, true) == 1 && netMapStep(maps, 1, -1, true) == 2,
+              "stepping through them with consoles without the game passes over the rest, round and round");
+        check(netMapStep(maps, 3, 1, false) == 0, "... and without, every one");
+        check(netMapKept(maps, 0, true) == 1 && netMapKept(maps, 2, true) == 2,
+              "a map that does not fit, once they are let in, gives way to the first that does");
+        check(netAnyGuestMap(maps), "a card with some that fit has some to offer");
+        std::vector<NetMapInfo> none = {{"boot_camp", 17, false}};
+        check(!netAnyGuestMap(none) && netMapKept(none, 0, true) == -1 && netMapStep(none, 0, 1, true) == -1,
+              "... and one with none has none: nothing to choose");
+        check(netMapPlayers(maps[0]) == kNetPlayers && netMapPlayers(maps[3]) == 4 &&
+                  netMapPlayers(NetMapInfo{"x", 1, false}) == 2,
+              "a map is for as many as it has places, no more than a match has, and two at the least");
+        check(netModeOffered(kNetModeDeathmatch, true) && netModeOffered(kNetModeTeamplay, false) && !netModeOffered(2, false),
+              "deathmatch and teamplay are played; co-op is not yet");
+    }
+
+    void testPreview()
+    {
+        // A screen of four colours, each 2x2 block one of two: the picture
+        // is their average.
+        std::vector<std::uint16_t> screen(256 * 192);
+        for (int y = 0; y < 192; ++y)
+            for (int x = 0; x < 256; ++x)
+                screen[y * 256 + x] = static_cast<std::uint16_t>(((x + y) & 1) ? 30 : (10 << 10) | (20 << 5)) | 0x8000;
+        std::vector<std::uint16_t> out(kPreviewWidth * kPreviewHeight);
+        previewShrink(screen.data(), out.data());
+        const std::uint16_t c = out[37 * kPreviewWidth + 50];
+        check((c & 31) == 15 && ((c >> 5) & 31) == 10 && ((c >> 10) & 31) == 5 && (c & 0x8000),
+              "a picture is the screen shrunk by half: each pixel the average of its four");
+        // A half-and-half screen keeps its halves.
+        for (int y = 0; y < 192; ++y)
+            for (int x = 0; x < 256; ++x)
+                screen[y * 256 + x] = static_cast<std::uint16_t>(x < 128 ? 31 : 31 << 10);
+        previewShrink(screen.data(), out.data());
+        check((out[10 * kPreviewWidth + 63] & 0x7FFF) == 31 && (out[10 * kPreviewWidth + 64] & 0x7FFF) == (31 << 10),
+              "... its left half the screen's left, its right the right");
+        std::vector<std::uint8_t> file(kPreviewBytes);
+        PreviewHeader header;
+        previewHeader(header);
+        std::memcpy(file.data(), &header, sizeof(header));
+        check(previewValid(file.data(), file.size()), "a picture's file reads back as one");
+        check(!previewValid(file.data(), file.size() - 2), "... and one short of it does not");
+        file[4] = 9;
+        check(!previewValid(file.data(), file.size()), "... nor one of another version");
+    }
+
+    void testIntermission(const char *dir)
+    {
+        auto g = std::make_unique<Game>();
+        std::string error;
+        if (!g->bsp.load(std::string(dir) + "/maps/stalkyard.bsp", error))
+        {
+            check(false, "stalkyard loads");
+            return;
+        }
+        finish(*g, nullptr, dir);
+        const LevelView &v = g->view;
+        int count = 0;
+        bool turned = false;
+        for (std::uint32_t e = 0; e < v.entityCount; ++e)
+        {
+            if (v.entities[e].classId != static_cast<std::uint16_t>(EntityClass::InfoIntermission))
+                continue;
+            ++count;
+            turned = turned || v.entities[e].angles[0] != 0 || v.entities[e].angles[1] != 0;
+        }
+        check(count == 4, "stalkyard's four places the game shows it from are kept");
+        check(turned, "... each facing the way it looks");
+        // A map with none: its places to come in at, as before.
+        auto c = std::make_unique<Game>();
+        if (c->bsp.load(std::string(dir) + "/maps/crossfire.bsp", error))
+        {
+            finish(*c, nullptr, dir);
+            int intermissions = 0, spawns = 0;
+            for (std::uint32_t e = 0; e < c->view.entityCount; ++e)
+            {
+                intermissions += c->view.entities[e].classId == static_cast<std::uint16_t>(EntityClass::InfoIntermission);
+                spawns += c->view.entities[e].classId == static_cast<std::uint16_t>(EntityClass::InfoPlayerDeathmatch);
+            }
+            check(intermissions == 0 && spawns > 0, "crossfire has none: its picture is from where a player comes in");
+        }
+    }
+} // namespace
+
+int main()
+{
+    testMaps();
+    testPreview();
+    const char *dir = std::getenv("HLDS_VALVE_DIR");
+    if (dir != nullptr && dir[0] != '\0')
+        testIntermission(dir);
+    else
+        std::printf("test_netmaps: HLDS_VALVE_DIR not set, the game's maps were not read\n");
+    if (g_failures == 0)
+        std::printf("test_netmaps: ok\n");
+    return g_failures == 0 ? 0 : 1;
+}

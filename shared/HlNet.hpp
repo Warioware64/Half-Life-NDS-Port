@@ -96,7 +96,8 @@ namespace hldata
         Fire,     ///< `from` set off the map's target v[0], used as v[1], by record v[2]
         Brushes,  ///< host: brush v[0] is at v[1..3] (quarter units), in state v[4], v[5] ms into it
         Bye,      ///< leaving: `from` (the host: everybody out; to a client in `a`: not let in)
-        Rules,    ///< host: v[0] the mode (kMode*), v[1] kRule* flags, v[2] how many may play
+        Rules,    ///< host: v[0] the mode (kMode*), v[1] kRule* flags, v[2] how many may play, v[3..4]
+                  ///< the map's name hash (0: none chosen)
         Profile,  ///< `from` looks like this: v[0] model, v[1] top | bottom << 8, v[2] team asked for
                   ///< (0: any), v[3] spray colour, v[4..5] its spray's netSprayHash
         SprayPiece, ///< `from`'s spray: piece `a` (kNetSprayPieces of them), twelve bytes in v

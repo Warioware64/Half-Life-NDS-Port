@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "HlNetGame.hpp"
+#include "HlNetMaps.hpp"
 
 namespace hlrt
 {
@@ -38,9 +39,17 @@ namespace hlrt
         const hldata::NetMatch &match() const { return match_; }
         hldata::NetMatch &match() { return match_; }
 
-        /// The maps a match can be played on (the card's, by the manifest).
-        void setMaps(std::vector<std::string> maps) { maps_ = std::move(maps); }
+        /// The maps a match can be played on (the card's, by the manifest),
+        /// with what is known of each.
+        void setMaps(std::vector<hldata::NetMapInfo> maps)
+        {
+            maps_.clear();
+            for (const hldata::NetMapInfo &map : maps)
+                maps_.push_back(map.name);
+            mapInfo_ = std::move(maps);
+        }
         const std::vector<std::string> &maps() const { return maps_; }
+        const std::vector<hldata::NetMapInfo> &mapInfo() const { return mapInfo_; }
 
         // ------------------------------------------------------------ lobby
         bool host();  ///< be a host; false if the radio would not start
@@ -77,6 +86,9 @@ namespace hlrt
         /// How strong the link to player `p` is, in bars (0..4); -1 if it is
         /// not known (a client knows only its host's).
         int bars(int p) const;
+        /// The map of the match being waited for: the host's own, or (a
+        /// client) the one its beacon said, if this card has it; "" if not.
+        const char *lobbyMap() const;
 
         /// The host: begin the match on `map`. (It then loads the map
         /// itself, as the clients do when they hear.)
@@ -119,6 +131,8 @@ namespace hlrt
         Phase phase_ = Phase::Off;
         hldata::NetMatch match_;
         std::vector<std::string> maps_;
+        std::vector<hldata::NetMapInfo> mapInfo_;
+        std::string lobbyMap_; ///< (a client: the host's map, as its beacon said when it was joined)
         std::vector<hldata::NetSpawn> spawns_;
         unsigned clientsWere_ = 0;
         int lostFrames_ = 0;

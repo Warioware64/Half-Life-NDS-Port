@@ -20,6 +20,7 @@
 #include "game/Game.hpp"
 #include "game/Player.hpp"
 #include "render/Camera.hpp"
+#include "render/MapCard.hpp"
 #include "render/ProfileView.hpp"
 
 namespace hlrt
@@ -363,6 +364,13 @@ namespace hlrt
             screenPicture(menuShown);
             if (logoShown != nullptr)
                 drawMenuLogo();
+            // (A multiplayer map's card, in the lobby: on the picture, as
+            // the title is.)
+            if (mapCard.shown())
+            {
+                beginFlat();
+                mapCard.draw(corner);
+            }
             flatScale = 256;
             profileView.draw();
         }
@@ -1199,6 +1207,9 @@ namespace hlrt
 
     void HudDraw::hideMenu()
     {
+        // (The lobby's map card goes with the title: its textures are not
+        // to be beside a map's.)
+        mapCard.hide();
         if (menuShown == nullptr)
             return;
         // What is on the screen stays there as a picture (as the loading

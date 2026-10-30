@@ -6,10 +6,13 @@
 #include <cstdlib>
 
 #include "Achievements.hpp"
+#include <sys/stat.h>
+
 #include "DebugLog.hpp"
 #include "Global.hpp"
 #include "Guard.hpp"
 #include "HlCommands.hpp"
+#include "HlPreview.hpp"
 #include "net/GuestLoad.hpp"
 #include "Settings.hpp"
 #include "data/LevelFile.hpp"
@@ -64,6 +67,100 @@ namespace
     constexpr int curtainFrames()
     {
         return 12;
+    }
+
+    /// The picture of a multiplayer map for its card (HlPreview.hpp), the
+    /// first time this console hosts a match on it: the map from where the
+    /// game shows it between matches (its info_intermission; else where a
+    /// player first comes in), the 3D alone -- no display, nothing in hand --
+    /// drawn for a few frames behind the curtain, so that what is in view
+    /// has its textures, then captured, shrunk, and kept in saves/previews/.
+    void drawPreviewScene()
+    {
+        hlrt::worldDraw.applyFog();
+        NEA_PolyFormat(31, 0, static_cast<NEA_LightEnum>(0), hlrt::WorldDraw::kCull,
+                       hlrt::worldDraw.polygonMode());
+        hlrt::camera.apply();
+        hlrt::worldDraw.draw();
+    }
+    void takePreview(const std::string &map)
+    {
+#ifndef HLDS_CHILD
+        if (!global.hasFat)
+            return;
+        const std::string folder = global.savesDir() + hldata::kPreviewFolder;
+        const std::string path = folder + map + ".hpv";
+        if (std::FILE *file = std::fopen(path.c_str(), "rb"))
+        {
+            std::fclose(file);
+            return;
+        }
+        const hldata::LevelView &view = hlrt::level.view;
+        const hldata::EntityRecord *from = nullptr;
+        for (std::uint32_t e = 0; e < view.entityCount && from == nullptr; ++e)
+        {
+            if (view.entities[e].classId == static_cast<std::uint16_t>(hldata::EntityClass::InfoIntermission))
+                from = &view.entities[e];
+        }
+        bool spawn = false;
+        for (std::uint32_t e = 0; e < view.entityCount && from == nullptr; ++e)
+        {
+            if (view.entities[e].classId == static_cast<std::uint16_t>(hldata::EntityClass::InfoPlayerDeathmatch))
+            {
+                from = &view.entities[e];
+                spawn = true;
+            }
+        }
+        if (from == nullptr)
+            return;
+        hlrt::Camera &camera = hlrt::camera;
+        const hldata::fx pos[3] = {camera.pos[0], camera.pos[1], camera.pos[2]};
+        const std::uint16_t yaw = camera.yaw;
+        const std::int16_t pitch = camera.pitch;
+        const bool held = hlrt::game.held.active;
+        for (int i = 0; i < 3; ++i)
+            camera.pos[i] = from->origin[i];
+        if (spawn)
+            camera.pos[2] += hldata::fxFromInt(28); // (the eye, over the middle)
+        camera.yaw = from->angles[1];
+        camera.pitch = static_cast<std::int16_t>(-static_cast<std::int16_t>(from->angles[0])); // (an entity's down is the view's up)
+        camera.update();
+        hlrt::game.held.active = false;
+        hlrt::screenFade.curtainDown();
+        for (int n = 0; n < 30; ++n)
+        {
+            NEA_WaitForVBL(NEA_UPDATE_TASKS);
+            hlrt::textureStream.upload();
+            hlrt::modelCache.apply();
+            NEA_Process(drawPreviewScene);
+            hlrt::textureStream.update(isDSiMode() ? 8192 : 4096);
+        }
+        NEA_Process(drawPreviewScene);
+        static std::uint16_t pixels[hldata::kPreviewWidth * hldata::kPreviewHeight];
+        if (hlrt::frameFreeze.capturePreview(pixels))
+        {
+            mkdir(global.savesDir().c_str(), 0777);
+            mkdir(folder.c_str(), 0777);
+            hldata::PreviewHeader header;
+            hldata::previewHeader(header);
+            if (std::FILE *file = std::fopen(path.c_str(), "wb"))
+            {
+                const bool ok = std::fwrite(&header, sizeof(header), 1, file) == 1 &&
+                                std::fwrite(pixels, sizeof(pixels), 1, file) == 1;
+                if (std::fclose(file) != 0 || !ok)
+                    std::remove(path.c_str());
+            }
+        }
+        for (int i = 0; i < 3; ++i)
+            camera.pos[i] = pos[i];
+        camera.yaw = yaw;
+        camera.pitch = pitch;
+        camera.update();
+        hlrt::game.held.active = held;
+        hlrt::screenFade.curtainUp(curtainFrames());
+#else
+        (void)map;
+#endif
     }
 
     /// A line in perf.txt about the map being played: what the hardware made
@@ -830,7 +927,7 @@ int main(int argc, char *argv[])
 
     // The manifest says what the converter put on the card and which map to start in.
     std::string startMap;
-    std::vector<std::string> multiplayerMaps;
+    std::vector<hldata::NetMapInfo> multiplayerMaps;
     std::string dataWhy;
     const Global::DataStatus status = global.ReadManifest(startMap, &multiplayerMaps, &dataWhy);
     hlrt::netGame.setMaps(multiplayerMaps);
@@ -954,6 +1051,9 @@ int main(int argc, char *argv[])
                 if (loadLevel(map, nullptr, error) == LoadResult::Ok)
                 {
                     hlrt::netGame.mapLoaded();
+                    // (The host: the map's picture, the first time.)
+                    if (hlrt::netGame.isHost())
+                        takePreview(map);
                     break;
                 }
                 back();

@@ -272,7 +272,7 @@ std::size_t Global::heapHeadroom() const
     return static_cast<std::size_t>(getHeapLimit() - getHeapEnd());
 }
 
-Global::DataStatus Global::ReadManifest(std::string &startMap, std::vector<std::string> *multiplayer,
+Global::DataStatus Global::ReadManifest(std::string &startMap, std::vector<hldata::NetMapInfo> *multiplayer,
                                         std::string *why) const
 {
 #ifdef HLDS_CHILD
@@ -284,8 +284,9 @@ Global::DataStatus Global::ReadManifest(std::string &startMap, std::vector<std::
         const std::string map = hlrt::guest::offeredName(i);
         if (startMap.empty())
             startMap = map;
+        // (Sent it: it fits. Its places are its own business here.)
         if (multiplayer != nullptr)
-            multiplayer->push_back(map);
+            multiplayer->push_back(hldata::NetMapInfo{map, 0, true});
     }
     return startMap.empty() ? DataStatus::NoData : DataStatus::Ok;
 #endif
@@ -332,7 +333,7 @@ Global::DataStatus Global::ReadManifest(std::string &startMap, std::vector<std::
     for (const hldata::ManifestMap &map : manifest.maps)
     {
         if (multiplayer != nullptr && map.spawns != 0)
-            multiplayer->push_back(map.name);
+            multiplayer->push_back(hldata::NetMapInfo{map.name, map.spawns, map.guestFits});
     }
     return DataStatus::Ok;
 }

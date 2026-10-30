@@ -38,11 +38,14 @@ namespace hlrt
         /// The ROM's own 8x8 letters.
         const hldata::FontView &plain();
         /// A block of cells, `w` by `h` from cell (`x`, `y`), in colours of
-        /// its own: the sixteen as ever but 1, 2 and 3, which are `three`
-        /// (a picture in a colour of the player's: PROFILE's spray). Only
-        /// what is drawn there in those three is changed, so the block is
-        /// for that alone. Again with `three` null: as every cell is.
-        void tint(int x, int y, int w, int h, const std::uint16_t *three);
+        /// its own -- palette `bank` (1..15) of the sub engine: the sixteen
+        /// as ever but 1, 2 and 3, which are `three` (a picture in a colour
+        /// of the player's: PROFILE's spray, a player's swatch in a lobby).
+        /// Only what is drawn there in those three is changed, so the block
+        /// is for that alone. Again with `three` null: as every cell is.
+        void tint(int x, int y, int w, int h, const std::uint16_t *three, int bank = 1);
+        /// Every cell as every cell is (the game's pad, which has no tints).
+        void untintAll() { tint(0, 0, 32, 24, nullptr); }
 
     private:
         bool created_ = false;

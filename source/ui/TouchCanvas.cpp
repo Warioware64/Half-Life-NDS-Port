@@ -41,19 +41,20 @@ namespace hlrt
         loadFonts();
     }
 
-    void TouchCanvas::tint(int x, int y, int w, int h, const std::uint16_t *three)
+    void TouchCanvas::tint(int x, int y, int w, int h, const std::uint16_t *three, int bank)
     {
-        // (The second sixteen colours: the first, three of them changed.)
+        // (Another sixteen colours: the first, three of them changed.)
+        bank = bank < 1 ? 1 : (bank > 15 ? 15 : bank);
         if (three != nullptr)
         {
             for (int i = 0; i < 16; ++i)
-                BG_PALETTE_SUB[16 + i] = i >= 1 && i <= 3 ? three[i - 1] : hldata::uiColour(i);
+                BG_PALETTE_SUB[bank * 16 + i] = i >= 1 && i <= 3 ? three[i - 1] : hldata::uiColour(i);
         }
         std::uint16_t *map = BG_MAP_RAM_SUB(0);
         for (int cy = y; cy < y + h && cy < 24; ++cy)
         {
             for (int cx = x; cx < x + w && cx < 32; ++cx)
-                map[cy * 32 + cx] = static_cast<std::uint16_t>((kFirstTile + cy * 32 + cx) | (three != nullptr ? 1 << 12 : 0));
+                map[cy * 32 + cx] = static_cast<std::uint16_t>((kFirstTile + cy * 32 + cx) | (three != nullptr ? bank << 12 : 0));
         }
     }
 

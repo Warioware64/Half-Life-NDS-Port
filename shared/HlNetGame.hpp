@@ -67,6 +67,7 @@ namespace hldata
         std::uint8_t mode = kNetModeDeathmatch;
         std::uint16_t flags = kRuleAutoaim; ///< kRule*
         std::uint8_t most = 4;              ///< how many may play
+        std::uint32_t mapHash = 0;          ///< nameHash of the map it is to be on (0: not said)
         bool teams() const { return mode == kNetModeTeamplay; }
         bool has(std::uint16_t flag) const { return (flags & flag) != 0; }
     };
@@ -383,7 +384,8 @@ namespace hldata
         /// sprays again -- to everyone (those that had it lose nothing).
         inline void netTellAll(NetMatch &match)
         {
-            NetEvent rules = netEvent(NetEventType::Rules, 0, match.rules.mode, match.rules.flags, match.rules.most);
+            NetEvent rules = netEvent(NetEventType::Rules, 0, match.rules.mode, match.rules.flags, match.rules.most,
+                                    static_cast<int>(match.rules.mapHash & 0xFFFF), static_cast<int>(match.rules.mapHash >> 16));
             match.host.out.add(rules);
             for (int p = 0; p < kNetPlayers; ++p)
             {
@@ -533,6 +535,9 @@ namespace hldata
                     match.rules.mode = static_cast<std::uint8_t>(event.v[0]);
                     match.rules.flags = static_cast<std::uint16_t>(event.v[1]);
                     match.rules.most = static_cast<std::uint8_t>(event.v[2] < 2 ? 2 : (event.v[2] > kNetPlayers ? kNetPlayers : event.v[2]));
+                    match.rules.mapHash = static_cast<std::uint16_t>(event.v[3]) |
+                                          static_cast<std::uint32_t>(static_cast<std::uint16_t>(event.v[4])) << 16;
+                    ++match.profileStamp; // (what the lobby shows has changed)
                 }
                 break;
             case NetEventType::Profile:
@@ -858,19 +863,22 @@ namespace hldata
     }
 
     /// The host: the rules (before Start; again whenever they change). The
-    /// teams are picked again, every player in turn, for a teamplay match.
+    /// mode changed, the teams are picked again, every player in turn; else
+    /// only who has none yet is given one.
     inline void netSetRules(NetMatch &match, const NetRules &rules)
     {
         if (match.role != NetMatch::Role::Host)
             return;
+        const bool again = rules.mode != match.rules.mode;
         match.rules = rules;
         match.rules.most = static_cast<std::uint8_t>(rules.most < 2 ? 2 : (rules.most > kNetPlayers ? kNetPlayers : rules.most));
-        match.host.out.add(netEvent(NetEventType::Rules, 0, match.rules.mode, match.rules.flags, match.rules.most));
-        for (int p = 0; p < kNetPlayers; ++p)
+        match.host.out.add(netEvent(NetEventType::Rules, 0, match.rules.mode, match.rules.flags, match.rules.most,
+                                    static_cast<int>(match.rules.mapHash & 0xFFFF), static_cast<int>(match.rules.mapHash >> 16)));
+        for (int p = 0; p < kNetPlayers && again; ++p)
             match.profiles[p].team = 0;
         for (int p = 0; p < kNetPlayers; ++p)
         {
-            if (netHere(match, p))
+            if (netHere(match, p) && (again || (match.rules.teams() && match.profiles[p].team == 0)))
                 detail::netPickTeam(match, p);
         }
     }

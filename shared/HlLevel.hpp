@@ -1457,6 +1457,10 @@ namespace hldata
         /// Where a player comes into a game between consoles (the game's
         /// info_player_deathmatch): a map that has any is a multiplayer map.
         InfoPlayerDeathmatch,
+        /// Where the game shows the map between matches (its
+        /// info_intermission), facing as it does: what the map's preview is
+        /// taken from. Pitch as an entity's angles have it: down is more.
+        InfoIntermission,
     };
 
     struct EntityRecord

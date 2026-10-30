@@ -81,8 +81,9 @@ namespace hldata
     // The program: its code and data (child/out/hl-child.nds's __end__,
     // 0x02165B6C; tools/child_size.py says if it has grown past this). Raised
     // with eight players, their profiles and sprays (0x0216E19C, 30 Oct 2026):
-    // the map nearest the limit, doublecross, was 128 KB under it.
-    inline constexpr std::uint32_t kGuestImageBytes = 0x165B6C + 40 * 1024;
+    // the map nearest the limit, doublecross, was 128 KB under it; and again
+    // with the host's and the lobby's pages (0x0217154C): about 96 KB under.
+    inline constexpr std::uint32_t kGuestImageBytes = 0x165B6C + 48 * 1024;
     /// The heap's end: the end of main RAM less what the start-up code keeps.
     inline constexpr std::uint32_t kGuestRamBytes = 0x3F4000;
     /// What the engine holds beside a map's data -- its tables, the world's

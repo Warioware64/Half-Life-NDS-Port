@@ -18,6 +18,8 @@
 
 #include "global_header.hpp"
 
+#include "HlNetMaps.hpp"
+
 class Global
 {
 public:
@@ -124,10 +126,11 @@ public:
 
     /// Read the converter's manifest and with it the map to start in. Cheap --
     /// one small file -- and done before the 3D engine is up.
-    /// (`multiplayer`, if given: the names of the card's maps that a game
-    /// between consoles can be played on.)
+    /// (`multiplayer`, if given: the card's maps that a game between consoles
+    /// can be played on -- each with its places to come in at, and whether
+    /// it can be sent to a console without the game.)
     /// (`why`, if given: for OtherVersion, the two numbers that did not match.)
-    DataStatus ReadManifest(std::string &startMap, std::vector<std::string> *multiplayer = nullptr,
+    DataStatus ReadManifest(std::string &startMap, std::vector<hldata::NetMapInfo> *multiplayer = nullptr,
                             std::string *why = nullptr) const;
 
     /// Two lines of player-facing explanation for a status: what is wrong and
