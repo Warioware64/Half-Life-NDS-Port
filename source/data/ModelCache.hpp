@@ -60,6 +60,14 @@ namespace hlrt
         /// `index`: weapon in hand; -1: none. A weapon the map has not is
         /// loaded there and then (too little memory: it is not drawn).
         void wield(int index);
+        /// The weapon in hand read again if it could not be when it was
+        /// taken up (a console sent the game: its weapons come at the end
+        /// of the map's stream, after the player is in).
+        void rewield()
+        {
+            if (wanted_ >= 0)
+                wield(wanted_);
+        }
         /// Do what wield() asked, once a frame: the skin is written into a
         /// slot of video memory by VramWriter, and the weapon is drawn with
         /// it once it is all there.

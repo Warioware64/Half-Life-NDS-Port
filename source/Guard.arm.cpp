@@ -348,6 +348,31 @@ namespace hlrt::guard
                     else
                         hex(numbers[i]);
                 }
+                // A block of the heap's: the last of it, and what is past
+                // its end -- the 4 bytes that must stay, and on -- for what
+                // they look like (whose writing it is).
+                const std::uint32_t block = numbers[0], size = numbers[1];
+                if (block >= 0x02000000 && block < 0x03000000 && size < 0x01000000)
+                {
+                    static const char kDigits[] = "0123456789ABCDEF";
+                    auto bytes = [&](int row, const char *label, std::uint32_t from, int count)
+                    {
+                        at(0, row);
+                        print(label);
+                        char text[3] = {};
+                        for (int n = 0; n < count; ++n)
+                        {
+                            const std::uint8_t b = *reinterpret_cast<const volatile std::uint8_t *>(from + n);
+                            text[0] = kDigits[b >> 4];
+                            text[1] = kDigits[b & 15];
+                            print(text);
+                            print(n == 3 || n == 7 ? " " : "");
+                        }
+                    };
+                    bytes(9, "end-8 ", block + size - 8, 8);
+                    bytes(10, "end   ", block + size, 8);
+                    bytes(11, "end+8 ", block + size + 8, 8);
+                }
             }
             // Code addresses on the stack, nearest first: what called what,
             // most likely.

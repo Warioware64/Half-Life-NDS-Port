@@ -550,8 +550,10 @@ namespace
             hlrt::screenFade.curtainUp(curtainFrames());
 #ifdef HLDS_CHILD
         // (Sent the game: the map's stream has given its loaders all it had.
-        // Nothing of it is read during play.)
+        // Nothing of it is read during play -- the weapons it kept, now
+        // there, aside: the one in hand, if it could not be read before.)
         global.unmountMap();
+        hlrt::modelCache.rewield();
 #endif
         hlrt::guard::check("map loaded");
         return LoadResult::Ok;
@@ -592,8 +594,8 @@ namespace
 
     /// HOST, on a card with multiplayer maps never photographed: each loaded
     /// in turn, behind the curtain, for its picture (takePreview), and let
-    /// go -- what the lobby's map card shows, here and to the others. Held
-    /// down, the touch screen (or B) stops it after the map being taken.
+    /// go -- what the lobby's map card shows, here and to the others. STOP
+    /// on the touch screen (or B) ends it after the map being taken.
     void takeAllPreviews(const std::vector<std::string> &maps)
     {
         std::vector<std::string> todo;
@@ -605,12 +607,12 @@ namespace
         std::string error;
         quietLoad = true;
         hlrt::screenFade.curtainDown();
-        for (std::size_t n = 0; n < todo.size(); ++n)
+        const int total = static_cast<int>(todo.size());
+        for (int n = 0; n < total; ++n)
         {
-            char line[64];
-            std::snprintf(line, sizeof(line), "%u of %u: %s. Hold the screen to stop.", static_cast<unsigned>(n + 1),
-                          static_cast<unsigned>(todo.size()), todo[n].c_str());
-            hlrt::bottomScreen.showMessage("TAKING MAP PICTURES", line);
+            char step[64];
+            std::snprintf(step, sizeof(step), "Taking %s", todo[n].c_str());
+            hlrt::bottomScreen.showProgress("MAP PICTURES", step, "Taken once, for the lobby's map cards", n, total);
             hlrt::game.resetProgress();
             leavingAbandoned = true;
             if (loadLevel(todo[n], nullptr, error) == LoadResult::Ok)
@@ -619,8 +621,8 @@ namespace
             {
                 // (Said, for a moment: a map this console cannot hold has no
                 // picture -- it is asked again the next time.)
-                hlrt::bottomScreen.showMessage(todo[n].c_str(), error.c_str());
-                for (int wait = 0; wait < 90; ++wait)
+                hlrt::bottomScreen.showProgress("MAP PICTURES", todo[n].c_str(), error.c_str(), n + 1, total);
+                for (int wait = 0; wait < 60 && !hlrt::BottomScreen::stopTouched(); ++wait)
                     swiWaitForVBlank();
             }
             if (hlrt::level.loaded())
@@ -628,10 +630,12 @@ namespace
                 dropMap();
                 hlrt::level.unload();
             }
+            // (STOP, or B: those taken are kept, the rest are for next time.)
             scanKeys();
-            if (keysHeld() & (KEY_TOUCH | KEY_B))
+            if (hlrt::BottomScreen::stopTouched() || (keysHeld() & KEY_B))
                 break;
         }
+        hlrt::BottomScreen::stopDone();
         quietLoad = false;
         leavingAbandoned = false;
         hlrt::game.resetProgress();

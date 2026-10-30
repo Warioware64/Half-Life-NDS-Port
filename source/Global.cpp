@@ -1,4 +1,5 @@
 #include "Global.hpp"
+#include "render/BottomScreen.hpp"
 #include <cstdio>
 #include <cstring>
 #include <nds/arm9/dldi.h>
@@ -27,6 +28,8 @@ namespace
         hlrt::GpuStats::onVblank();
         // The display's sprites, as the frame before made them.
         hlrt::hudDraw.onVblank();
+        // (A touch of STOP while a long job holds the console: kept for it.)
+        hlrt::BottomScreen::onVblank();
         NEA_VBLFunc();
     }
 } // namespace

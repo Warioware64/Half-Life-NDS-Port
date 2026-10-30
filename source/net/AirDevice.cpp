@@ -82,6 +82,14 @@ namespace hlrt::air
             if (cursor == nullptr)
                 return false;
             const hldata::GuestKind want = hldata::guestKindOf(name);
+            // (Nor anything out of the loaders' order -- a weapon kept packed,
+            // which comes last and is kept as it passes: asked for early, it
+            // would pass over all of what is before it, the map's sounds
+            // among them, before they were asked for. It is found once the
+            // stream has gone by, 2026-10-30.)
+            if (want == hldata::GuestKind::Ui)
+                return cursor->member().nameBytes != 0 && memberOpen && cursor->taken() == 0 &&
+                       std::strcmp(cursor->name(), name) == 0;
             while (true)
             {
                 const bool current = cursor->member().nameBytes != 0 && !cursor->ended() &&

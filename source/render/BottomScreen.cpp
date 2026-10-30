@@ -20,6 +20,9 @@ namespace hlrt
     namespace
     {
         using namespace hldata;
+        // showProgress's STOP, and whether it has been touched since.
+        constexpr int kStopX = 88, kStopY = 152, kStopW = 80, kStopH = 22;
+        volatile bool stopShown = false, stopHit = false;
 
         // The weapons' pictures (ui/weapons.hic), if the card has them.
         std::uint32_t iconWords[(sizeof(IconsHeader) + kWeaponIcons * kIconMaxHeight * iconRowWords(kIconMaxWidth) * 4) / 4];
@@ -383,6 +386,7 @@ namespace hlrt
 
     void BottomScreen::showPad()
     {
+        stopShown = false;
         create();
         Canvas &canvas = touchCanvas.canvas();
         canvas.clear();
@@ -436,6 +440,7 @@ namespace hlrt
 
     void BottomScreen::showMessage(const char *line1, const char *line2)
     {
+        stopShown = false;
         create();
         Canvas &canvas = touchCanvas.canvas();
         canvas.clear();
@@ -449,8 +454,60 @@ namespace hlrt
         drawTextCentred(canvas, font, 128, 112, cut, inkFor(font, kUiWhite));
     }
 
+    void BottomScreen::showProgress(const char *title, const char *step, const char *note, int done, int total)
+    {
+        create();
+        Canvas &canvas = touchCanvas.canvas();
+        canvas.clear();
+        shown_ = Shown::Message;
+        padPending_ = false;
+        const FontView &big = touchCanvas.font(kFontTitle), &medium = touchCanvas.font(kFontMedium),
+                       &small = touchCanvas.font(kFontSmall);
+        drawTextCentred(canvas, big, 128, 22, title, inkFor(big, kUiOrange));
+        char cut[64];
+        std::snprintf(cut, sizeof(cut), "%.*s", textFit(medium, step, 240), step);
+        drawTextCentred(canvas, medium, 128, 70, cut, inkFor(medium, kUiWhite));
+        if (note != nullptr && note[0] != '\0')
+        {
+            std::snprintf(cut, sizeof(cut), "%.*s", textFit(small, note, 240), note);
+            drawTextCentred(canvas, small, 128, 70 + medium.height() + 4, cut, inkFor(small, kUiGrey));
+        }
+        // How far: a bar, and in words under it.
+        constexpr int kBarX = 28, kBarY = 108, kBarW = 200, kBarH = 10;
+        canvas.fill(kBarX, kBarY, kBarW, kBarH, kUiTrack);
+        canvas.frame(kBarX - 1, kBarY - 1, kBarW + 2, kBarH + 2, kUiEdge);
+        const int filled = total > 0 ? kBarW * (done < total ? done : total) / total : 0;
+        canvas.fill(kBarX, kBarY, filled, kBarH, kUiOrange + 1);
+        std::snprintf(cut, sizeof(cut), "%d of %d", done, total);
+        drawTextCentred(canvas, small, 128, kBarY + kBarH + 6, cut, inkFor(small, kUiGrey));
+        canvas.button(kStopX, kStopY, kStopW, kStopH, stopHit);
+        drawTextCentred(canvas, medium, kStopX + kStopW / 2, kStopY + (kStopH - medium.height()) / 2,
+                        stopHit ? "STOPPING" : "STOP", inkFor(medium, stopHit ? kUiWhite : kUiOrange));
+        stopShown = true;
+    }
+
+    bool BottomScreen::stopTouched()
+    {
+        const bool hit = stopHit;
+        if (hit)
+            stopShown = stopHit = false;
+        return hit;
+    }
+
+    void BottomScreen::stopDone() { stopShown = stopHit = false; }
+
+    void BottomScreen::onVblank()
+    {
+        if (!stopShown || stopHit || !(keysCurrent() & KEY_TOUCH))
+            return;
+        touchPosition touch;
+        touchRead(&touch);
+        stopHit = touch.px >= kStopX && touch.px < kStopX + kStopW && touch.py >= kStopY && touch.py < kStopY + kStopH;
+    }
+
     void BottomScreen::showFatal(const char *line1, const char *line2, const char *line3)
     {
+        stopShown = false;
         create();
         Canvas &canvas = touchCanvas.canvas();
         canvas.clear();

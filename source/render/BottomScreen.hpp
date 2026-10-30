@@ -58,6 +58,17 @@ namespace hlrt
         /// Three lines and nothing else: what is said when the game cannot
         /// go on. Sets the screen up itself if nothing has.
         void showFatal(const char *line1, const char *line2, const char *line3);
+        /// A long job in steps (the map pictures): its name, what it is on
+        /// (`step`, said in white; `note`, if any, in grey under it), how far
+        /// (`done` of `total`, as a bar), and a STOP to touch (stopTouched).
+        void showProgress(const char *title, const char *step, const char *note, int done, int total);
+        /// Whether STOP has been touched since showProgress showed it (looked
+        /// at in the vertical blank: a touch while a map loads counts too).
+        static bool stopTouched();
+        /// The job is over: STOP is no longer watched.
+        static void stopDone();
+        /// (Global's vertical blank.)
+        static void onVblank();
         /// The screen is someone else's for now (the menu): nothing here
         /// draws until showPad() or showMessage().
         void release();

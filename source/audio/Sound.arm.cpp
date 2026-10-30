@@ -325,7 +325,16 @@ namespace hlrt
             dsiHz_ = hz;
             arm7Audio.setDsiRate(hz);
         }
+#ifdef HLDS_CHILD
+        // (Sent the game: the plain way, every sound straight to the
+        // speakers, as a program's own sound is -- not captured and played
+        // again by the ARM7. Started by Download Play on a 3DS, what went
+        // through the capture was never heard; and a console sent the game
+        // has no music for it to mix.)
+        arm7Audio.setMode(false, effects, settings.outputMode, quality);
+#else
         arm7Audio.setMode(held_ == 0, effects, settings.outputMode, quality);
+#endif
         // (The room the player is in, again: a pipeline started afresh has
         // none.)
         arm7Audio.setRoom(room_);

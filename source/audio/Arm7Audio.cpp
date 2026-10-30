@@ -16,14 +16,21 @@ namespace hlrt
         if (link_ != nullptr)
             return true;
         // (On cache lines of its own; reached only through the uncached
-        // mirror from here on, so that what the ARM7 writes is what is read.)
+        // mirror from here on, so that what the ARM7 writes is what is read.
+        // In DS mode the ARM7 is given that same address, not the block's
+        // own: on a DS it is the same memory again -- but a 3DS that has started this by
+        // Download Play can leave its RAM laid out as 16 MB, and then the
+        // "mirror" is other memory, which the two must then share instead:
+        // the ARM7 heard none of what was written there, 2026-10-30.)
         void *block = memalign(32, (sizeof(AudioLink) + 31) & ~31u);
         if (block == nullptr)
             return false;
-        std::memset(block, 0, sizeof(AudioLink));
         DC_FlushRange(block, sizeof(AudioLink));
         AudioLink *link = static_cast<AudioLink *>(memUncached(block));
-        fifoSendValue32(FIFO_USER_01, reinterpret_cast<std::uint32_t>(block));
+        std::memset(link, 0, sizeof(AudioLink));
+        // (In DSi mode the mirror is at 0x0C000000, there to the ARM9 alone:
+        // the ARM7 is given the block's own address, as it always was.)
+        fifoSendValue32(FIFO_USER_01, reinterpret_cast<std::uint32_t>(isDSiMode() ? block : static_cast<void *>(link)));
         // The ARM7 answers by counting its blocks (2 ms each).
         for (int frame = 0; frame < 30; ++frame)
         {
@@ -308,7 +315,14 @@ namespace hlrt
 
     bool Arm7Audio::dsiSpeakers()
     {
+#ifdef HLDS_CHILD
+        // (Sent the game, it runs as a DS: what start-up read of a DSi --
+        // SCFG left open, and a DSi header in memory that is the Download
+        // Play program's, not this one's -- is not to be acted on.)
+        return false;
+#else
         return isDSiMode() && (__DSiHeader->appflags & 0x01) != 0;
+#endif
     }
     void Arm7Audio::setDsiRate(int khz)
     {
