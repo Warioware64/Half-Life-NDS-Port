@@ -108,5 +108,14 @@ namespace hlrt::netlink
     /// that failed aside), and there is one.
     bool dlAllReady();
     void dlLock(bool locked); ///< no more guests
+    /// The radio's own counts while it sends (they wrap; what matters is how
+    /// much they move): exchanges begun, done, done again for a client that
+    /// did not answer, frames the sending could not queue; and the most
+    /// blocks of the program any guest has.
+    struct DlCounts
+    {
+        unsigned armed = 0, done = 0, retried = 0, refused = 0, blocks = 0;
+    };
+    DlCounts dlCounts();
     bool dlBootAll();         ///< start the program on all of them
 } // namespace hlrt::netlink

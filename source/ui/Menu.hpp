@@ -33,6 +33,9 @@ namespace hlrt
             Command,
             Leave, ///< out of a game between consoles, to the title
             Quit,  ///< the title's QUIT: back to whatever started the game
+            /// HOST, with maps never photographed: their pictures taken
+            /// first (main.cpp), then openHost().
+            TakePreviews,
         };
 
         /// Whether QUIT is offered: there is somewhere to go back to (the
@@ -41,6 +44,9 @@ namespace hlrt
 
         /// Take the touch screen and show the first page.
         void open();
+        /// HOST: the host's game opened and its page shown (or, if the radio
+        /// would not start, why, on MULTIPLAYER).
+        void openHost();
         /// The same, as the game's title: CONTINUE, LOAD GAME, NEW GAME,
         /// OPTIONS, with no game behind it.
         void openTitle();
@@ -107,6 +113,7 @@ namespace hlrt
             NewGame = 16,     ///< which game: Half-Life, the Hazard Course, Uplink
             Profile = 17,     ///< a sheet: the player as the others see them, shown on the top screen
             NetSend = 18,     ///< a sheet: the host giving the game to consoles without it (Download Play)
+            NetStarting = 19, ///< a sheet: the host's match beginning -- who is ready, who is on the way
         };
 
         // A sheet: a page of its own, drawn and touched apart from the rows
@@ -120,20 +127,20 @@ namespace hlrt
         {
             return page_ == Page::Achievements || page_ == Page::Settings || page_ == Page::Saves ||
                    page_ == Page::Profile || page_ == Page::NetHost || page_ == Page::NetLobby ||
-                   page_ == Page::NetSend;
+                   page_ == Page::NetSend || page_ == Page::NetStarting;
         }
         /// A sheet of settings' rows: OPTIONS, PROFILE, HOST, the lobby.
         bool optionSheet() const
         {
             return page_ == Page::Settings || page_ == Page::Profile || page_ == Page::NetHost ||
-                   page_ == Page::NetLobby || page_ == Page::NetSend;
+                   page_ == Page::NetLobby || page_ == Page::NetSend || page_ == Page::NetStarting;
         }
         /// How many buttons along a sheet's bottom: the last is BACK (LEAVE).
         int sheetButtons() const
         {
-            return page_ == Page::Saves || (page_ == Page::NetHost && canSend()) ? 3
-                   : page_ == Page::NetLobby || page_ == Page::NetSend         ? 1
-                                                                                : 2;
+            return page_ == Page::Saves || page_ == Page::NetLobby || (page_ == Page::NetHost && canSend()) ? 3
+                   : page_ == Page::NetStarting                                                             ? 1
+                                                                                                            : 2;
         }
         /// HOST: whether it can give the game to consoles without it (they
         /// are let in, and this copy carries the program to send).
@@ -206,6 +213,11 @@ namespace hlrt
         int skill_ = 2; ///< (kSkillMedium)
         Action asked_ = Action::None; ///< what "yes" on the confirm page does
         Page asker_ = Page::Main;     ///< ... and where "no" goes back to
+        /// OPTIONS' and PROFILE's: the page they were opened from, when it
+        /// is MULTIPLAYER or a lobby (where they go back to); Main else.
+        Page sheetFrom_ = Page::Main;
+        /// HOST has had the maps' pictures taken (or stopped) this time on.
+        bool previewsTaken_ = false;
         void ask(Action action, const char *question);
         void openNewGame();
         Page page_ = Page::Main;

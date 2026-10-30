@@ -28,6 +28,16 @@ namespace hlrt
         constexpr int kTextureH = 128; ///< (a texture's height is a power of two: the words in its top rows)
     } // namespace
 
+    bool mapPictured(const std::string &map)
+    {
+        if (!global.hasFat)
+            return false;
+        std::FILE *file = std::fopen((global.savesDir() + kPreviewFolder + map + ".hpv").c_str(), "rb");
+        if (file != nullptr)
+            std::fclose(file);
+        return file != nullptr;
+    }
+
     void MapCard::release()
     {
         if (picture_ != nullptr)
@@ -39,11 +49,31 @@ namespace hlrt
         picture_ = text_ = textPalette_ = nullptr;
     }
 
-#ifdef HLDS_CHILD
-    // (A console sent the game shows none: its maps are the host's.)
-    void MapCard::show(const NetMapInfo *, const char *) {}
-    void MapCard::draw(void (*)(int, int, int, int)) {}
-#else
+    void MapCard::givePicture(const char *name, const std::uint8_t *file)
+    {
+        if (!previewValid(file, kPreviewBytes))
+            return;
+        if (given_ == nullptr)
+            given_ = static_cast<std::uint8_t *>(std::malloc(kPreviewBytes));
+        if (given_ == nullptr)
+            return;
+        std::memcpy(given_, file, kPreviewBytes);
+        givenName_ = name;
+        // (Its card again, with it.)
+        if (shownName_ == givenName_)
+        {
+            release();
+            shownName_.clear();
+        }
+    }
+
+    void MapCard::dropPicture()
+    {
+        std::free(given_);
+        given_ = nullptr;
+        givenName_.clear();
+    }
+
     void MapCard::show(const NetMapInfo *map, const char *elsewhere)
     {
         const std::string name = map != nullptr ? map->name : (elsewhere != nullptr ? elsewhere : "");
@@ -54,40 +84,54 @@ namespace hlrt
         if (name.empty())
             return;
 
-        // The picture, if this console has taken one.
+        // The picture: the one the host sent, or the one this console took.
         bool pictured = false;
-        if (map != nullptr && global.hasFat)
+        const bool given = given_ != nullptr && givenName_ == name;
+        std::FILE *file = !given && map != nullptr && global.hasFat
+                              ? std::fopen((global.savesDir() + kPreviewFolder + map->name + ".hpv").c_str(), "rb")
+                              : nullptr;
+        if (given || file != nullptr)
         {
-            const std::string path = global.savesDir() + kPreviewFolder + map->name + ".hpv";
-            if (std::FILE *file = std::fopen(path.c_str(), "rb"))
+            auto *bytes = static_cast<std::uint8_t *>(std::malloc(kPreviewBytes));
+            // (A texture is 128 square: the picture in its top 96 rows.)
+            auto *texels = static_cast<std::uint16_t *>(std::calloc(128 * 128, 2));
+            bool got = bytes != nullptr;
+            if (got && given)
+                std::memcpy(bytes, given_, kPreviewBytes);
+            else if (got)
+                got = std::fread(bytes, 1, kPreviewBytes, file) == kPreviewBytes;
+            if (texels != nullptr && got && previewValid(bytes, kPreviewBytes))
             {
-                auto *bytes = static_cast<std::uint8_t *>(std::malloc(kPreviewBytes));
-                // (A texture is 128 square: the picture in its top 96 rows.)
-                auto *texels = static_cast<std::uint16_t *>(std::calloc(128 * 128, 2));
-                if (bytes != nullptr && texels != nullptr && std::fread(bytes, 1, kPreviewBytes, file) == kPreviewBytes &&
-                    previewValid(bytes, kPreviewBytes))
+                std::memcpy(texels, bytes + sizeof(PreviewHeader), kPreviewBytes - sizeof(PreviewHeader));
+                NEA_Material *material = NEA_MaterialCreate();
+                if (material != nullptr &&
+                    NEA_MaterialTexLoad(material, NEA_A1RGB5, 128, 128, NEA_TEXGEN_TEXCOORD, texels) == 1)
                 {
-                    std::memcpy(texels, bytes + sizeof(PreviewHeader), kPreviewBytes - sizeof(PreviewHeader));
-                    NEA_Material *material = NEA_MaterialCreate();
-                    if (material != nullptr &&
-                        NEA_MaterialTexLoad(material, NEA_A1RGB5, 128, 128, NEA_TEXGEN_TEXCOORD, texels) == 1)
-                    {
-                        picture_ = material;
-                        pictured = true;
-                    }
-                    else if (material != nullptr)
-                        NEA_MaterialDelete(material);
+                    picture_ = material;
+                    pictured = true;
                 }
-                std::free(bytes);
-                std::free(texels);
-                std::fclose(file);
+                else if (material != nullptr)
+                    NEA_MaterialDelete(material);
             }
+            std::free(bytes);
+            std::free(texels);
+            if (file != nullptr)
+                std::fclose(file);
         }
 
         // The words: drawn as on the touch screen, into a canvas of their
         // own, then made the texture's (A3I5: the UI's sixteen colours, the
-        // background see-through by half).
-        static std::uint32_t tiles[(kTextW / 8) * (kTextH / 8) * 8];
+        // background see-through by half). (Both in blocks of their own for
+        // as long as that takes: 22 KB a console sent the game cannot keep.)
+        constexpr std::size_t kTileBytes = (kTextW / 8) * (kTextH / 8) * 8 * sizeof(std::uint32_t);
+        auto *tiles = static_cast<std::uint32_t *>(std::malloc(kTileBytes));
+        auto *texels = static_cast<std::uint8_t *>(std::calloc(kTextW * kTextureH, 1));
+        if (tiles == nullptr || texels == nullptr)
+        {
+            std::free(tiles);
+            std::free(texels);
+            return;
+        }
         Canvas canvas;
         canvas.tiles = tiles;
         canvas.width = kTextW;
@@ -121,9 +165,11 @@ namespace hlrt
                 say("No picture yet", kUiGrey);
         }
         else
+#ifdef HLDS_CHILD
+            say("The host's map", kUiGrey);
+#else
             say("Not on this card", kUiGrey);
-        static std::uint8_t texels[kTextW * kTextureH];
-        std::memset(texels, 0, sizeof(texels));
+#endif
         for (int py = 0; py < kTextH; ++py)
         {
             for (int px = 0; px < kTextW; ++px)
@@ -152,6 +198,8 @@ namespace hlrt
             if (palette != nullptr)
                 NEA_PaletteDelete(palette);
         }
+        std::free(tiles);
+        std::free(texels);
     }
 
     void MapCard::draw(void (*corner)(int sx, int sy, int s, int t))
@@ -187,5 +235,4 @@ namespace hlrt
         corner(kTextX + kTextW, kTop + kTextH, kTextW, kTextH);
         corner(kTextX + kTextW, kTop, kTextW, 0);
     }
-#endif
 } // namespace hlrt

@@ -77,7 +77,9 @@ its recent list before the script begins.
   bootable 256 KB DS firmware, and the dumps here are a DSi's 128 KB one --
   so the child, finding no parameter from a host, looks for any game that
   lets consoles without the game in, and joins it. `EMU_PICK2="tap x y"`
-  picks another entry of that list.
+  picks another entry of that list. A child plays no music (none is sent),
+  and its map loads go dark (no loading picture: the frame-freeze bank is
+  its ARM7's).
 - Keys are not to be relied on to change a setting with two consoles running
   (a press is seen twice, or not at all): a touch is, or a settings file made
   beforehand -- `tools/emu/mksettings.cpp` writes one with consoles without

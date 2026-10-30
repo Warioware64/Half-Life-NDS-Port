@@ -69,6 +69,8 @@ namespace hlrt
         void setMusic(int track, std::uint32_t ms);
 
         /// On a DSi: the DSP is in use (the room, Enhanced).
+        /// Whether the ARM7 took the sound on at the start (none plays if not).
+        bool up() const { return up_; }
         bool extended() const { return extended_; }
         /// Switch the DSP's part on or off. Returns whether it is on (it
         /// cannot be, where there is no DSP).

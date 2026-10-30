@@ -15,6 +15,20 @@
 
 Achievements achievements;
 
+#ifdef HLDS_CHILD
+// A console that was sent the game plays matches between consoles only, where
+// there are none to earn, and has no card to keep them on: nothing is
+// tracked, nothing shown, and the game is given nowhere to report.
+void Achievements::load() {}
+bool Achievements::save() { return false; }
+void Achievements::flush() {}
+void Achievements::attach(const std::string &) { hlrt::game.logic.achievements = nullptr; }
+void Achievements::travelled(const std::string &, const std::string &) {}
+void Achievements::frame() {}
+void Achievements::cheated() {}
+void Achievements::started() {}
+bool Achievements::off() const { return true; }
+#else
 namespace
 {
     /// How long one earned is shown: in, held, out (TopText::announce).
@@ -69,8 +83,20 @@ void Achievements::flush()
         save();
 }
 
+bool Achievements::off() const
+{
+    // (Not in a game between consoles, from its lobby to its end: none are
+    // earned there, and none are shown over it.)
+    return hlrt::netGame.on();
+}
+
 void Achievements::attach(const std::string &map)
 {
+    if (off())
+    {
+        hlrt::game.logic.achievements = nullptr;
+        return;
+    }
     map_ = hldata::nameHash(map.c_str());
     hldata::AchEvents &events = hlrt::game.achievements;
     events.count = 0;
@@ -81,7 +107,7 @@ void Achievements::attach(const std::string &map)
 
 void Achievements::travelled(const std::string &left, const std::string &entered)
 {
-    if (hlrt::netGame.playing())
+    if (off())
         return;
     tracker.travelled(hldata::nameHash(left.c_str()), hldata::nameHash(entered.c_str()));
 }
@@ -89,14 +115,16 @@ void Achievements::travelled(const std::string &left, const std::string &entered
 void Achievements::frame()
 {
     hldata::AchEvents &events = hlrt::game.achievements;
-    if (!hlrt::netGame.playing())
+    if (off())
     {
-        hldata::AchContext context;
-        if (map_ == hldata::ach::kLiftMap && events.count > 0)
-            context.minesIntact = minesIntact();
-        tracker.apply(map_, events, context);
-        tracker.standing(map_, hlrt::player.state.origin);
+        events.count = 0;
+        return;
     }
+    hldata::AchContext context;
+    if (map_ == hldata::ach::kLiftMap && events.count > 0)
+        context.minesIntact = minesIntact();
+    tracker.apply(map_, events, context);
+    tracker.standing(map_, hlrt::player.state.origin);
     events.count = 0;
     if (tracker.unsaved)
         save();
@@ -132,6 +160,8 @@ void Achievements::frame()
 
 void Achievements::cheated()
 {
+    if (off())
+        return;
     tracker.unlock(hldata::kAchCheater);
 }
 
@@ -140,3 +170,4 @@ void Achievements::started()
     tracker.unlock(hldata::kAchInit);
     flush();
 }
+#endif

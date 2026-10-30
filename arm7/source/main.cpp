@@ -30,6 +30,15 @@ namespace
 int main()
 {
     enableSound();
+    // The speakers' resting level, brought up to the middle if it is not
+    // there (a little at a time: at once, it pops). Started from a card, the
+    // firmware has left it there; a program started by Download Play is
+    // left it at nothing, and every sound is then lost.
+    for (std::uint32_t bias = REG_SOUNDBIAS & 0x3FF; bias < 0x200; ++bias)
+    {
+        REG_SOUNDBIAS = bias + 1;
+        swiDelay(0x200);
+    }
     readUserSettings();
     ledBlink(LED_ALWAYS_ON);
     touchInit();

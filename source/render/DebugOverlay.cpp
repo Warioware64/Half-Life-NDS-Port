@@ -127,6 +127,14 @@ namespace hlrt
                               static_cast<unsigned>(held.baseBytes / 1024));
                 break;
             }
+            // (In a match: whether its sound is up, and how the ARM7 keeps
+            // up with it -- a console sent the game has nothing else to say
+            // why it is silent -- beside the radio's phase.)
+            std::snprintf(line, sizeof(line), "snd%d a7 %lu%% %lu clips%d net%d", sound.up() ? 1 : 0,
+                          static_cast<unsigned long>(arm7Audio.loadPercent()),
+                          static_cast<unsigned long>(arm7Audio.late()), sound.loaded(),
+                          static_cast<int>(netGame.phase()));
+            break;
 #endif
             if (netGame.on())
                 netGame.status(line, sizeof(line));

@@ -9,10 +9,10 @@
 //
 // The radio does one thing at a time: while this goes on, the host's game is
 // closed. So it is done before anyone has joined. A console comes when its
-// owner chooses the game in its menu; once the first has, more are waited
-// for a few seconds (and no longer: those already there are waiting), then
-// all who are there are sent it together -- one that comes while it is being
-// sent would not be let in.
+// owner chooses the game in its menu, and is held there; when the host says
+// START (go()), all who have come are sent it together -- one that came while
+// it was being sent would not be let in -- and started together once they
+// have it, as the consoles' own games do it.
 //
 // Download Play starts only a program signed by Nintendo, unless the console
 // has FlashMe (a DS, a DS Lite), or a Download Play that does not check.
@@ -25,7 +25,7 @@ namespace hlrt::dlsend
     {
         Off,
         Waiting,   ///< offered: no console has come yet
-        Gathering, ///< some have: waiting a little for more
+        Gathering, ///< some have, and are held: go() sends it to them
         Sending,
         Starting,  ///< all have it: told to start, the game about to open again
         Done,      ///< (let go: the host's game is to be opened)
@@ -40,7 +40,14 @@ namespace hlrt::dlsend
     bool begin(const char *description, int most, std::string &why);
     /// Once a frame while it is going on.
     void frame();
+    /// START: those who have come are sent it (Gathering).
+    void go();
+    /// As many have come as the match has room for.
+    bool full();
     State state();
+    /// What the radio did in the last second, in a line: the rate, its
+    /// exchanges, those done again, those it could not queue.
+    const char *rate();
     /// The consoles that have come: bit n is console n (1..15).
     unsigned consoles();
     /// How console `n` stands, in a word or a number ("checking", "42%",

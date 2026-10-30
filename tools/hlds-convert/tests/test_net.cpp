@@ -13,6 +13,7 @@
 #include "HlNet.hpp"
 #include "HlNetAir.hpp"
 #include "HlNetGame.hpp"
+#include "HlPreview.hpp"
 #include "HlView.hpp"
 #include "TestGame.hpp"
 
@@ -545,6 +546,45 @@ namespace
         check(!sender.asked(1, frame, airHave(AirStream::Base, 8, 137519, frame)),
               "an answer about another sending is not taken");
 
+        // A map's picture (HlPreview.hpp): whole in one window, so the
+        // window's slots are the file, in order, once it has all come.
+        {
+            std::vector<std::uint8_t> picture(sizeof(PreviewHeader) + kPreviewWidth * kPreviewHeight * 2);
+            for (std::uint8_t &b : picture)
+                b = static_cast<std::uint8_t>(rnd());
+            check(airPieces(static_cast<std::uint32_t>(picture.size())) <= kAirWindow,
+                  "a map's picture is fewer pieces than a window");
+            AirSender sends;
+            sends.begin(AirStream::Preview, "stalkyard", static_cast<std::uint32_t>(picture.size()), 3, 1u << 4);
+            AirReceiver takes;
+            std::vector<std::uint8_t> ring(airPieces(static_cast<std::uint32_t>(picture.size())) * kAirPiece);
+            takes.want(AirStream::Preview, "", ring.data());
+            Air down, up;
+            down.lossPercent = up.lossPercent = 20;
+            std::uint8_t frame[kNetCmdBytes];
+            int ticks = 0;
+            for (; ticks < 5000 && !(takes.known && takes.base >= takes.pieces()); ++ticks)
+            {
+                down.now = up.now = ticks;
+                up.send(frame, takes.ask(frame));
+                for (const auto &bytes : up.land())
+                    sends.asked(4, bytes.data(), static_cast<int>(bytes.size()));
+                std::uint32_t index;
+                if (sends.next(index))
+                    down.send(frame, sends.piece(index, picture.data() + index * kAirPiece, sends.pieceBytes(index), frame));
+                for (const auto &bytes : down.land())
+                {
+                    AirHead head;
+                    if (airRead(bytes.data(), static_cast<int>(bytes.size()), head))
+                        takes.frame(head);
+                }
+            }
+            check(takes.known && takes.base >= takes.pieces() && std::memcmp(ring.data(), picture.data(), picture.size()) == 0 &&
+                      std::strcmp(takes.name, "stalkyard") == 0,
+                  "a console without a map's picture is sent the host's, byte for byte, named, through lossy air");
+            std::printf("  (a map's picture: %d frames at one piece a frame through 20%% loss)\n", ticks);
+        }
+
         // The real streams, as a guest's loaders read them.
         const char *card = std::getenv("HLDS_AIR_DIR");
         if (card == nullptr)
@@ -772,6 +812,30 @@ namespace
             started = started && m[n]->passedCount == 1 && m[n]->passed[0].type == NetEventType::Start &&
                       m[n]->passed[0].v[0] == 0x1234 && m[n]->passed[0].v[2] == 20;
         check(started, "the host's word to start reaches each of them, once, with which map and what limits");
+
+        // Each says when its map is loaded; the host hears who, and says go.
+        for (int n = 0; n < 3; ++n)
+            m[n]->passedCount = 0;
+        netSay(*m[1], netEvent(NetEventType::Ready));
+        run(30);
+        bool readyHeard = m[0]->passedCount == 1 && m[0]->passed[0].type == NetEventType::Ready && m[0]->passed[0].from == 1;
+        check(readyHeard, "a client's word that it is ready reaches the host, from that client, once");
+        m[0]->passedCount = 0;
+        netSay(*m[2], netEvent(NetEventType::Ready));
+        netSay(*m[0], netEvent(NetEventType::Go));
+        run(30);
+        bool went = m[0]->passedCount == 1 && m[0]->passed[0].from == 2;
+        for (int n = 1; n < 3; ++n)
+            went = went && m[n]->passedCount == 1 && m[n]->passed[0].type == NetEventType::Go;
+        check(went, "... and the host's word to go reaches every client");
+        for (int n = 0; n < 3; ++n)
+            m[n]->passedCount = 0;
+        netSay(*m[0], netEvent(NetEventType::Cancel));
+        run(30);
+        bool cancelled = true;
+        for (int n = 1; n < 3; ++n)
+            cancelled = cancelled && m[n]->passedCount == 1 && m[n]->passed[0].type == NetEventType::Cancel;
+        check(cancelled, "... as does its word that the match is not to begin after all");
     }
 
     /// Version 2's frames and what goes in them: eight players and still

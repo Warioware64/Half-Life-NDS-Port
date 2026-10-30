@@ -973,6 +973,12 @@ namespace hlrt
 
     bool HudDraw::showLoading()
     {
+#ifdef HLDS_CHILD
+        // (Sent the game, a load goes dark: the picture could not be held on
+        // the screen while the map's textures are written -- FrameFreeze's
+        // bank is the ARM7's -- and is not kept.)
+        return false;
+#endif
         if (loadingMaterial_ == nullptr)
         {
             NEA_Material *material = nullptr;
@@ -1119,7 +1125,9 @@ namespace hlrt
 
     bool HudDraw::showMenu()
     {
-        if (!global.hasFat)
+        // (The game's, on a card or sent by a host: a console that was sent
+        // it has the background, and no animated name.)
+        if (!global.hasData)
             return false;
         if (menuMaterial_ == nullptr)
         {
@@ -1171,6 +1179,10 @@ namespace hlrt
         menuSince_ = Global::vblanks();
         menuShown = static_cast<NEA_Material *>(menuMaterial_);
         logoShown = nullptr;
+        // (The picture hideMenu left on the screen gives way to it: a map
+        // load thaws it as it ends, but one that failed -- or none at all,
+        // SEND GAME's -- does not.)
+        frameFreeze.thaw();
         return true;
     }
 

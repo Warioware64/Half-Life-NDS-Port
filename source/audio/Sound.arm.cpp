@@ -185,8 +185,21 @@ namespace hlrt
         {
             for (int i = 0; i < count; ++i)
             {
-                if (kept[i] != (pass == 0) || view.sounds[i].name[0] == '\0' || (lazy_ != nullptr && lazy_[i]))
+                if (kept[i] != (pass == 0) || view.sounds[i].name[0] == '\0')
                     continue;
+                // (The later weapons' sounds, read when first played on a card,
+                // cannot be here: the map's stream is over by then. Those the
+                // base has are borrowed now -- they cost nothing -- and the
+                // rest go without.)
+                if (lazy_ != nullptr && lazy_[i])
+                {
+                    if (borrowClip(view.sounds[i].name, clips_[i]))
+                    {
+                        lazy_[i] = 0;
+                        ++loaded_;
+                    }
+                    continue;
+                }
                 if (borrowClip(view.sounds[i].name, clips_[i]) || readClip(view.sounds[i].name, clips_[i]))
                 {
                     ++loaded_;

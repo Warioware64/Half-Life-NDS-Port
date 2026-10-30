@@ -19,6 +19,9 @@
 #include "audio/Sound.hpp"
 #include "data/ModelCache.hpp"
 #include "render/EffectDraw.hpp"
+#include "render/MapCard.hpp"
+#include "HlPreview.hpp"
+#include <sys/stat.h>
 #ifdef HLDS_CHILD
 #include "net/GuestLoad.hpp"
 #endif
@@ -179,6 +182,7 @@ namespace hlrt
         profilesSeen_ = 0;
         phase_ = Phase::Hosting;
         clientsWere_ = 0;
+        starting_ = goAsked_ = cancelled_ = false;
         ended_ = "";
         startPending_ = false;
         return true;
@@ -234,13 +238,96 @@ namespace hlrt
             const std::string *map = hostedMap(maps_);
             return map != nullptr ? map->c_str() : "";
         }
-        // (What the host's rules say now; else what its beacon said.)
+        // (What the host's rules say now; else what its beacon said; else,
+        // a map this card has not got, what the host's picture of it said.)
         for (const std::string &map : maps_)
         {
             if (match_.rules.mapHash != 0 && nameHash(map.c_str()) == match_.rules.mapHash)
                 return map.c_str();
         }
+        if (!previewName_.empty() && nameHash(previewName_.c_str()) == match_.rules.mapHash)
+            return previewName_.c_str();
         return lobbyMap_.c_str();
+    }
+
+    void NetGame::previewEnd()
+    {
+        std::free(previewRing_);
+        previewRing_ = nullptr;
+        preview_.ring = nullptr;
+    }
+
+    void NetGame::previewTick()
+    {
+        // (A client in its lobby: nothing is asked for while a match begins.)
+        const std::uint32_t hash = match_.rules.mapHash;
+        if (isHost() || phase_ != Phase::Lobby || starting_ || hash == 0 || hash == previewHad_)
+            return;
+        if (previewRing_ != nullptr && previewHash_ == hash)
+        {
+            // (Ten seconds and nothing: the host has no picture of it.)
+            if (Global::vblanks() - previewSince_ > 10 * 60)
+            {
+                previewHad_ = hash;
+                previewEnd();
+            }
+            return;
+        }
+        // Another map: a picture of it here already, or not the card's?
+#ifndef HLDS_CHILD
+        const char *map = lobbyMap();
+        if (map[0] == 0 || mapPictured(map))
+        {
+            previewHad_ = hash;
+            return;
+        }
+#endif
+        previewEnd();
+        previewRing_ = static_cast<std::uint8_t *>(std::malloc(airPieces(kPreviewBytes) * kAirPiece));
+        if (previewRing_ == nullptr)
+            return;
+        preview_.want(AirStream::Preview, "", previewRing_);
+        previewHash_ = hash;
+        previewSince_ = Global::vblanks();
+    }
+
+    void NetGame::previewFrame(const AirHead &head)
+    {
+        if (previewRing_ == nullptr || nameHash(head.name) != previewHash_ || !preview_.frame(head))
+            return;
+        if (!preview_.known || preview_.base < preview_.pieces() || preview_.length != kPreviewBytes)
+            return;
+        // All of it: in the window's slots in order, the whole file. Kept --
+        // on the card, beside this console's own; a console without one
+        // keeps it for its map card -- and the host told, for a while.
+        if (previewValid(previewRing_, kPreviewBytes))
+        {
+            previewName_ = head.name;
+#ifdef HLDS_CHILD
+            mapCard.givePicture(head.name, previewRing_);
+#else
+            const std::string folder = global.savesDir() + kPreviewFolder;
+            mkdir(folder.c_str(), 0777);
+            if (std::FILE *file = std::fopen((folder + head.name + ".hpv").c_str(), "wb"))
+            {
+                std::fwrite(previewRing_, 1, kPreviewBytes, file);
+                std::fclose(file);
+            }
+            mapCard.hide();
+#endif
+        }
+        previewHad_ = previewHash_;
+        previewLinger_ = 20;
+        previewEnd();
+    }
+
+    int NetGame::previewReply(std::uint8_t *bytes)
+    {
+        if (previewLinger_ > 0)
+            --previewLinger_;
+        else if (previewRing_ == nullptr)
+            return 0;
+        return preview_.ask(bytes);
     }
 
     bool NetGame::join(int index)
@@ -314,6 +401,7 @@ namespace hlrt
         hldata::renew(match_);
         phase_ = Phase::Off;
         startPending_ = false;
+        starting_ = goAsked_ = cancelled_ = false;
 #ifndef HLDS_CHILD
         airEnd();
         guests_ = 0;
@@ -331,6 +419,7 @@ namespace hlrt
         hldata::renew(match_);
         phase_ = Phase::Off;
         startPending_ = false;
+        starting_ = goAsked_ = cancelled_ = false;
         ended_ = why;
     }
 
@@ -339,23 +428,53 @@ namespace hlrt
     {
         if (phase_ != Phase::Hosting)
             return;
-        // Consoles it gave the game to: sent the map first, as they load it.
-        // (Nobody new meanwhile.)
-        if ((guests_ & netlink::clients()) != 0)
+        // Every console told at once, and each loads its map now -- those
+        // with the game from their cards, those without it as this one sends
+        // it -- and says when it has (Ready). This one loads its own last:
+        // it cannot send and load at once. (Nobody new meanwhile.)
+        // (The rules as they are now, before the start: in that order on
+        // every console.)
+        sayRules();
+        const std::uint32_t hash = nameHash(map.c_str());
+        // (How hard: every console runs its own monsters and chargers.)
+        netSay(match_, netEvent(NetEventType::Start, 0, static_cast<std::int16_t>(hash & 0xFFFF),
+                                static_cast<std::int16_t>(hash >> 16), fragLimit, minuteLimit, skill));
+        pendingSkill_ = skill;
+        match_.fragLimit = fragLimit;
+        match_.minuteLimit = minuteLimit;
+        netlink::admit(false);
+        pendingMap_ = map;
+        serveSkill_ = skill;
+        serveStage_ = 0;
+        starting_ = true;
+        ready_ = 0;
+        goAsked_ = false;
+        phase_ = Phase::Serving;
+        // (Said before anything else: a console sent the game is told before
+        // its stream begins, and the others load at once.)
+        for (int n = 0; n < 6; ++n)
         {
-            netlink::admit(false);
-            pendingMap_ = map;
-            serveFrag_ = fragLimit;
-            serveMinutes_ = minuteLimit;
-            serveSkill_ = skill;
-            serveStage_ = 0;
-            phase_ = Phase::Serving;
-            // (A console still being sent the game itself: that first.)
-            if (!air_.sending())
-                serveNext();
-            return;
+            frame();
+            swiWaitForVBlank();
         }
-        go(map, fragLimit, minuteLimit, skill);
+        // (A console still being sent the game itself: that first. A map's
+        // picture is given up.)
+        if (air_.sending() && air_.stream == AirStream::Preview)
+            airEnd();
+        if (!air_.sending())
+            serveNext();
+    }
+
+    void NetGame::cancelStart()
+    {
+        if (!starting_ || !isHost() || phase_ == Phase::Playing)
+            return;
+        netSay(match_, netEvent(NetEventType::Cancel));
+        airEnd();
+        starting_ = false;
+        startPending_ = false;
+        phase_ = Phase::Hosting;
+        netlink::admit(true);
     }
 
     void NetGame::serveNext()
@@ -389,16 +508,10 @@ namespace hlrt
                     netlink::kick(c);
             }
         }
-        // Sent: a second for them to finish saying so and listen again, and
-        // then the start (frame()).
-        if (serveStage_ == 2)
-        {
-            serveStage_ = 3;
-            serveAt_ = Global::vblanks() + 60;
-            return;
-        }
+        // Sent (or nobody to send it to): this console's own map now.
+        serveStage_ = 3;
         phase_ = Phase::Hosting;
-        go(pendingMap_, serveFrag_, serveMinutes_, serveSkill_);
+        startPending_ = true;
     }
 
     bool NetGame::airBegin(AirStream stream, const std::string &name, const std::string &path, unsigned mask, int skill)
@@ -456,9 +569,25 @@ namespace hlrt
         std::uint16_t serve;
         if (!airAskOf(bytes, size, stream, serve) || from < 1 || from >= kNetPlayers)
             return;
-        guests_ |= 1u << from;
+        // (A console that asks for any of the game is one sent it; asking
+        // for a map's picture, any console does.)
+        if (stream != AirStream::Preview)
+            guests_ |= 1u << from;
         if (air_.asked(from, bytes, size))
             return;
+        // The picture of the lobby's map, for a console that has none: sent
+        // to all who ask while it is, and only in the lobby.
+        if (stream == AirStream::Preview && serve == 0 && phase_ == Phase::Hosting)
+        {
+            const std::string *map = hostedMap(maps_);
+            if (map == nullptr)
+                return;
+            if (air_.sending() && air_.stream == AirStream::Preview && *map == air_.name)
+                air_.add(from);
+            else if (!air_.sending() && mapPictured(*map))
+                airBegin(AirStream::Preview, *map, "saves/" + std::string(kPreviewFolder) + *map + ".hpv", 1u << from);
+            return;
+        }
         // A console that has just come asks for the game itself.
         if (stream == AirStream::Common && serve == 0)
         {
@@ -474,6 +603,9 @@ namespace hlrt
     {
         if (!air_.sending())
             return false;
+        // (A map's picture is not worth saying: it is a second's.)
+        if (air_.stream == AirStream::Preview)
+            return false;
         what = air_.stream == AirStream::Common ? "the game" : air_.name;
         consoles = air_.waiting();
         percent = air_.percent();
@@ -488,31 +620,34 @@ namespace hlrt
         return n;
     }
 
-    void NetGame::go(const std::string &map, int fragLimit, int minuteLimit, int skill)
+    int NetGame::startStatus(int p, char *line, int room) const
     {
-        // (The rules as they are now, before the start: in that order on
-        // every console.)
-        sayRules();
-        const std::uint32_t hash = nameHash(map.c_str());
-        // (How hard: every console runs its own monsters and chargers.)
-        netSay(match_, netEvent(NetEventType::Start, 0, static_cast<std::int16_t>(hash & 0xFFFF),
-                                static_cast<std::int16_t>(hash >> 16), fragLimit, minuteLimit, skill));
-        pendingSkill_ = skill;
-        match_.fragLimit = fragLimit;
-        match_.minuteLimit = minuteLimit;
-        netlink::admit(false);
-        pendingMap_ = map;
-        startPending_ = true;
-        // (Said before this console goes quiet to load its own map.)
-        for (int n = 0; n < 6; ++n)
+        // 0: nothing to say of p (not there); 1: still on its way; 2: ready.
+        if (p < 0 || p >= kNetPlayers || !netHere(match_, p))
+            return 0;
+        if (p == 0)
         {
-            frame();
-            swiWaitForVBlank();
+            std::snprintf(line, static_cast<std::size_t>(room), "%s", air_.sending() ? "sending" : "loading");
+            return 1;
         }
+        if ((ready_ >> p) & 1)
+        {
+            std::snprintf(line, static_cast<std::size_t>(room), "ready");
+            return 2;
+        }
+        const AirSender::Want &want = air_.wants[p];
+        if (air_.sending() && want.on && !want.done)
+            std::snprintf(line, static_cast<std::size_t>(room), "receiving %d%%",
+                          air_.pieces() == 0 ? 0 : static_cast<int>(want.base * 100 / air_.pieces()));
+        else
+            std::snprintf(line, static_cast<std::size_t>(room), "loading");
+        return 1;
     }
 #else
     // (A console that was sent the game is never a host.)
     void NetGame::start(const std::string &, int, int, int) {}
+    void NetGame::cancelStart() {}
+    int NetGame::startStatus(int, char *, int) const { return 0; }
     bool NetGame::sending(const char *&, int &, int &) const { return false; }
     int NetGame::guests() const { return 0; }
 
@@ -525,6 +660,43 @@ namespace hlrt
         return true;
     }
 #endif
+
+    void NetGame::loadedMap()
+    {
+        // A client says so; the host gives the others a while from now.
+        if (isHost())
+            loadedAt_ = Global::vblanks();
+        else
+            netSay(match_, netEvent(NetEventType::Ready));
+    }
+
+    bool NetGame::goAsked()
+    {
+        if (!starting_)
+            return false;
+        if (isHost())
+        {
+            // Everyone there ready -- or twenty seconds since this console
+            // was: those not yet begin when they are (Go waits for them).
+            const unsigned here = netlink::clients();
+            if ((ready_ & here) != here && Global::vblanks() - loadedAt_ < kReadyVblanks)
+                return false;
+            netSay(match_, netEvent(NetEventType::Go));
+            goAsked_ = true;
+        }
+        if (!goAsked_)
+            return false;
+        starting_ = false;
+        goAsked_ = false;
+        return true;
+    }
+
+    bool NetGame::cancelled()
+    {
+        const bool was = cancelled_;
+        cancelled_ = false;
+        return was;
+    }
 
     bool NetGame::startAsked(std::string &map, int &skill)
     {
@@ -686,10 +858,18 @@ namespace hlrt
                     airAsk(from, bytes, size);
                 continue;
             }
-#else
+#endif
             if (size > 3 && bytes[3] == kNetFrameAirData)
             {
                 AirHead head;
+                if (!isHost() && airRead(bytes, size, head) && head.stream == AirStream::Preview)
+                {
+                    previewFrame(head);
+                    continue;
+                }
+#ifndef HLDS_CHILD
+                continue;
+#else
                 int reply = 0;
                 if (guest::airFrame(bytes, size, airReply_, reply, head))
                 {
@@ -699,8 +879,8 @@ namespace hlrt
                 if (reply > 0)
                     airReplySize_ = reply;
                 continue;
-            }
 #endif
+            }
             gameApi.netRead(match_, bytes, size, from);
         }
 #ifndef HLDS_CHILD
@@ -708,8 +888,10 @@ namespace hlrt
         // stream that all have is done with, and the next sent.
         if (air_.sending())
         {
+            // (Not a console that stopped asking for a picture: only one
+            // the match, or the game itself, is waiting for.)
             const unsigned out = air_.frame();
-            for (int c = 1; c < kNetPlayers; ++c)
+            for (int c = 1; c < kNetPlayers && air_.stream != AirStream::Preview; ++c)
             {
                 if ((out >> c) & 1)
                 {
@@ -724,11 +906,6 @@ namespace hlrt
                     serveNext();
             }
         }
-        else if (phase_ == Phase::Serving && serveStage_ == 3 && static_cast<std::int32_t>(Global::vblanks() - serveAt_) >= 0)
-        {
-            phase_ = Phase::Hosting;
-            go(pendingMap_, serveFrag_, serveMinutes_, serveSkill_);
-        }
 #endif
 
         // The lobby's part of it; with a map loaded, the game's tick does
@@ -738,33 +915,49 @@ namespace hlrt
             static LogicWorld none;
             static PlayerState nobody;
             gameApi.netLobby(match_, none, nobody);
+            if (isHost())
+            {
 #ifndef HLDS_CHILD
-            // A stream being sent: as fast as the air takes it while a
-            // match waits for it (the game's frames now and then, for those
-            // who have the game), every other frame in the lobby.
-            // (A frame of some kind every frame, whatever: a client answers
-            // only a frame of the host's -- one that has nothing to say for
-            // itself would wait for nothing.)
-            if (phase_ == Phase::Serving && air_.sending())
-            {
-                if ((++ticks_ & 7) == 0)
+                // A stream being sent: as fast as the air takes it while a
+                // match waits for it (the game's frames now and then, for
+                // those who have the game), every other frame in the lobby.
+                // (A frame of some kind every frame, whatever: a client
+                // answers only a frame of the host's -- one that has nothing
+                // to say for itself would wait for nothing.)
+                if (phase_ == Phase::Serving && air_.sending())
+                {
+                    if ((++ticks_ & 7) == 0)
+                        send();
+                    if (airSend((ticks_ & 7) == 0 ? 1 : 2) == 0 && (ticks_ & 7) != 0)
+                        send();
+                }
+                else if (!(air_.sending() && (++ticks_ & 1) && airSend(1) > 0))
                     send();
-                if (airSend((ticks_ & 7) == 0 ? 1 : 2) == 0 && (ticks_ & 7) != 0)
-                    send();
-            }
-            else if (!(air_.sending() && (++ticks_ & 1) && airSend(1) > 0))
-                send();
-#else
-            // (What a stream's frame asked to be answered, in place of the
-            // game's.)
-            if (airReplySize_ > 0)
-            {
-                netlink::send(airReply_, airReplySize_);
-                airReplySize_ = 0;
+#endif
             }
             else
-                send();
+            {
+                // A client: what a stream's frame asked to be answered, in
+                // place of the game's; and every other frame, while it asks
+                // for the host's picture of its map, that.
+                previewTick();
+                std::uint8_t reply[kNetReplyBytes];
+                int size = 0;
+#ifdef HLDS_CHILD
+                if (airReplySize_ > 0)
+                {
+                    std::memcpy(reply, airReply_, static_cast<std::size_t>(airReplySize_));
+                    size = airReplySize_;
+                    airReplySize_ = 0;
+                }
 #endif
+                if (size == 0 && (++ticks_ & 1))
+                    size = previewReply(reply);
+                if (size > 0)
+                    netlink::send(reply, size);
+                else
+                    send();
+            }
         }
 
         // Everyone in their own colours, as their profiles say.
@@ -789,26 +982,43 @@ namespace hlrt
         for (int n = 0; n < match_.passedCount; ++n)
         {
             const NetEvent &event = match_.passed[n];
+            if (event.type == NetEventType::Ready && isHost() && event.from > 0 && event.from < kNetPlayers)
+            {
+                ready_ |= 1u << event.from;
+                continue;
+            }
+            if (event.type == NetEventType::Go && !isHost())
+            {
+                goAsked_ = true;
+                continue;
+            }
+            if (event.type == NetEventType::Cancel && !isHost())
+            {
+                starting_ = goAsked_ = startPending_ = false;
+                cancelled_ = true;
+                continue;
+            }
             if (event.type == NetEventType::Start && !isHost())
             {
+                starting_ = true;
+                goAsked_ = cancelled_ = false;
                 const std::uint32_t hash = static_cast<std::uint16_t>(event.v[0]) |
                                            (static_cast<std::uint32_t>(static_cast<std::uint16_t>(event.v[1])) << 16);
                 pendingMap_.clear();
+                match_.fragLimit = event.v[2];
+                match_.minuteLimit = event.v[3];
+                // (A host from before there was a choice says 0: MEDIUM.)
+                pendingSkill_ = event.v[4] >= 1 && event.v[4] <= 3 ? event.v[4] : 2;
 #ifdef HLDS_CHILD
-                // (Sent the game: the map is the one it was sent.)
-                if (nameHash(guest::airMap()) == hash)
-                    pendingMap_ = guest::airMap();
-#else
+                // (Sent the game: its map comes as the host sends it -- airAsked.)
+                (void)hash;
+                continue;
+#endif
                 for (const std::string &map : maps_)
                 {
                     if (nameHash(map.c_str()) == hash)
                         pendingMap_ = map;
                 }
-#endif
-                match_.fragLimit = event.v[2];
-                match_.minuteLimit = event.v[3];
-                // (A host from before there was a choice says 0: MEDIUM.)
-                pendingSkill_ = event.v[4] >= 1 && event.v[4] <= 3 ? event.v[4] : 2;
                 if (pendingMap_.empty())
                 {
                     match_.passedCount = 0;
@@ -866,6 +1076,9 @@ namespace hlrt
         match_.firstActor = -1;
         match_.passedCount = 0;
         phase_ = isHost() ? Phase::Hosting : Phase::Lobby;
+        // (Its map's picture asked for again: a console sent the game let go
+        // of it for the match.)
+        previewHad_ = 0;
         // (The host takes newcomers again, between matches.)
         if (isHost())
             netlink::admit(true);

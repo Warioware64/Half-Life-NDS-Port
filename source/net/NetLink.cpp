@@ -486,6 +486,26 @@ namespace hlrt::netlink
         return guests > 0;
     }
 
+    DlCounts dlCounts()
+    {
+        DlCounts counts;
+        Wifi_MultiplayerHostCounters host = {};
+        Wifi_MultiplayerGetHostCounters(&host);
+        counts.armed = host.cmd_armed;
+        counts.done = host.cmd_done;
+        counts.retried = host.cmd_retry;
+        counts.refused = Wifi_DlPlayGetDiag()->cmd_tx_failures;
+        for (int n = 1; n < 16; ++n)
+        {
+            int current = 0, total = 0;
+            if (dlGuests() & (1u << n))
+                Wifi_DlPlayGetClientProgress(n, &current, &total);
+            if (current > 0 && static_cast<unsigned>(current) > counts.blocks)
+                counts.blocks = static_cast<unsigned>(current);
+        }
+        return counts;
+    }
+
     void dlLock(bool locked)
     {
         if (offering)

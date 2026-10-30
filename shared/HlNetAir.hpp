@@ -71,6 +71,7 @@ namespace hldata
         Common, ///< what the game needs before any map: its letters, its pictures
         Base,   ///< a group's (HlManifest.hpp's AirGroup), by its name: "match"
         Map,    ///< a map's own, by its name
+        Preview, ///< the picture of the host's map (HlPreview.hpp), by the map's name: to any console without one
     };
     /// A stream's name on the wire.
     inline constexpr int kAirNameBytes = 24;

@@ -33,12 +33,14 @@
 #include "audio/Sound.hpp"
 #include "render/GpuStats.hpp"
 #include "render/EffectDraw.hpp"
+#include "render/MapCard.hpp"
 #include "render/ModelDraw.hpp"
 #include "render/HudDraw.hpp"
 #include "render/FrameFreeze.hpp"
 #include "render/ScreenFade.hpp"
 #include "render/TopText.hpp"
 #include "ui/Menu.hpp"
+#include "ui/TouchCanvas.hpp"
 
 namespace hlrt
 {
@@ -58,6 +60,13 @@ namespace
     }
 
     std::string currentMap;
+    /// A map loaded only to be photographed (takeAllPreviews): nothing of it
+    /// is shown -- the curtain stays down, the touch screen says what is
+    /// being done.
+    bool quietLoad = false;
+    /// A match's map: loaded as any, but not shown once it is -- the curtain
+    /// stays down until every console has it (waitForGo).
+    bool holdLoad = false;
 
 #ifdef HLDS_CHILD
     /// Sent the game: what is said while there is nothing else to show.
@@ -132,7 +141,10 @@ namespace
                 guestProgress(0);
                 if (hlrt::guest::receiveAir(guestProgress))
                 {
+                    // (The letters at once, while they are there: the common
+                    // stream's files go once the rest has read them.)
                     global.hasData = true;
+                    hlrt::touchCanvas.loadFonts();
                     return;
                 }
             }
@@ -243,7 +255,8 @@ namespace
         camera.pitch = pitch;
         camera.update();
         hlrt::game.held.active = held;
-        hlrt::screenFade.curtainUp(curtainFrames());
+        if (!quietLoad && !holdLoad)
+            hlrt::screenFade.curtainUp(curtainFrames());
 #else
         (void)map;
 #endif
@@ -387,7 +400,8 @@ namespace
             return LoadResult::NotOnCard;
         }
         clock.mark("peek");
-        hlrt::bottomScreen.showMessage("LOADING", name.c_str());
+        if (!quietLoad)
+            hlrt::bottomScreen.showMessage("LOADING", name.c_str());
         // The last picture of the map being left stays on the screen while
         // this one loads, if there is one (FrameFreeze). Otherwise nothing of
         // the old picture is seen from here on: the hardware would go on
@@ -418,7 +432,7 @@ namespace
         // With no picture kept: the game's loading picture, on the screen
         // and left there while the map is read (video memory is empty just
         // now: there is room). That is the first load, and little else.
-        if (!kept && hlrt::hudDraw.showLoading())
+        if (!kept && !quietLoad && hlrt::hudDraw.showLoading())
             hlrt::screenFade.curtainUp();
 
         clock.mark("down");
@@ -517,7 +531,8 @@ namespace
             hlrt::game.logic.musicRequest = hlrt::player.debugTrack;
             hlrt::player.debugTrack = -1;
         }
-        hlrt::bottomScreen.showPad();
+        if (!quietLoad && !holdLoad)
+            hlrt::bottomScreen.showPad();
         // Maps converted by an older converter still load, but without what
         // was fixed since in how a map is converted: said, once.
         static bool toldOld = false;
@@ -531,7 +546,8 @@ namespace
         hlrt::screenFade.curtainDown();
         hlrt::hudDraw.hideLoading();
         hlrt::frameFreeze.thaw();
-        hlrt::screenFade.curtainUp(curtainFrames());
+        if (!quietLoad && !holdLoad)
+            hlrt::screenFade.curtainUp(curtainFrames());
 #ifdef HLDS_CHILD
         // (Sent the game: the map's stream has given its loaders all it had.
         // Nothing of it is read during play.)
@@ -539,6 +555,86 @@ namespace
 #endif
         hlrt::guard::check("map loaded");
         return LoadResult::Ok;
+    }
+
+    /// A match's map loaded, on any console: the others told (a client says
+    /// it is ready), and the word to begin waited for, behind the curtain,
+    /// the radio heard all the while -- then the match begins on all of
+    /// them at once. False if it is not to (the host gave it up, or is gone,
+    /// or nothing has come for three minutes): the map is to be let go.
+    bool waitForGo(const std::string &map)
+    {
+        // (The host: the map's picture, the first time, while the others
+        // are still on their way.)
+        if (hlrt::netGame.isHost())
+            takePreview(map);
+        hlrt::screenFade.curtainDown();
+        hlrt::bottomScreen.showMessage("WAITING", "for the others to load the map");
+        hlrt::netGame.loadedMap();
+        for (int n = 0; n < 3 * 60 * 60; ++n)
+        {
+            swiWaitForVBlank();
+            hlrt::sound.frame();
+            hlrt::netGame.frame();
+            if (!hlrt::netGame.on() || hlrt::netGame.cancelled())
+                return false;
+            if (hlrt::netGame.goAsked())
+            {
+                hlrt::netGame.mapLoaded();
+                hlrt::bottomScreen.showPad();
+                hlrt::screenFade.curtainUp(curtainFrames());
+                return true;
+            }
+        }
+        hlrt::netGame.leave();
+        return false;
+    }
+
+    /// HOST, on a card with multiplayer maps never photographed: each loaded
+    /// in turn, behind the curtain, for its picture (takePreview), and let
+    /// go -- what the lobby's map card shows, here and to the others. Held
+    /// down, the touch screen (or B) stops it after the map being taken.
+    void takeAllPreviews(const std::vector<std::string> &maps)
+    {
+        std::vector<std::string> todo;
+        for (const std::string &map : maps)
+        {
+            if (!hlrt::mapPictured(map))
+                todo.push_back(map);
+        }
+        std::string error;
+        quietLoad = true;
+        hlrt::screenFade.curtainDown();
+        for (std::size_t n = 0; n < todo.size(); ++n)
+        {
+            char line[64];
+            std::snprintf(line, sizeof(line), "%u of %u: %s. Hold the screen to stop.", static_cast<unsigned>(n + 1),
+                          static_cast<unsigned>(todo.size()), todo[n].c_str());
+            hlrt::bottomScreen.showMessage("TAKING MAP PICTURES", line);
+            hlrt::game.resetProgress();
+            leavingAbandoned = true;
+            if (loadLevel(todo[n], nullptr, error) == LoadResult::Ok)
+                takePreview(todo[n]);
+            else
+            {
+                // (Said, for a moment: a map this console cannot hold has no
+                // picture -- it is asked again the next time.)
+                hlrt::bottomScreen.showMessage(todo[n].c_str(), error.c_str());
+                for (int wait = 0; wait < 90; ++wait)
+                    swiWaitForVBlank();
+            }
+            if (hlrt::level.loaded())
+            {
+                dropMap();
+                hlrt::level.unload();
+            }
+            scanKeys();
+            if (keysHeld() & (KEY_TOUCH | KEY_B))
+                break;
+        }
+        quietLoad = false;
+        leavingAbandoned = false;
+        hlrt::game.resetProgress();
     }
 
     /// The game as it is, into `slot` (a kSlot*). Said on the screen either
@@ -1139,29 +1235,15 @@ int main(int argc, char *argv[])
                     hlrt::SaveGame::newRun(Global::vblanks() * 2654435761u + 1u);
                     leavingAbandoned = true;
                     hlrt::guest::offerAir(air.name);
-                    if (loadLevel(air.name, nullptr, error) == LoadResult::Ok)
+                    // (The host's picture of it goes: its memory is the map's.)
+                    hlrt::mapCard.dropPicture();
+                    holdLoad = true;
+                    const LoadResult loaded = loadLevel(air.name, nullptr, error);
+                    holdLoad = false;
+                    if (loaded == LoadResult::Ok)
                     {
-                        hlrt::screenFade.curtainDown();
-                        hlrt::bottomScreen.showMessage("WAITING", "for the others to load the map");
-                        std::string map;
-                        int skill = hldata::kSkillMedium;
-                        // (A minute at most: a host that has gone quiet, or
-                        // left this console out, is not waited for.)
-                        for (int n = 0; n < 3600 && hlrt::netGame.on() && !hlrt::netGame.startAsked(map, skill); ++n)
-                        {
-                            swiWaitForVBlank();
-                            hlrt::sound.frame();
-                            hlrt::netGame.frame();
-                        }
-                        if (map.empty())
-                            hlrt::netGame.leave();
-                        if (hlrt::netGame.on())
-                        {
-                            hlrt::netGame.mapLoaded();
-                            hlrt::bottomScreen.showPad();
-                            hlrt::screenFade.curtainUp(curtainFrames());
+                        if (waitForGo(air.name))
                             break;
-                        }
                     }
                     else
                     {
@@ -1192,6 +1274,16 @@ int main(int argc, char *argv[])
                 back();
                 hlrt::menu.openTitle(); // (it could not be: the title again)
             }
+            else if (item == Menu::Action::TakePreviews)
+            {
+                // (Before the host's game is opened: nobody waits on it.)
+                leaving();
+                takeAllPreviews(hlrt::netGame.maps());
+                back();
+                hlrt::mapCard.hide();
+                hlrt::menu.openHost();
+                hlrt::screenFade.curtainUp();
+            }
             else if (item == Menu::Action::NewGame)
             {
                 leaving();
@@ -1218,17 +1310,25 @@ int main(int argc, char *argv[])
                 hlrt::game.globals.set(hldata::kGlobalSkill, static_cast<std::uint8_t>(skill));
                 hlrt::SaveGame::newRun(Global::vblanks() * 2654435761u + 1u);
                 leavingAbandoned = true;
-                if (loadLevel(map, nullptr, error) == LoadResult::Ok)
-                {
-                    hlrt::netGame.mapLoaded();
-                    // (The host: the map's picture, the first time.)
-                    if (hlrt::netGame.isHost())
-                        takePreview(map);
+                holdLoad = true;
+                const LoadResult loaded = loadLevel(map, nullptr, error);
+                holdLoad = false;
+                if (loaded == LoadResult::Ok && waitForGo(map))
                     break;
+                // (Given up: the map goes, and the lobby again -- or, out of
+                // the game, the title.)
+                if (hlrt::level.loaded())
+                {
+                    dropMap();
+                    hlrt::level.unload();
                 }
                 back();
-                hlrt::netGame.leave();
-                hlrt::menu.openTitle();
+                if (loaded != LoadResult::Ok)
+                    hlrt::netGame.leave();
+                if (hlrt::netGame.on())
+                    hlrt::menu.openLobby();
+                else
+                    hlrt::menu.openTitle();
             }
         }
         settings.save();

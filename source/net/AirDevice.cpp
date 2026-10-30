@@ -2,6 +2,8 @@
 #ifdef HLDS_CHILD
 #include "net/AirDevice.hpp"
 
+#include "HlUi.hpp"
+
 #include <nds.h>
 #include <nds/arm9/device_io.h>
 
@@ -317,12 +319,22 @@ namespace hlrt::air
             return true;
         }
 
+        /// The common stream's files kept after it has been read through:
+        /// what is read again later -- the title's background each time it
+        /// is shown, the logos for the profile and the spray. (41 KB:
+        /// HlGuest.hpp's reserve. Not the loading picture: a load goes dark
+        /// here -- FrameFreeze -- and it would be garbled.)
+        bool keptCommon(const char *name)
+        {
+            return std::strcmp(name, hldata::kMenuFile) == 0 || std::strcmp(name, hldata::kLogosFile) == 0;
+        }
+
         void drop(bool ofMap)
         {
             int kept = 0;
             for (int i = 0; i < fileCount; ++i)
             {
-                if (files[i].owned && files[i].ofMap == ofMap)
+                if (files[i].owned && files[i].ofMap == ofMap && (ofMap || !keptCommon(files[i].name)))
                     std::free(const_cast<std::uint8_t *>(files[i].data));
                 else
                     files[kept++] = files[i];

@@ -885,18 +885,17 @@ namespace hlds
         report = PackReport();
         Packing packing;
         packing.report = &report;
-        // The pictures and letters of the game, not of its title (the menu's
-        // background and the animated name are never shown on a console
-        // that was sent the game: it goes straight into the match); the
-        // menu's sounds. Stored: read in place.
+        // The pictures and letters of the game, and the title's background
+        // (shown behind the lobby of a console that was sent the game) --
+        // not the animated name, whose pictures are a megabyte; the menu's
+        // sounds. Stored: read in place.
         std::vector<fs::path> files;
         std::error_code ec;
         for (auto it = fs::directory_iterator(stage / "ui", ec); !ec && it != fs::directory_iterator();
              it.increment(ec))
         {
             const std::string name = "ui/" + it->path().filename().string();
-            if (it->is_regular_file(ec) && it->path().extension() != ".tmp" && name != hldata::kLogoFile &&
-                name != hldata::kMenuFile)
+            if (it->is_regular_file(ec) && it->path().extension() != ".tmp" && name != hldata::kLogoFile)
                 files.push_back(it->path());
         }
         std::sort(files.begin(), files.end());

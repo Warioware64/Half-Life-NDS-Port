@@ -34,6 +34,9 @@ public:
     void cheated();
     /// The game has been started (the title).
     void started();
+    /// None are earned or shown now: in a game between consoles, and ever
+    /// on a console that was sent the game.
+    bool off() const;
 
 private:
     std::uint32_t map_ = 0;

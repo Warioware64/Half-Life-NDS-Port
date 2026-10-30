@@ -18,12 +18,9 @@ namespace hlrt::dlsend
     namespace
     {
         constexpr const char *kChildPath = "nitro:/dlplay/child.nds";
-        // How long more consoles are waited for, once one has come: four
-        // seconds with nobody new, twelve at most.
-        constexpr std::uint32_t kQuietVblanks = 4 * 60, kMostVblanks = 12 * 60;
         /// A sending that has not moved for this long is given up on: those
         /// that have it all are started, the rest are not.
-        constexpr std::uint32_t kStallVblanks = 10 * 60;
+        constexpr std::uint32_t kStallVblanks = 15 * 60;
         /// After the word to start: time for it to be heard.
         constexpr std::uint32_t kStartVblanks = 60;
 
@@ -32,8 +29,12 @@ namespace hlrt::dlsend
         std::size_t romSize = 0;
         int wanted = 2;
         unsigned seen = 0;
-        std::uint32_t firstAt = 0, newestAt = 0, movedAt = 0, startedAt = 0;
+        std::uint32_t movedAt = 0, startedAt = 0;
         int lastSum = -1;
+        // The radio's account, a second at a time (rate()).
+        netlink::DlCounts countsWere;
+        std::uint32_t countedAt = 0;
+        char rateLine[48] = "";
     } // namespace
 
     bool available()
@@ -115,6 +116,9 @@ namespace hlrt::dlsend
         wanted = most < 2 ? 1 : most - 1;
         seen = 0;
         lastSum = -1;
+        countsWere = netlink::DlCounts();
+        countedAt = Global::vblanks();
+        rateLine[0] = 0;
         now = State::Waiting;
         return true;
     }
@@ -129,30 +133,30 @@ namespace hlrt::dlsend
         int count = 0;
         for (int n = 1; n < 16; ++n)
             count += (here >> n) & 1;
-        if ((here & ~seen) != 0)
-        {
-            if (seen == 0)
-                firstAt = t;
-            newestAt = t;
-        }
         seen = here;
+        // (What the radio did in the last second, for the page to say.)
+        if (t - countedAt >= 60)
+        {
+            const netlink::DlCounts counts = netlink::dlCounts();
+            const unsigned blocks = counts.blocks >= countsWere.blocks ? counts.blocks - countsWere.blocks : 0;
+            std::snprintf(rateLine, sizeof(rateLine), "%u KB/s  sent %u/s  done %u  again %u  full %u",
+                          blocks * 504 / 1024, static_cast<unsigned>(static_cast<std::uint16_t>(counts.armed - countsWere.armed)),
+                          static_cast<unsigned>(static_cast<std::uint16_t>(counts.done - countsWere.done)),
+                          static_cast<unsigned>(static_cast<std::uint16_t>(counts.retried - countsWere.retried)),
+                          static_cast<unsigned>(static_cast<std::uint16_t>(counts.refused - countsWere.refused)));
+            countsWere = counts;
+            countedAt = t;
+        }
         switch (now)
         {
+        // (Those who come are held, all of them, until START: go().)
         case State::Waiting:
             if (count > 0)
                 now = State::Gathering;
             break;
         case State::Gathering:
-            // Nobody new for a while, long enough, or full: all of them at once.
             if (count == 0)
                 now = State::Waiting;
-            else if (t - newestAt >= kQuietVblanks || t - firstAt >= kMostVblanks || count >= wanted)
-            {
-                netlink::dlLock(true);
-                netlink::dlGather(false);
-                movedAt = t;
-                now = State::Sending;
-            }
             break;
         case State::Sending:
         {
@@ -190,6 +194,27 @@ namespace hlrt::dlsend
             break;
         }
     }
+
+    void go()
+    {
+        // All who are there at once; nobody else let in meanwhile.
+        if (now != State::Gathering)
+            return;
+        netlink::dlLock(true);
+        netlink::dlGather(false);
+        movedAt = Global::vblanks();
+        now = State::Sending;
+    }
+
+    bool full()
+    {
+        int count = 0;
+        for (int n = 1; n < 16; ++n)
+            count += (netlink::dlGuests() >> n) & 1;
+        return now == State::Gathering && count >= wanted;
+    }
+
+    const char *rate() { return rateLine; }
 
     State state() { return now; }
 

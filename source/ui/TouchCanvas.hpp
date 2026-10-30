@@ -37,6 +37,9 @@ namespace hlrt
         const hldata::FontView &font(int which);
         /// The ROM's own 8x8 letters.
         const hldata::FontView &plain();
+        /// The game's letters read in, if they are not yet (and the card --
+        /// or what a host sent -- has them): once for good.
+        void loadFonts();
         /// A block of cells, `w` by `h` from cell (`x`, `y`), in colours of
         /// its own -- palette `bank` (1..15) of the sub engine: the sixteen
         /// as ever but 1, 2 and 3, which are `three` (a picture in a colour
@@ -54,7 +57,6 @@ namespace hlrt
         std::uint32_t *screen_ = nullptr;
         hldata::FontView fonts_[hldata::kFontCount];
         hldata::FontView plain_;
-        void loadFonts();
     };
 
     extern TouchCanvas touchCanvas;

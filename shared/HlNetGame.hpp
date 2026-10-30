@@ -645,6 +645,9 @@ namespace hldata
                 match.over = true;
                 [[fallthrough]];
             case NetEventType::Start:
+            case NetEventType::Ready:
+            case NetEventType::Go:
+            case NetEventType::Cancel:
                 if (match.passedCount < NetMatch::kMostNotices)
                     match.passed[match.passedCount++] = event;
                 break;

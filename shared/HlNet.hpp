@@ -46,7 +46,7 @@ namespace hldata
     /// frame of another game, or of another build of this one, is not read.
     /// (Version 2: eight players, profiles, the rules, teams, sprays.)
     inline constexpr std::uint16_t kNetMagic = 0x4C48; // "HL"
-    inline constexpr std::uint8_t kNetVersion = 2;
+    inline constexpr std::uint8_t kNetVersion = 3;
 
     // ------------------------------------------------------------ the state
 
@@ -81,7 +81,9 @@ namespace hldata
         None,
         Hello,    ///< client: text = its name
         Roster,   ///< host: player `a` is called text ("" = gone)
-        Start,    ///< host: v[0..1] the map's name hash, v[2] frag limit, v[3] minutes, v[4] how hard
+        Start,    ///< host: a match is to begin -- every console loads its map (sent it, if it has not the
+                  ///< game) and says Ready; v[0..1] the map's name hash, v[2] frag limit, v[3] minutes,
+                  ///< v[4] how hard
         End,      ///< host: the match is over
         Shot,     ///< `from` fired weapon `a`: v[0] yaw, v[1] pitch (65536 to the circle), v[2] 1 = second trigger
         Hit,      ///< `from` hit player `a`: v[0] damage, v[1] which of a's lives (their spawn count)
@@ -104,6 +106,9 @@ namespace hldata
         Team,     ///< host: player `a` plays for team v[0] (1 or 2; 0: none, a free-for-all)
         Spray,    ///< `from` sprayed: at v[0..2] (quarter units), on a wall facing v[3..4]
                   ///< (netPackNormal: ten bits of each axis)
+        Ready,    ///< client: the match's map is loaded here
+        Go,       ///< host: everyone is ready (or long enough has gone by): the match begins, on all at once
+        Cancel,   ///< host: the match about to begin is not to; back to the lobby
     };
 
     /// The rules' flags (Rules' v[1]): the game's mp_weaponstay,

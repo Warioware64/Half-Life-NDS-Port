@@ -24,12 +24,20 @@ namespace hlrt
         /// Nothing is made again for the card already shown.
         void show(const hldata::NetMapInfo *map, const char *elsewhere = nullptr);
         void hide() { show(nullptr); }
+        /// A picture of `name` the host sent (a whole .hpv: HlPreview.hpp),
+        /// kept to show in place of the card's -- a console that was sent
+        /// the game has no card. Shown now if that map's card is.
+        void givePicture(const char *name, const std::uint8_t *file);
+        /// ... and let go (a match begins: its memory is the map's).
+        void dropPicture();
         bool shown() const { return text_ != nullptr; }
         /// Inside NEA_Process, after the picture behind it.
         void draw(void (*corner)(int sx, int sy, int s, int t));
 
     private:
         std::string shownName_;
+        std::string givenName_;
+        std::uint8_t *given_ = nullptr; ///< (a .hpv, kPreviewBytes)
         void *picture_ = nullptr; ///< (NEA_Material), when there is a picture
         void *text_ = nullptr;    ///< (NEA_Material)
         void *textPalette_ = nullptr;
@@ -37,4 +45,8 @@ namespace hlrt
     };
 
     extern MapCard mapCard;
+
+    /// Whether this console has a picture of `map` (on its card: a console
+    /// without one has none).
+    bool mapPictured(const std::string &map);
 } // namespace hlrt

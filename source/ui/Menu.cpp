@@ -127,6 +127,7 @@ namespace hlrt
             kNetTeam,      ///< PLAYERS': the team this console's player would be on
             kSeat,         ///< ... a player's place (which, by its row)
             kDlSeat,       ///< SEND THE GAME's: a console that has come for it (which, by its row)
+            kStartSeat,    ///< STARTING's: a player, and how far it has got (which, by its row)
         };
         struct Row
         {
@@ -154,8 +155,9 @@ namespace hlrt
         // A game between consoles (source/net/NetGame.hpp).
         const Row kMultiRows[] = {{Kind::Button, kNetHost, "HOST"},
                                   {Kind::Button, kNetJoin, "JOIN"},
-                                  {Kind::Button, kSendDemo, "SEND A DEMO"},
+                                  {Kind::Button, kSendDemo, "SEND DEMO"},
                                   {Kind::Button, kProfile, "PROFILE"},
+                                  {Kind::Button, kOptions, "OPTIONS"},
                                   {Kind::Button, kBack, "BACK"}};
         const Row kNetPauseRows[] = {{Kind::Button, kResume, "RESUME"}, {Kind::Button, kOptions, "OPTIONS"},
                                      {Kind::Button, kLeave, "LEAVE GAME"}};
@@ -637,8 +639,9 @@ namespace hlrt
         /// The pictures, twelve by twelve ('#' lit, 'o' bright, '.' nothing),
         /// drawn twice the size: sending (an antenna, waves out), receiving
         /// (an antenna, an arrow in), a demo (a console, an arrow out), a
-        /// profile (a head and shoulders).
-        constexpr const char *kTileIcons[4][12] = {
+        /// profile (a head and shoulders), the options (a cog).
+        constexpr int kTiles = 5;
+        constexpr const char *kTileIcons[kTiles][12] = {
             {"............", ".#........#.", "#..#....#..#", "#.#..##..#.#", "#.#.#oo#.#.#", "#..#.oo.#..#",
              ".#...##...#.", ".....##.....", ".....##.....", "....####....", "...######...", "............"},
             {".....##.....", ".....##.....", "...#.##.#...", "....####....", ".....##.....", "............",
@@ -646,7 +649,9 @@ namespace hlrt
             {"..########..", "..#oooooo#..", "..#oooooo#..", "..########..", "..#......#..", "..#.#..#.#..",
              "..########..", "............", ".....##.....", "...######...", "....####....", ".....##....."},
             {"....####....", "...######...", "...##oo##...", "...######...", "....####....", "............",
-             "..########..", ".##########.", ".####oo####.", ".##########.", ".##########.", "............"}};
+             "..########..", ".##########.", ".####oo####.", ".##########.", ".##########.", "............"},
+            {".....##.....", "..#.####.#..", ".##########.", "..###..###..", ".###....###.", "####.oo.####",
+             "####.oo.####", ".###....###.", "..###..###..", ".##########.", "..#.####.#..", ".....##....."}};
         void drawTileIcon(Canvas &canvas, int x, int y, int which, bool lit)
         {
             for (int row = 0; row < 12; ++row)
@@ -665,12 +670,15 @@ namespace hlrt
         {
             int x, y, w, h;
         };
-        /// Where MULTIPLAYER's row `row` is: a tile (the first four), or BACK.
+        /// Where MULTIPLAYER's row `row` is: a tile (the first five: three,
+        /// then two under them in the middle), or BACK.
         TileBox multiTile(int row)
         {
-            if (row >= 4)
+            if (row >= kTiles)
                 return TileBox{28, 142, 200, 20};
-            return TileBox{16 + (row % 2) * 116, 28 + (row / 2) * 56, 108, 52};
+            if (row < 3)
+                return TileBox{8 + row * 82, 28, 76, 52};
+            return TileBox{49 + (row - 3) * 82, 84, 76, 52};
         }
 
         // --- The settings: a category a page, each a list of rows.
@@ -772,7 +780,8 @@ namespace hlrt
         constexpr int kSprayCellX = 27, kSprayCellY = 17;
         // (The pages that are sheets of settings' rows, by their numbers:
         // Menu::Page's.)
-        constexpr int kPageSettings = 1, kPageHost = 8, kPageLobby = 10, kPageProfile = 17, kPageSend = 18;
+        constexpr int kPageSettings = 1, kPageHost = 8, kPageLobby = 10, kPageProfile = 17, kPageSend = 18,
+                      kPageStarting = 19;
         /// HOST's MATCH: the settings of the match it is to start.
         const Row kHostRows[] = {{Kind::Value, kNetMode, "Mode"},
                                  {Kind::Value, kNetMap, "Map"},
@@ -829,12 +838,32 @@ namespace hlrt
 #endif
             return -1;
         }
+        /// STARTING: a row for each player there.
+        int startPlayer(int row)
+        {
+            for (int p = 0; p < kNetPlayers; ++p)
+            {
+                if (netHere(netGame.match(), p) && row-- == 0)
+                    return p;
+            }
+            return -1;
+        }
+        const Row *startRows(int &count)
+        {
+            static Row rows[kNetPlayers];
+            count = 0;
+            while (count < kNetPlayers && startPlayer(count) >= 0)
+                rows[count++] = Row{Kind::Value, kStartSeat, ""};
+            return rows;
+        }
         /// A sheet's rows: OPTIONS' category `chapter`'s, PROFILE's, HOST's
-        /// (MATCH, PLAYERS), the lobby's, SEND THE GAME's.
+        /// (MATCH, PLAYERS), the lobby's, SEND THE GAME's, STARTING's.
         const Row *sheetRows(int page, int chapter, int &count)
         {
             if (page == kPageSend)
                 return sendRows(count);
+            if (page == kPageStarting)
+                return startRows(count);
             if (page == kPageProfile)
             {
                 count = static_cast<int>(sizeof(kProfileRows) / sizeof(kProfileRows[0]));
@@ -1396,6 +1425,7 @@ namespace hlrt
                            : page_ == Page::NetHost    ? (chapter == 0 ? "MATCH" : "PLAYERS")
                            : page_ == Page::NetLobby   ? "LOBBY"
                            : page_ == Page::NetSend    ? "SEND THE GAME"
+                           : page_ == Page::NetStarting ? "STARTING"
                            : saving_                   ? "SAVE GAME"
                                                        : "LOAD GAME";
         const int left = arrows ? kSheetLeftBox.x + kSheetLeftBox.w + 4 : 4;
@@ -1470,6 +1500,18 @@ namespace hlrt
                 if (item.id == kSeat)
                 {
                     drawSeat(band, x, y, textY, n - (rows[0].id == kNetTeam ? 1 : 0), x == 0 && current);
+                    continue;
+                }
+                if (item.id == kStartSeat)
+                {
+                    // Its name, and how far it has got.
+                    const int p = startPlayer(n);
+                    char status[24] = "";
+                    const int how = p >= 0 ? netGame.startStatus(p, status, sizeof(status)) : 0;
+                    drawFitted(band, small, x + 8, textY, p >= 0 ? netGame.match().names[p] : "",
+                               inkFor(small, kUiWhite), kSheetListWidth - 90);
+                    drawText(band, small, x + kSheetListWidth - 4 - textWidth(small, status), textY, status,
+                             inkFor(small, how == 2 ? kUiOrange : kUiGrey));
                     continue;
                 }
 #ifndef HLDS_CHILD
@@ -1664,11 +1706,15 @@ namespace hlrt
             switch (dlsend::state())
             {
             case dlsend::State::Gathering:
-                std::snprintf(said, sizeof(said), "%d console%s here. Sending in a few seconds: more can still come.",
-                              here, here == 1 ? "" : "s");
+                std::snprintf(said, sizeof(said), "%d console%s here%s. START sends the game to them all at once.",
+                              here, here == 1 ? "" : "s", dlsend::full() ? " (the most there is room for)"
+                                                                         : "; more can still come");
                 break;
             case dlsend::State::Sending:
-                std::snprintf(said, sizeof(said), "Sending the game: %d%%. Leave the consoles on.", dlsend::percent());
+                // (And what the radio is doing: the rate, and the counts that
+                // say why it is not more.)
+                std::snprintf(said, sizeof(said), "Sending the game: %d%%. Leave the consoles on. %s", dlsend::percent(),
+                              dlsend::rate());
                 break;
             case dlsend::State::Starting:
             case dlsend::State::Done:
@@ -1687,6 +1733,21 @@ namespace hlrt
             return;
         }
 #endif
+        if (page_ == Page::NetStarting)
+        {
+            char said[160];
+            const char *what = "";
+            int consoles = 0, percent = 0;
+            if (netGame.sending(what, consoles, percent))
+                std::snprintf(said, sizeof(said), "Sending %s to %d console%s: %d%%. Every console loads the map; the "
+                                                  "match begins on all of them together.",
+                              what, consoles, consoles == 1 ? "" : "s", percent);
+            else
+                std::snprintf(said, sizeof(said), "Every console loads the map; the match begins on all of them "
+                                                  "together. CANCEL: back to the lobby.");
+            drawWrapped(canvas, small, x, y, g.line, 0, kLast, said, inkFor(small, kUiGrey), kWidth);
+            return;
+        }
         if (page_ == Page::NetHost || page_ == Page::NetLobby)
         {
             const NetMatch &match = netGame.match();
@@ -1906,14 +1967,28 @@ namespace hlrt
             drawSheetButton(sheetBarBox(buttons - 1, buttons), "BACK", sheetPressed_ == kSheetBar - (buttons - 1));
             return;
         }
-        if (page_ == Page::NetSend)
+        if (page_ == Page::NetStarting)
         {
             drawSheetButton(sheetBarBox(0, 1), "CANCEL", sheetPressed_ == kSheetBar);
             return;
         }
+#ifndef HLDS_CHILD
+        if (page_ == Page::NetSend)
+        {
+            // (START once a console has come, and before it is being sent.)
+            drawSheetButton(sheetBarBox(0, 2), "START", sheetPressed_ == kSheetBar,
+                            dlsend::state() != dlsend::State::Gathering);
+            drawSheetButton(sheetBarBox(1, 2), "CANCEL", sheetPressed_ == kSheetBar - 1);
+            return;
+        }
+#endif
         if (page_ == Page::NetLobby)
         {
-            drawSheetButton(sheetBarBox(0, 1), "LEAVE", sheetPressed_ == kSheetBar);
+            // (PROFILE and OPTIONS without leaving: a console that was sent
+            // the game has nowhere else to set them.)
+            drawSheetButton(sheetBarBox(0, 3), "PROFILE", sheetPressed_ == kSheetBar);
+            drawSheetButton(sheetBarBox(1, 3), "OPTIONS", sheetPressed_ == kSheetBar - 1);
+            drawSheetButton(sheetBarBox(2, 3), "LEAVE", sheetPressed_ == kSheetBar - 2);
             return;
         }
         if (optionSheet())
@@ -2196,13 +2271,35 @@ namespace hlrt
             if (at < 0 || netGame.phase() == NetGame::Phase::Serving)
                 return Action::None;
             settings.save();
+            untintSeats();
             netGame.start(netGame.maps()[static_cast<std::size_t>(at)], settings.fragLimit, settings.minuteLimit, skill_);
+            netShown_ = 0;
+            openSheet(Page::NetStarting);
             return Action::None;
         }
         if (page_ == Page::NetHost && button == 1 && sheetButtons() == 3)
         {
             if (playersHere() <= 1)
                 sendBegin();
+            return Action::None;
+        }
+#ifndef HLDS_CHILD
+        if (page_ == Page::NetSend && button == 0)
+        {
+            sound.ui(kUiSoundPress);
+            dlsend::go();
+            drawSheetBar();
+            drawSheetDetail();
+            return Action::None;
+        }
+#endif
+        if (page_ == Page::NetLobby && button < 2)
+        {
+            sound.ui(kUiSoundPress);
+            untintSeats();
+            mapCard.hide();
+            sheetFrom_ = Page::NetLobby;
+            openSheet(button == 0 ? Page::Profile : Page::Settings);
             return Action::None;
         }
         if (page_ == Page::NetHost || page_ == Page::NetLobby || page_ == Page::NetSend)
@@ -2248,6 +2345,18 @@ namespace hlrt
             dropLogos();
             touchCanvas.tint(kSprayCellX, kSprayCellY, 4, 4, nullptr);
         }
+        // OPTIONS and PROFILE opened from the lobby: back to it, the link
+        // kept all the while -- and the others told of the profile as it is.
+        const Page from = sheetFrom_;
+        sheetFrom_ = Page::Main;
+        if ((page_ == Page::Settings || page_ == Page::Profile) && from == Page::NetLobby)
+        {
+            if (page_ == Page::Profile)
+                netGame.sayProfile();
+            settings.save();
+            openSheet(Page::NetLobby);
+            return Action::None;
+        }
         // (Out of the game: the others are told, the radio is silent.)
         const bool lobby = page_ == Page::NetHost || page_ == Page::NetLobby;
         if (lobby)
@@ -2258,6 +2367,7 @@ namespace hlrt
         }
         page_ = page_ == Page::Saves                  ? asker_
                 : page_ == Page::Profile || lobby ? Page::Multiplayer
+                : page_ == Page::Settings && from == Page::Multiplayer ? Page::Multiplayer
                 : title_                 ? Page::Title
                 : netGame.playing()      ? Page::NetPause
                                          : Page::Main;
@@ -2266,6 +2376,21 @@ namespace hlrt
         touching_ = (keysHeld() & KEY_TOUCH) != 0;
         draw();
         return Action::None;
+    }
+
+    void Menu::openHost()
+    {
+        if (netGame.host())
+        {
+            hostChapter_ = 0;
+            openSheet(Page::NetHost);
+            return;
+        }
+        char why[48];
+        std::snprintf(why, sizeof(why), "The wireless would not start (%d)", netlinkFailStage());
+        page_ = Page::Multiplayer;
+        draw();
+        showReason(why);
     }
 
     bool Menu::canSend() const
@@ -2322,6 +2447,15 @@ namespace hlrt
 
     Menu::Action Menu::sheetBack()
     {
+        // (STARTING: given up, everyone back to the lobby.)
+        if (page_ == Page::NetStarting)
+        {
+            sound.ui(kUiSoundPress);
+            netGame.cancelStart();
+            hostChapter_ = 1;
+            openSheet(Page::NetHost);
+            return Action::None;
+        }
         // (SEND THE GAME: given up, and the host's game again.)
         if (page_ == Page::NetSend)
         {
@@ -2652,13 +2786,15 @@ namespace hlrt
         {
             // A tile: its picture, its word under it.
             const TileBox box = multiTile(row);
-            const FontView &font = touchCanvas.font(kFontMedium);
+            // (The smaller letters for a word too wide for its tile.)
+            const FontView &medium = touchCanvas.font(kFontMedium);
+            const FontView &font = textWidth(medium, item.label) <= box.w - 4 ? medium : touchCanvas.font(kFontSmall);
             const bool dead = whyDead(item.id) != nullptr;
             canvas.button(box.x, box.y, box.w, box.h, down && !dead);
-            if (row < 4)
+            if (row < kTiles)
                 drawTileIcon(canvas, box.x + (box.w - 24) / 2, box.y + 4, row, !dead);
             drawTextCentred(canvas, font, box.x + box.w / 2,
-                            row < 4 ? box.y + box.h - font.height() - 4 : box.y + (box.h - font.height()) / 2,
+                            row < kTiles ? box.y + box.h - font.height() - 4 : box.y + (box.h - font.height()) / 2,
                             item.label, inkFor(font, dead ? kUiGrey : (down ? kUiWhite : kUiOrange)));
             return;
         }
@@ -2860,6 +2996,7 @@ namespace hlrt
             draw();
             break;
         case kOptions:
+            sheetFrom_ = page_ == Page::Multiplayer ? page_ : Page::Main;
             openSheet(Page::Settings);
             break;
         case kAchievementsOpen:
@@ -2888,24 +3025,25 @@ namespace hlrt
             }
             break;
         case kNetHost:
-            if (netGame.host())
+        {
+            // (Maps never photographed: their pictures first, once.)
+            bool missing = false;
+            for (const std::string &map : netGame.maps())
+                missing = missing || (global.hasFat && !mapPictured(map));
+            if (missing && !previewsTaken_)
             {
-                hostChapter_ = 0;
-                openSheet(Page::NetHost);
+                previewsTaken_ = true;
+                return Action::TakePreviews;
             }
-            else
-            {
-                std::snprintf(question, sizeof(question), "The wireless would not start (%d)", netlinkFailStage());
-                page_ = Page::Multiplayer;
-                draw();
-                showReason(question);
-            }
+            openHost();
             break;
+        }
         case kNetJoin:
             if (netGame.scan())
                 showFound();
             break;
         case kProfile:
+            sheetFrom_ = Page::Multiplayer;
             openSheet(Page::Profile);
             break;
         case kNetFound:
@@ -2942,7 +3080,7 @@ namespace hlrt
             const std::vector<NetMapInfo> &maps = netGame.mapInfo();
             const NetMapInfo *card = nullptr;
             const char *elsewhere = nullptr;
-            if (page_ == Page::NetHost && hostIndex() >= 0)
+            if ((page_ == Page::NetHost || page_ == Page::NetStarting) && hostIndex() >= 0)
                 card = &maps[static_cast<std::size_t>(hostIndex())];
             else if (page_ == Page::NetLobby || page_ == Page::NetJoin)
             {
@@ -2958,6 +3096,10 @@ namespace hlrt
                 }
                 if (card == nullptr && page_ == Page::NetJoin && foundCount > 0)
                     elsewhere = "?";
+                // (The host's map, not on this card -- or no card: its name,
+                // and the host's picture of it, if it sent one.)
+                if (card == nullptr && page_ == Page::NetLobby && name[0] != 0)
+                    elsewhere = name;
             }
             mapCard.show(card, elsewhere);
         }
@@ -2973,6 +3115,8 @@ namespace hlrt
                 return Action::None;
             }
             unsigned sum = static_cast<unsigned>(dlsend::state()) * 7919u + dlsend::consoles() * 31u;
+            for (const char *c = dlsend::rate(); *c != 0; ++c)
+                sum = sum * 31u + static_cast<unsigned char>(*c);
             for (int n = 1; n < 16; ++n)
             {
                 if ((dlsend::consoles() >> n) & 1)
@@ -2992,9 +3136,36 @@ namespace hlrt
                     sheetSelected_ = -1;
                 drawSheetList();
                 drawSheetDetail();
+                drawSheetBar();
             }
         }
 #endif
+        // STARTING: who has got how far, as it goes; out of the game, back.
+        if (page_ == Page::NetStarting)
+        {
+            if (netGame.phase() == NetGame::Phase::Off)
+            {
+                page_ = Page::Multiplayer;
+                draw();
+                return Action::None;
+            }
+            unsigned sum = netSignature();
+            for (int p = 0; p < kNetPlayers; ++p)
+            {
+                char status[24] = "";
+                netGame.startStatus(p, status, sizeof(status));
+                for (const char *c = status; *c != 0; ++c)
+                    sum = sum * 31u + static_cast<unsigned char>(*c);
+            }
+            if (sum != netShown_ && !sheetTouching_ && sheetSlide_ == 0 && sheetDrag_ == 0)
+            {
+                netShown_ = sum;
+                if (sheetSelected_ >= sheetCount(0))
+                    sheetSelected_ = -1;
+                drawSheetList();
+                drawSheetDetail();
+            }
+        }
         // HOST and the lobby change without being touched: who comes, how
         // they stand. Out of the game (the host gone, the link lost): back.
         if (page_ == Page::NetHost || page_ == Page::NetLobby)
