@@ -414,6 +414,15 @@ namespace
         hlrt::guard::check("map left");
     }
 
+    /// (Sent the game: the map's stream heard and answered between the
+    /// load's long steps.)
+    void hearStream()
+    {
+#ifdef HLDS_CHILD
+        hlrt::guest::hear();
+#endif
+    }
+
     LoadResult loadLevel(const std::string &name, const hldata::Arrival *arrival,
                          std::string &error)
     {
@@ -484,16 +493,26 @@ namespace
         // that goes without its skin, not a wall. Models before the game:
         // actors are set up from their models.
         hlrt::modelDraw.forgetPoses();
+#ifdef HLDS_CHILD
+        // (Sent the game, every texture is in video memory at once: the
+        // weapon in hand has its slots first, or it is the one left bare.
+        // A guest's weapons' skins are all of one size.)
+        hlrt::textureStream.reserveSkinSlots(hldata::kLazySkinTexels / 4);
+#endif
         bool made = hlrt::worldDraw.create() && hlrt::textureCache.create();
         clock.mark("tex");
+        hearStream();
         made = made && hlrt::spriteCache.create();
         clock.mark("spr");
         made = made && hlrt::modelCache.create();
         clock.mark("mdl");
+        hearStream();
         // What video memory has left is for the textures that stream.
         hlrt::textureStream.begin();
         clock.mark("stream");
+        hearStream();
         made = made && hlrt::game.create();
+        hearStream();
         if (!made)
         {
             error = "Not enough memory for this map.";
@@ -557,6 +576,7 @@ namespace
                 hlrt::SaveGame::landed(left, hlrt::game.placed());
         }
         clock.mark("game");
+        hearStream();
         hlrt::sound.load();
         clock.mark("snd");
         clock.write(name.c_str());

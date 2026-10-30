@@ -80,9 +80,11 @@ namespace hldata
     inline constexpr int kAirPiece = 600;
     inline constexpr int kAirWindow = 64;
     /// Frames a guest that wants a stream may say nothing before it is left
-    /// out: thirty seconds of the host's (a guest loading a map from it says
-    /// nothing while a loader is busy with what it has).
-    inline constexpr std::uint32_t kAirSilentFrames = 1800;
+    /// out: two minutes of the host's (a guest loading a map from it says
+    /// nothing while a loader is busy with what it has, and a guest's game
+    /// is a long time being set up). One really gone the radio says is gone
+    /// sooner; and the host's player can give it up.
+    inline constexpr std::uint32_t kAirSilentFrames = 7200;
 
     /// What a piece's frame says, besides its bytes.
     struct AirHead
@@ -190,10 +192,12 @@ namespace hldata
                 !wants[who].on)
                 return false;
             Want &want = wants[who];
-            want.silent = 0;
-            // (An answer from before the last: older news.)
+            // (An answer from before the last: older news -- and no sign of
+            // life: one that keeps saying it, having lost its place, is as
+            // good as silent, and would be waited for for ever.)
             if (first < want.base)
                 return true;
+            want.silent = 0;
             want.base = first;
             want.have = mask;
             want.room = upTo;

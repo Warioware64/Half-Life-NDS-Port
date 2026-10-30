@@ -1068,9 +1068,10 @@ namespace hlrt
         (void)kNorth;
         if (!shot.active)
             return;
-        // (Drawn as its model, where the map has one: ModelDraw. A tripmine's
-        // beam is drawn here all the same.)
-        const bool modelled = game.thrownModel(shot.kind) >= 0;
+        // (Drawn as its model, where the map has one and it is in memory:
+        // ModelDraw. A tripmine's beam is drawn here all the same.)
+        const int model = game.thrownModel(shot.kind);
+        const bool modelled = model >= 0 && model < game.actors.modelCount && game.actors.models[model].header != nullptr;
         if (shot.kind == kShotSpit || shot.kind == kShotMommaSpit)
         {
             // (Big momma's is a glob of it, five times the size.)

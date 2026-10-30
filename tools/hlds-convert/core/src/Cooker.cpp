@@ -248,6 +248,18 @@ namespace hlds
             ref.frames = 1;
             ref.other = kNoTexture;
             ref.average = 0x7FFF;
+            // (How much smaller a guest has it: halvings of each side.)
+            if (!a3i5 && options.guestPlan != nullptr &&
+                static_cast<std::size_t>(bspTexture) < options.guestPlan->sizes.size())
+            {
+                const TextureSize guest = options.guestPlan->sizes[bspTexture];
+                int across = 0, down = 0;
+                while (guest.width != 0 && (size.width >> across) > guest.width && across < 15)
+                    ++across;
+                while (guest.height != 0 && (size.height >> down) > guest.height && down < 15)
+                    ++down;
+                ref.guestHalvings = static_cast<std::uint8_t>(across | down << 4);
+            }
             level.textures.push_back(ref);
             return static_cast<std::uint16_t>(level.textures.size() - 1);
         };

@@ -246,6 +246,9 @@ namespace
             std::printf("    levels of detail: %d triangles near, %d far (the game's own: %d; a DSi has those too, in %d KB)\n",
                         r.modelTriangles, r.modelTrianglesFar, r.modelTrianglesFull, r.modelKbDsi);
         }
+        if (r.guestTexelKb != 0)
+            std::printf("  sent to a console: textures %dK texels, all at once (%d of them smaller there)\n",
+                        r.guestTexelKb, r.guestShrunk);
         if (r.sprites != 0 || r.spritesMissing != 0)
             std::printf("  %d sprites: %dK texels (%d not found)\n", r.sprites, r.spriteTexelKb, r.spritesMissing);
         if (r.sounds != 0 || r.soundsMissing != 0)

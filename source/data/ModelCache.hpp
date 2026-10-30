@@ -19,6 +19,7 @@
 #include <string>
 
 #include "HlModel.hpp"
+#include "HlWeaponBundle.hpp"
 
 namespace hlrt
 {
@@ -82,14 +83,16 @@ namespace hlrt
         /// The texel bytes of the largest weapon skin (a 4x4 texture: its
         /// index is half as many again), for the slots it is written to.
         std::uint32_t largestSkin() const;
-        /// The palette memory one weapon the map has not needs when it is
-        /// taken up (its skin's colours), to be left free; 0 if none.
-        int lazyPaletteBytes() const { return anyLazy_ ? 512 * 2 : 0; }
+        /// The palette memory the models the map has not need when they are
+        /// taken up (their skins' colours), to be left free; 0 if none.
+        /// (And of their skins: all but a weapon's are in video memory.)
+        int lazyPaletteBytes() const { return anyLazy_ ? hldata::kLazyResident * 512 * 2 : 0; }
+        int lazyTexelBytes() const { return anyLazy_ ? (hldata::kLazyResident - 1) * hldata::kLazyPieceSkinTexels / 4 : 0; }
         /// The places a weapon's skin is written to (TextureStream's region;
-        /// `count` of them, 0 to 2, of largestSkin() texel bytes each): one
-        /// for the weapon in hand, one for the next. No slots: weapons are
-        /// drawn bare.
-        void setSlots(void *const *texels, int count);
+        /// `count` of them, 0 to 2, of `bytes` texel bytes each -- largestSkin(),
+        /// or what was set by before the map's textures): one for the weapon
+        /// in hand, one for the next. No slots: weapons are drawn bare.
+        void setSlots(void *const *texels, int count, std::uint32_t bytes);
         /// The slots are going (the map is left): nothing more is written to
         /// them, and nothing is drawn from them.
         void dropSlots();
@@ -112,8 +115,31 @@ namespace hlrt
         void putAway(std::uint32_t now);
         bool lazy(int index) const;
         std::string skinPath(int index) const;
-        void loadLazy(int index);
+        /// A model the map has not read in, what it takes made room for
+        /// (`evict`: by letting others go). False if it could not be.
+        bool loadLazy(int index, bool evict);
         void dropLazy(int index);
+        /// The one of the lazy models in memory to go, the longest unused:
+        /// never one of the weapon in hand's, nor one being drawn or
+        /// written, nor what a shot or a casing in the air is. -1: none can.
+        int lazyToDrop() const;
+        /// What is wanted and not yet in memory: the rest of the weapon in
+        /// hand's, what is flying about, what was just picked up. One a frame.
+        void lazyTick();
+        bool lazyInUse(int index) const;
+
+        /// By ModelRef, of the lazy ones.
+        struct LazyState
+        {
+            std::uint32_t usedAt = 0;  ///< the frame it was last wanted (TextureStream::blanks)
+            std::uint32_t triedAt = 0; ///< ... and last failed to load, not to try every frame
+            bool failed = false;
+            std::uint16_t bundles = 0; ///< hldata::bundlesOf
+        };
+        LazyState *lazy_ = nullptr;
+        std::uint16_t lazyMask_ = 0;     ///< the weapons (bits) picked up just now, to load ahead
+        std::uint16_t haveSeen_ = 0;     ///< what the player had when last looked
+        bool haveKnown_ = false;
 
         hldata::ModelView *views_ = nullptr;
         std::uint8_t **blocks_ = nullptr;
@@ -134,6 +160,7 @@ namespace hlrt
         };
         Slot slots_[2];
         int slotCount_ = 0;
+        std::uint32_t slotBytes_ = 0; ///< how big each slot is (a skin larger is drawn bare)
         int count_ = 0;
         int missing_ = 0;
         int bare_ = 0;

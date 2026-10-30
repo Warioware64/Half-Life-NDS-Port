@@ -79,6 +79,13 @@ namespace hlds
     bool packCommon(const std::filesystem::path &stage, const std::filesystem::path &card,
                     bool compress, PackReport &report, std::string &error);
 
+    /// A level as a console sent the map has it: each texture made as much
+    /// smaller as its TextureRef::guestHalvings say (the converter cooked it
+    /// that size too), the coordinates its surfaces give it with it, and
+    /// none of them streamed. Every record where it was, every stream as
+    /// long. False if the level does not open (or not after).
+    bool guestTextures(std::vector<std::uint8_t> &level);
+
     /// A map's archive read back: every member inflated and the level put
     /// together again, as the console will. False if anything is amiss.
     bool unpackLevel(const std::filesystem::path &archive, std::vector<std::uint8_t> &level,

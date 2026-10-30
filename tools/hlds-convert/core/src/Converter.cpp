@@ -4,6 +4,7 @@
 #include "hlds/SoundCook.hpp"
 #include "hlds/SpriteCook.hpp"
 #include "hlds/Converter.hpp"
+#include "HlWeaponBundle.hpp"
 
 #include "hlds/AviFile.hpp"
 #include "hlds/EntityCook.hpp"
@@ -418,14 +419,12 @@ namespace hlds
             {
                 if (!one.wanted)
                 {
-                    if (std::string(one.name).rfind("v_", 0) == 0)
-                    {
-                        ModelNeed lazy;
-                        lazy.name = one.name;
-                        lazy.file = std::string("models/") + one.name + ".mdl";
-                        lazy.clips = one.clips;
-                        lazyNeeds.push_back(lazy);
-                    }
+                    ModelNeed lazy;
+                    lazy.name = one.name;
+                    lazy.file = std::string("models/") + one.name + ".mdl";
+                    lazy.clips = one.clips;
+                    lazy.firstSequence = one.clips.empty();
+                    lazyNeeds.push_back(lazy);
                     return;
                 }
                 // (Already wanted for something else -- a tripmine on a wall
@@ -473,23 +472,8 @@ namespace hlds
                 {"rpgrocket", from("c2a5a"), {}},
                 {"hornet", from("c2a5d"), {}},
             };
-            // (... of which those wanted for something else -- a tripmine on
-            // a wall -- are the map's own.)
-            lazyNeeds.erase(std::remove_if(lazyNeeds.begin(), lazyNeeds.end(),
-                                           [&](const ModelNeed &lazy)
-                                           {
-                                               for (const ModelNeed &need : needs)
-                                               {
-                                                   if (need.name == lazy.name)
-                                                       return true;
-                                               }
-                                               return false;
-                                           }),
-                            lazyNeeds.end());
             for (const Held &one : kThrown)
             {
-                if (!one.wanted)
-                    continue;
                 hold(one);
                 for (ModelNeed &need : needs)
                 {
@@ -507,6 +491,20 @@ namespace hlds
         // all of them, the game's own player in the suit, with what a body
         // does whole -- standing, running, crouching, jumping, dying.
         addMultiplayerNeeds(entities, needs);
+        // Of the weapons the map has not, and what goes with them, those
+        // wanted for something else -- a tripmine on a wall, a soldier's
+        // casings, a tank's rocket -- are the map's own.
+        lazyNeeds.erase(std::remove_if(lazyNeeds.begin(), lazyNeeds.end(),
+                                       [&](const ModelNeed &lazy)
+                                       {
+                                           for (const ModelNeed &need : needs)
+                                           {
+                                               if (need.name == lazy.name)
+                                                   return true;
+                                           }
+                                           return false;
+                                       }),
+                        lazyNeeds.end());
         // One model, with a skin of at most `skinTexels`. False if it cannot
         // be read or cooked (said once, in the warnings).
         auto cookOne = [&](const ModelNeed &need, int skinTexels, ModelOut &out, bool quiet,
@@ -697,7 +695,7 @@ namespace hlds
         const TextureNeeds textureWants = textureNeeds(bsp, brushes, findHiddenTextures(bsp, wads));
         // (... and a palette for a weapon loaded when it is taken up.)
         const int colourBudget = kPaletteColourBudget - (skyName.empty() ? 0 : 6 * 256) -
-                                 static_cast<int>(models.size() + (lazyNeeds.empty() ? 0 : 1)) * kModelSkinColours -
+                                 static_cast<int>(models.size() + (lazyNeeds.empty() ? 0 : hldata::kLazyResident)) * kModelSkinColours -
                                  kSpriteColourBudget;
         // Plan maps to use 3 texture banks, with few exceptions
         auto planFor = [&](int worldBudget)
@@ -727,6 +725,30 @@ namespace hlds
             }
         }
         result.modelTexelKb = modelTexels / 1024;
+        // A map a console may be sent (a game between consoles, the Hazard
+        // Course, Uplink: packAirGroups): there every texture is in video
+        // memory at once, none streamed -- beside its models, the sky, and
+        // the two slots of the weapon in hand (held at kLazySkinTexels
+        // there, the lighter cook) set by first. What does not fit is made
+        // smaller for it (guestTexturePlan; the guest's level, Pack).
+        bool airMap = result.name.rfind("t0a0", 0) == 0 || result.name.rfind("hldemo", 0) == 0;
+        for (const Entity &entity : entities)
+            airMap = airMap || entity.className() == "info_player_deathmatch";
+        TexturePlan guestPlan;
+        if (airMap)
+        {
+            const std::size_t held = largestHeld();
+            const int heldTexels =
+                held < models.size() ? models[held].atlas.width * models[held].atlas.height : 0;
+            const int guestModels = modelTexels - heldTexels + 2 * hldata::kLazySkinTexels +
+                                    (hldata::kLazyResident - 1) * hldata::kLazyPieceSkinTexels;
+            guestPlan = guestTexturePlan(bsp, plan,
+                                         kSinglePassTexelBudget - kGuestVramMargin - skyOnlyTexels - guestModels);
+            result.guestTexelKb = guestPlan.texels / 1024;
+            result.guestShrunk = guestPlan.shrunk;
+            if (!guestPlan.fits)
+                result.warnings.push_back("textures do not fit a console sent the map, even at their smallest");
+        }
         auto reportPlan = [&]()
         {
             if (!plan.fits && std::find(result.warnings.begin(),
@@ -762,6 +784,7 @@ namespace hlds
         cookOptions.guardedMerges = options_.guardedMerges;
         cookOptions.groupByLeaf = options_.groupByLeaf;
         cookOptions.skyName = skyName;
+        cookOptions.guestPlan = airMap && guestPlan.shrunk != 0 ? &guestPlan : nullptr;
         for (const auto &model : models)
             cookOptions.models.push_back(model.name);
         // The weapons the map has not, cooked as any model is -- but staged
@@ -770,7 +793,8 @@ namespace hlds
         for (const ModelNeed &need : lazyNeeds)
         {
             ModelOut out;
-            if (!cookOne(need, hldata::kLazySkinTexels, out, true))
+            if (!cookOne(need, need.name.rfind("v_", 0) == 0 ? hldata::kLazySkinTexels : hldata::kLazyPieceSkinTexels, out,
+                         true))
                 continue;
             out.lazy = true;
             cookOptions.lazyModels.push_back(out.name);
@@ -788,7 +812,7 @@ namespace hlds
         bool multiplayer = false;
         for (const Entity &entity : entities)
             multiplayer = multiplayer || entity.className() == "info_player_deathmatch";
-        for (const ModelNeed &need : multiplayer ? guestWeapons : std::vector<ModelNeed>())
+        for (const ModelNeed &need : airMap ? guestWeapons : std::vector<ModelNeed>())
         {
             ModelOut out;
             if (cookOne(need, hldata::kLazySkinTexels, out, true, kGuestLean))
@@ -1204,9 +1228,15 @@ namespace hlds
             const fs::path temp = fs::temp_directory_path() / ("hlds-convert-" + result.name);
             PtexconvEncoder encoder(exe, temp);
             TextureCookReport texReport;
+            // (And a guest's smaller ones, beside them: each size is a file
+            // of its own.)
+            TextureCookReport guestReport;
             const bool ok = cookTextures(bsp, wads, plan, encoder,
                                          stageDir() / "tex", texReport,
                                          result.error) &&
+                            (cookOptions.guestPlan == nullptr ||
+                             cookTextures(bsp, wads, guestPlan, encoder, stageDir() / "tex", guestReport,
+                                          result.error)) &&
                             (skyName.empty() ||
                              cookSky(options_.gameDir, skyName, encoder,
                                      stageDir() / "tex", result.error));

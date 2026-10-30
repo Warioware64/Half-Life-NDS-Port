@@ -7,12 +7,16 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 
 #include "HlLevelReader.hpp"
 #include "HlSound.hpp"
+#include "HlWeaponBundle.hpp"
 #include "TestBspBuilder.hpp"
 #include "hlds/AtomicWrite.hpp"
+#include "hlds/BspFile.hpp"
+#include "hlds/TextureBudget.hpp"
 #include "hlds/Converter.hpp"
 #include "hlds/NpacWriter.hpp"
 #include "hlds/Pack.hpp"
@@ -173,6 +177,136 @@ namespace
         }
     }
 
+    /// Every TEXCOORD a surface's commands give, in order.
+    std::vector<std::uint32_t> coordsOf(const LevelView &view, const Surface &surface)
+    {
+        std::vector<std::uint32_t> coords;
+        std::uint32_t at = surface.gxOfs;
+        const std::uint32_t end = surface.gxOfs + surface.gxWords;
+        while (at < end)
+        {
+            const std::uint32_t header = view.gxStream[at++];
+            for (int k = 0; k < 4 && static_cast<std::uint8_t>(header >> (8 * k)) != 0; ++k)
+            {
+                const auto code = static_cast<std::uint8_t>(header >> (8 * k));
+                if (code == 0x22)
+                    coords.push_back(view.gxStream[at]);
+                at += code == 0x23 ? 2 : 1;
+            }
+        }
+        return coords;
+    }
+
+    /// A guest's level: the size said, the coordinates with it, nothing moved.
+    void testGuestTextures(const fs::path &staged)
+    {
+        Bytes level;
+        std::string error;
+        check(hlds::readFile(staged, level, error), "the level for a guest is read");
+        LevelView view;
+        check(view.open(level.data(), static_cast<std::uint32_t>(level.size())) == LevelError::Ok &&
+                  view.textureCount != 0,
+              "and opens, with a texture");
+        const Surface *surface = nullptr;
+        for (std::uint32_t i = 0; i < view.surfaceCount && surface == nullptr; ++i)
+        {
+            if (view.surfaces[i].texture < view.textureCount && !coordsOf(view, view.surfaces[i]).empty())
+                surface = &view.surfaces[i];
+        }
+        check(surface != nullptr, "a surface wears it");
+        if (surface == nullptr)
+            return;
+        const std::size_t index = static_cast<std::size_t>(surface - view.surfaces);
+        const TextureRef host = view.textures[surface->texture];
+        const std::vector<std::uint32_t> before = coordsOf(view, *surface);
+        const std::size_t size = level.size();
+        // (One halving across, two down.)
+        Bytes guest = level;
+        reinterpret_cast<TextureRef *>(guest.data() + (reinterpret_cast<const std::uint8_t *>(&view.textures[surface->texture]) - level.data()))
+            ->guestHalvings = 1 | 2 << 4;
+        {
+            LevelHeader header;
+            std::memcpy(&header, guest.data(), sizeof(header));
+            header.crc32 = crc32(guest.data() + sizeof(header), static_cast<std::uint32_t>(guest.size() - sizeof(header)));
+            std::memcpy(guest.data(), &header, sizeof(header));
+        }
+        check(hlds::guestTextures(guest) && guest.size() == size, "a guest's level is made, no longer");
+        LevelView after;
+        check(after.open(guest.data(), static_cast<std::uint32_t>(guest.size())) == LevelError::Ok,
+              "and opens, its checksum right");
+        if (after.textures == nullptr)
+            return;
+        const TextureRef &ref = after.textures[surface->texture];
+        check(ref.width == host.width / 2 && ref.height == host.height / 4 && ref.guestHalvings == 0 &&
+                  (ref.flags & kTextureStreamed) == 0,
+              "the texture is its smaller size, and not streamed");
+        const std::vector<std::uint32_t> now = coordsOf(after, after.surfaces[index]);
+        bool halved = now.size() == before.size();
+        for (std::size_t i = 0; halved && i < now.size(); ++i)
+        {
+            const auto s = static_cast<std::int16_t>(before[i] & 0xFFFF), t = static_cast<std::int16_t>(before[i] >> 16);
+            halved = static_cast<std::int16_t>(now[i] & 0xFFFF) == s >> 1 &&
+                     static_cast<std::int16_t>(now[i] >> 16) == t >> 2;
+        }
+        check(halved, "its surface's coordinates go with it (negative ones too)");
+    }
+
+    /// What goes with each weapon.
+    void testBundles()
+    {
+        check(bundlesOf("shell") == (1u << kWeaponGlock | 1u << kWeaponMp5), "a casing goes with two guns");
+        check(bundlesOf("crossbow_bolt") == 1u << kWeaponCrossbow, "a bolt with the crossbow");
+        check(bundlesOf("v_rpg") == 1u << kWeaponRpg && bundlesOf("rpgrocket") == 1u << kWeaponRpg, "a rocket with the RPG");
+        check(bundlesOf("v_satchel_radio") == 1u << kWeaponSatchel, "the radio with the satchels");
+        check(bundlesOf("hgrunt") == 0, "what is no weapon's, with none");
+        for (const WeaponBundle &bundle : kWeaponBundles)
+        {
+            int count = 0;
+            for (const char *name : bundle.models)
+                count += name != nullptr ? 1 : 0;
+            check(count <= kLazyResident, "a bundle fits among those in memory at once");
+        }
+    }
+
+    /// The sizes a guest has: within the budget, the largest gone first.
+    void testGuestPlan()
+    {
+        hlds::BspFile bsp;
+        hlds::TexturePlan plan;
+        const auto add = [&](const char *name, int width, int height)
+        {
+            hlds::BspTexture texture;
+            texture.name = name;
+            bsp.textures.push_back(texture);
+            plan.sizes.push_back({static_cast<std::uint16_t>(width), static_cast<std::uint16_t>(height)});
+        };
+        add("wall", 128, 128);   // 16384
+        add("small", 32, 32);    // 1024
+        add("+0lamp", 64, 64);   // 4096
+        add("+1lamp", 64, 64);   // 4096
+        add("!water", 128, 128); // 16384, left alone
+        add("gone", 0, 0);
+        hlds::TexturePlan same = hlds::guestTexturePlan(bsp, plan, 64 * 1024);
+        check(same.fits && same.shrunk == 0 && same.texels == 41984, "what fits is left as it is");
+
+        hlds::TexturePlan guest = hlds::guestTexturePlan(bsp, plan, 30000);
+        check(guest.fits && guest.texels <= 30000 && guest.shrunk != 0, "too much: made to fit");
+        check(guest.sizes[0].width * guest.sizes[0].height < 128 * 128, "the largest first");
+        check(guest.sizes[4].width == 128 && guest.sizes[4].height == 128, "liquid as it was");
+        check(guest.sizes[5].width == 0, "what is not wanted is not made");
+
+        guest = hlds::guestTexturePlan(bsp, plan, 22000);
+        check(guest.sizes[2].width == guest.sizes[3].width && guest.sizes[2].height == guest.sizes[3].height,
+              "a cycle's pictures alike");
+        check(guest.sizes[2].width < 64 || guest.sizes[2].height < 64, "and made smaller together");
+
+        guest = hlds::guestTexturePlan(bsp, plan, 1000);
+        check(!guest.fits, "no room even at the smallest: said");
+        for (const hlds::TextureSize &size : guest.sizes)
+            check(size.width == 0 || (size.width >= hlds::kMinTextureSide && size.height >= hlds::kMinTextureSide),
+                  "never below the smallest side");
+    }
+
     void testBoxRoom()
     {
         const fs::path root = fs::temp_directory_path() / "hlds_test_pack";
@@ -191,6 +325,7 @@ namespace
         check(converter.cookMaps({"boxroom"}, nullptr, nullptr, nullptr, error) == 0, "the box room cooks");
         const fs::path stage = hlds::Converter::dataDir(root / "elsewhere");
         const fs::path card = hlds::Converter::dataDir(root / "card");
+        testGuestTextures(stage / "maps" / "boxroom.hlm");
         check(converter.stageDir() == stage && fs::exists(stage / "maps" / "boxroom.hlm"),
               "the stage is where it was said to be");
         check(!fs::exists(card / "tex") && !fs::exists(card / "mdl") && !fs::exists(card / "snd"),
@@ -271,6 +406,8 @@ namespace
 int main()
 {
     testPieces();
+    testGuestPlan();
+    testBundles();
     testBoxRoom();
     testRealMap();
     if (g_failures == 0)

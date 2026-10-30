@@ -12,6 +12,7 @@
 #include "HlSound.hpp"
 #include "HlSprite.hpp"
 #include "HlUi.hpp"
+#include "HlWeaponBundle.hpp"
 #include "hlds/AtomicWrite.hpp"
 #include "hlds/Lz77.hpp"
 #include "hlds/NpacWriter.hpp"
@@ -70,6 +71,7 @@ namespace hlds
             std::memcpy(header.magic, hldata::kGuestMagic, 4);
             header.version = hldata::kGuestVersion;
             header.levelVersion = hldata::kLevelVersion;
+            std::size_t pieceMost = 0;
             for (const NpacMember &member : members)
             {
                 if (member.path.size() > hldata::kGuestNameMost)
@@ -109,10 +111,17 @@ namespace hlds
                     raw[kGuestPacked] += record.packedSize;
                     if (record.rawSize > raw[kGuestUnpackedMost])
                         raw[kGuestUnpackedMost] = record.rawSize;
+                    // (... and what goes with it: the largest of those too.)
+                    const bool piece = member.path.rfind("wpn/v_", 0) != 0 &&
+                                       member.path.compare(member.path.size() - 4, 4, ".hmd") == 0;
+                    if (piece && record.rawSize > pieceMost)
+                        pieceMost = record.rawSize;
                 }
                 else if (raw != nullptr)
                     raw[static_cast<int>(kind)] += member.data.size();
             }
+            if (raw != nullptr)
+                raw[kGuestUnpackedMost] += pieceMost;
             header.streamBytes = static_cast<std::uint32_t>(stream.size());
             std::memcpy(stream.data(), &header, sizeof(header));
             streamBytes = stream.size();
@@ -169,6 +178,66 @@ namespace hlds
     }
 
 
+    bool guestTextures(std::vector<std::uint8_t> &level)
+    {
+        hldata::LevelView view;
+        if (view.open(level.data(), static_cast<std::uint32_t>(level.size())) != hldata::LevelError::Ok)
+            return false;
+        auto *textures = const_cast<hldata::TextureRef *>(view.textures);
+        auto *gx = const_cast<std::uint32_t *>(view.gxStream);
+        // Each surface's coordinates, in the texture as it was cooked:
+        // halved as it is (once each word, though two surfaces share it).
+        std::vector<char> done(view.gxWordCount, 0);
+        for (std::uint32_t i = 0; i < view.surfaceCount; ++i)
+        {
+            const hldata::Surface &surface = view.surfaces[i];
+            if (surface.texture >= view.textureCount)
+                continue;
+            const int across = textures[surface.texture].guestHalvings & 15,
+                      down = textures[surface.texture].guestHalvings >> 4;
+            if (across == 0 && down == 0)
+                continue;
+            // (Packed words, as GxStream.cpp writes them: up to four commands
+            // to a word, then their parameters -- two of a 16-bit vertex,
+            // one of anything else.)
+            std::uint32_t at = surface.gxOfs;
+            const std::uint32_t end = surface.gxOfs + surface.gxWords;
+            while (at < end)
+            {
+                const std::uint32_t header = gx[at++];
+                for (int k = 0; k < 4 && at <= end; ++k)
+                {
+                    const auto code = static_cast<std::uint8_t>(header >> (8 * k));
+                    if (code == 0)
+                        break;
+                    if (code == 0x22 && at < end && !done[at]) // TEXCOORD: s low, t high, 1/16 texel
+                    {
+                        const auto s = static_cast<std::int16_t>(gx[at] & 0xFFFF),
+                                   t = static_cast<std::int16_t>(gx[at] >> 16);
+                        gx[at] = static_cast<std::uint16_t>(s >> across) |
+                                 static_cast<std::uint32_t>(static_cast<std::uint16_t>(t >> down)) << 16;
+                        done[at] = 1;
+                    }
+                    at += code == 0x23 ? 2 : 1;
+                }
+            }
+        }
+        for (std::uint32_t i = 0; i < view.textureCount; ++i)
+        {
+            hldata::TextureRef &ref = textures[i];
+            ref.flags &= ~hldata::kTextureStreamed;
+            ref.width = static_cast<std::uint16_t>(ref.width >> (ref.guestHalvings & 15));
+            ref.height = static_cast<std::uint16_t>(ref.height >> (ref.guestHalvings >> 4));
+            ref.guestHalvings = 0;
+        }
+        hldata::LevelHeader header;
+        std::memcpy(&header, level.data(), sizeof(header));
+        header.crc32 = hldata::crc32(level.data() + sizeof(header), static_cast<std::uint32_t>(level.size() - sizeof(header)));
+        std::memcpy(level.data(), &header, sizeof(header));
+        hldata::LevelView check;
+        return check.open(level.data(), static_cast<std::uint32_t>(level.size())) == hldata::LevelError::Ok;
+    }
+
     namespace
     {
         /// Everything a map's archive holds, in the order the console loads
@@ -181,7 +250,9 @@ namespace hlds
             if (!readFile(stage / "maps" / (map + ".hlm"), level, error))
                 return false;
             hldata::LevelView view;
-            if (view.open(level.data(), static_cast<std::uint32_t>(level.size())) != hldata::LevelError::Ok)
+            // (Sent over the air: its textures as a guest has them.)
+            if ((air && !guestTextures(level)) ||
+                view.open(level.data(), static_cast<std::uint32_t>(level.size())) != hldata::LevelError::Ok)
             {
                 error = "the staged level does not open: " + map;
                 return false;
@@ -427,6 +498,52 @@ namespace hlds
             return true;
         }
 
+        /// The guns held, as a guest has them: the lighter cook (stage
+        /// gst/, the same on every map -- so in the base), with its skin
+        /// (of one size, kLazySkinTexels: the size of the slots a guest
+        /// writes the one in hand to, set by before the map's textures).
+        /// `player`: and the others in the game, the player model.
+        void leanGuns(const fs::path &stage, Packing &packing, bool player)
+        {
+            auto skinOf = [](const std::vector<std::uint8_t> &model, const std::string &name)
+            {
+                if (model.size() < sizeof(hldata::ModelHeader))
+                    return std::string();
+                hldata::ModelHeader header;
+                std::memcpy(&header, model.data(), sizeof(header));
+                return header.atlasWidth == 0 ? std::string()
+                                              : hldata::modelSkinFile(name.c_str(), header.atlasWidth, header.atlasHeight);
+            };
+            for (std::size_t at = 0; at < packing.members.size(); ++at)
+            {
+                NpacMember &member = packing.members[at];
+                if ((member.path.rfind("mdl/v_", 0) != 0 && (!player || member.path != "mdl/player.hmd")) ||
+                    member.path.size() < 8 || member.path.compare(member.path.size() - 4, 4, ".hmd") != 0)
+                    continue;
+                const std::string name = member.path.substr(4, member.path.size() - 8);
+                std::vector<std::uint8_t> lean;
+                std::string ignored;
+                if (!readFile(stage / "gst" / (name + ".hmd"), lean, ignored))
+                    continue;
+                const std::string oldSkin = skinOf(member.data, name), newSkin = skinOf(lean, name);
+                member.data = std::move(lean);
+                for (NpacMember &skin : packing.members)
+                {
+                    if (skin.path != "mdl/" + oldSkin)
+                        continue;
+                    // (The player's in 256 colours, its own, where the stage has it.)
+                    std::vector<std::uint8_t> bytes;
+                    if (!newSkin.empty() &&
+                        (readFile(stage / "gst" / newSkin, bytes, ignored) || readFile(stage / "mdl" / newSkin, bytes, ignored)))
+                    {
+                        skin.path = "mdl/" + newSkin;
+                        skin.data = std::move(bytes);
+                    }
+                    break;
+                }
+            }
+        }
+
         /// What of a map a console sent it for a game between consoles is
         /// given -- what the match can show and play there, and nothing more:
         ///  - the guns it can be held: the crowbar and the 9 mm everyone
@@ -443,7 +560,7 @@ namespace hlds
             std::vector<std::uint8_t> level;
             hldata::LevelView view;
             if (!readFile(stage / "maps" / (map + ".hlm"), level, error) || !guestLevel(level) ||
-                view.open(level.data(), static_cast<std::uint32_t>(level.size())) != hldata::LevelError::Ok)
+                !guestTextures(level) || view.open(level.data(), static_cast<std::uint32_t>(level.size())) != hldata::LevelError::Ok)
             {
                 error = "the staged level does not open, or its guest's does not: " + map;
                 return false;
@@ -547,50 +664,17 @@ namespace hlds
                     kept_.push_back(std::move(member));
             }
             packing.members = std::move(kept_);
-            // The guns held, as a guest has them: the lighter cook (stage
-            // gst/, the same on every map -- so in the base), with its skin.
-            auto skinOf = [](const std::vector<std::uint8_t> &model, const std::string &name)
-            {
-                if (model.size() < sizeof(hldata::ModelHeader))
-                    return std::string();
-                hldata::ModelHeader header;
-                std::memcpy(&header, model.data(), sizeof(header));
-                return header.atlasWidth == 0 ? std::string()
-                                              : hldata::modelSkinFile(name.c_str(), header.atlasWidth, header.atlasHeight);
-            };
-            for (std::size_t at = 0; at < packing.members.size(); ++at)
-            {
-                NpacMember &member = packing.members[at];
-                if ((member.path.rfind("mdl/v_", 0) != 0 && member.path != "mdl/player.hmd") ||
-                    member.path.size() < 8 || member.path.compare(member.path.size() - 4, 4, ".hmd") != 0)
-                    continue;
-                const std::string name = member.path.substr(4, member.path.size() - 8);
-                std::vector<std::uint8_t> lean;
-                std::string ignored;
-                if (!readFile(stage / "gst" / (name + ".hmd"), lean, ignored))
-                    continue;
-                const std::string oldSkin = skinOf(member.data, name), newSkin = skinOf(lean, name);
-                member.data = std::move(lean);
-                for (NpacMember &skin : packing.members)
-                {
-                    if (skin.path != "mdl/" + oldSkin)
-                        continue;
-                    // (The player's in 256 colours, its own, where the stage has it.)
-                    std::vector<std::uint8_t> bytes;
-                    if (!newSkin.empty() &&
-                        (readFile(stage / "gst" / newSkin, bytes, ignored) || readFile(stage / "mdl" / newSkin, bytes, ignored)))
-                    {
-                        skin.path = "mdl/" + newSkin;
-                        skin.data = std::move(bytes);
-                    }
-                    break;
-                }
-            }
+            leanGuns(stage, packing, true);
             // ... and those that came later, it has lying about: packed, last.
+            // (With what they fire: a guest sees it fired, by anyone.)
+            std::uint16_t heldBundles = 0;
+            for (const std::string &gun : held)
+                heldBundles = static_cast<std::uint16_t>(heldBundles | hldata::bundlesOf(gun.c_str()));
             for (std::uint32_t i = 0; i < view.modelRefCount; ++i)
             {
                 const char *name = view.modelRefs[i].name;
-                if (!hldata::modelRefLazy(view.modelRefs[i]) || held.count(name) == 0)
+                if (!hldata::modelRefLazy(view.modelRefs[i]) ||
+                    (held.count(name) == 0 && (std::strncmp(name, "v_", 2) == 0 || (hldata::bundlesOf(name) & heldBundles) == 0)))
                     continue;
                 // (The lighter cook, if the stage has it; else the card's.)
                 const fs::path lean = stage / "gst" / (std::string(name) + ".hmd");
@@ -638,6 +722,8 @@ namespace hlds
                 return false;
             if (multiplayer && !guestMatch(stage, maps[m], each[m], error))
                 return false;
+            if (!multiplayer)
+                leanGuns(stage, each[m], false);
         }
         // A model is cooked for each map with a skin as big as that map has
         // room for: here every map has the same one, the smallest any of

@@ -4,6 +4,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <map>
+#include <string>
 
 #include "hlds/MapStats.hpp"
 
@@ -498,5 +500,76 @@ namespace hlds
         }
         return planTextures(bsp, textureNeeds(bsp, everyModel, hidden), texelBudget, colourBudget,
                             kAlphaTexelBudget);
+    }
+    TexturePlan guestTexturePlan(const BspFile &bsp, const TexturePlan &plan, int texelBudget)
+    {
+        TexturePlan guest = plan;
+        guest.streamed.clear();
+        guest.streamedTextures = 0;
+        guest.shrunk = 0;
+        guest.fits = true;
+        // The textures in groups that shrink together: a cycle's pictures,
+        // or one texture alone.
+        std::map<std::string, std::vector<std::size_t>> groups;
+        long total = 0;
+        for (std::size_t t = 0; t < guest.sizes.size() && t < bsp.textures.size(); ++t)
+        {
+            const TextureSize &size = guest.sizes[t];
+            if (size.width == 0)
+                continue;
+            total += static_cast<long>(size.width) * size.height;
+            const std::string &name = bsp.textures[t].name;
+            if (name.empty() || name[0] == '!' || name.rfind("water", 0) == 0)
+                continue; // (liquid: its own ways of being drawn)
+            const bool cycle = name.size() > 2 && (name[0] == '+' || name[0] == '-');
+            groups[cycle ? name.substr(0, 1) + name.substr(2) : "=" + name].push_back(t);
+        }
+        while (total > texelBudget)
+        {
+            // The group that takes the most.
+            const std::vector<std::size_t> *largest = nullptr;
+            long most = 0;
+            for (const auto &[key, members] : groups)
+            {
+                long texels = 0;
+                bool can = true;
+                for (std::size_t t : members)
+                {
+                    const TextureSize &size = guest.sizes[t];
+                    texels += static_cast<long>(size.width) * size.height;
+                    can = can && std::max(size.width, size.height) > kMinTextureSide;
+                }
+                if (can && texels > most)
+                {
+                    most = texels;
+                    largest = &members;
+                }
+            }
+            if (largest == nullptr)
+            {
+                guest.fits = false;
+                break;
+            }
+            // Its longer side halved (both, if square).
+            for (std::size_t t : *largest)
+            {
+                TextureSize &size = guest.sizes[t];
+                const long before = static_cast<long>(size.width) * size.height;
+                const bool across = size.width >= size.height && size.width > kMinTextureSide;
+                const bool down = size.height >= size.width && size.height > kMinTextureSide;
+                if (across)
+                    size.width = static_cast<std::uint16_t>(size.width / 2);
+                if (down)
+                    size.height = static_cast<std::uint16_t>(size.height / 2);
+                total -= before - static_cast<long>(size.width) * size.height;
+            }
+        }
+        guest.texels = static_cast<int>(total);
+        for (std::size_t t = 0; t < guest.sizes.size(); ++t)
+        {
+            if (guest.sizes[t].width != plan.sizes[t].width || guest.sizes[t].height != plan.sizes[t].height)
+                ++guest.shrunk;
+        }
+        return guest;
     }
 } // namespace hlds

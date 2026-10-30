@@ -94,6 +94,10 @@ namespace hlds
         int modelTrianglesFar = 0;
         int modelTrianglesFull = 0;
         int modelTexelKb = 0; ///< their skins, in texels
+        /// A map a console may be sent: its textures as that console has
+        /// them, all at once (K texels), and how many are smaller there.
+        int guestTexelKb = 0;
+        int guestShrunk = 0;
         int sounds = 0;       ///< sounds the map plays
         int soundKb = 0;      ///< what they take in memory on the console
         int soundsHalved = 0; ///< of them, cooked at half the rate to fit

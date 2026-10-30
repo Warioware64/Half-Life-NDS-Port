@@ -59,6 +59,7 @@ namespace hlrt::guest
         std::uint8_t takenSkill = 2;
         /// How long (vblanks) a guest waits for the host to say anything.
         constexpr std::uint32_t kAirQuietVblanks = 600;
+        std::uint32_t pumpedAt = 0; ///< when the radio was last listened to
         /// ... and how many times it says it has all of a stream once it
         /// has, before it goes back to the game's frames (one lost answer
         /// would otherwise leave the host waiting for it).
@@ -131,6 +132,17 @@ namespace hlrt::guest
         /// answer once a vblank. False once the host has been quiet too long.
         bool pump()
         {
+            // (Quiet is counted only while listening: a console busy elsewhere
+            // -- a map's game being set up -- has its window full, and the
+            // host has nothing to send it until it reads on.)
+            const std::uint32_t now = Global::vblanks();
+            if (now - pumpedAt > 2)
+            {
+                // (No later than now: heard while busy, it is sooner than the gap.)
+                const std::uint32_t since = now - quietSince, busy = now - pumpedAt;
+                quietSince = since > busy ? quietSince + busy : now;
+            }
+            pumpedAt = now;
             std::uint8_t frame[hldata::kNetCmdBytes];
             int from = 0;
             bool heard = false;
@@ -179,6 +191,7 @@ namespace hlrt::guest
         {
             void (*progress)(int) = nullptr;
             int shown = -1;
+            std::uint32_t shownAt = 0;
             bool more(const std::uint8_t *&out, std::size_t &length) override
             {
                 // (Heard and answered once a vblank as the loaders read, not
@@ -189,9 +202,16 @@ namespace hlrt::guest
                     return false;
                 while (true)
                 {
-                    // (How far, said as it changes: a hundred times at most.)
-                    if (progress != nullptr && receiver.percent() != shown)
-                        progress(shown = receiver.percent());
+                    // (How far, said as it changes -- no more than ten times
+                    // a second, and the end always: the page is drawn again
+                    // each time, and that is not free.)
+                    const int percent = receiver.percent();
+                    if (progress != nullptr && percent != shown &&
+                        (shown < 0 || percent >= 100 || Global::vblanks() - shownAt >= 6))
+                    {
+                        shownAt = Global::vblanks();
+                        progress(shown = percent);
+                    }
                     bool got;
                     {
                         const Hold hold;
@@ -386,14 +406,14 @@ namespace hlrt::guest
         // go of whatever was mounted first.)
         if (mapOnAir && receiver.stream == hldata::AirStream::Map && receiver.ring != nullptr)
         {
-            // (The last piece read let go of: then it is all handed on.)
+            // (The last piece read let go of: then it is all handed on --
+            // and what the cursor did not ask for, there being no more of
+            // it, waited for, as receiveAir does. Left unheard, the host would
+            // go on sending it for ever.)
             const std::uint8_t *rest;
             std::size_t size;
+            while (!receiver.done() && airSupply.more(rest, size))
             {
-                const Hold hold;
-                while (receiver.next(rest, size))
-                {
-                }
             }
             if (receiver.done())
             {
@@ -495,6 +515,12 @@ namespace hlrt::guest
     }
 
     void onMapProgress(void (*progress)(int percent)) { mapProgress = progress; }
+
+    void hear()
+    {
+        if (mapOnAir && receiver.ring != nullptr)
+            pump();
+    }
 
     std::uint32_t airLength() { return receiver.known ? receiver.length : 0; }
 

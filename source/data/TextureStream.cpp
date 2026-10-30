@@ -107,6 +107,8 @@ namespace hlrt
         NEA_PaletteRegion paletteRegion{};
         std::uint32_t skinBytes = 0;
         int skinSlots = 0;
+        /// reserveSkinSlots' slots: regions[0] is them, for begin() (0: none set by).
+        std::uint32_t earlyBytes = 0;
 
         /// What was read, and when: it is queued to be written two frames
         /// after (the picture on the screen until then may be drawn from
@@ -241,9 +243,32 @@ namespace hlrt
         return planner.resident(id);
     }
 
-    void TextureStream::begin()
+    void TextureStream::reserveSkinSlots(std::uint32_t bytes)
     {
         end();
+        bytes = (bytes + 31u) & ~31u;
+        // Both, else one.
+        for (int slots = 2; slots >= 1 && regionCount == 0; --slots)
+        {
+            if (NEA_TextureRegionReserve4x4(static_cast<int>(slots * bytes), &regions[0]) >=
+                static_cast<int>(slots * bytes))
+            {
+                regionTotal = regions[0].texelBytes;
+                regionCount = 1;
+            }
+            else
+                NEA_TextureRegionRelease(&regions[0]);
+        }
+        earlyBytes = regionCount != 0 ? bytes : 0;
+    }
+
+    void TextureStream::begin()
+    {
+        // (Slots set by before the map's textures: kept.)
+        const std::uint32_t early = earlyBytes;
+        earlyBytes = 0;
+        if (early == 0)
+            end();
         const int count = std::min<int>(level.view.textureCount, kStreamMaxTextures);
         streamedTotal = 0;
         for (int i = 0; i < count; ++i)
@@ -266,12 +291,19 @@ namespace hlrt
             texelNeed += ByteArena<kStreamMaxBlocks>::round(infos[i].texelBytes);
             paletteNeed += ByteArena<kStreamMaxBlocks>::round(infos[i].paletteBytes);
         }
-        skinBytes = modelCache.largestSkin();
-        regionCount = 0;
-        regionTotal = 0;
+        skinBytes = early != 0 ? early : modelCache.largestSkin();
+        if (early == 0)
+        {
+            regionCount = 0;
+            regionTotal = 0;
+        }
+        if (early == 0)
         {
             // The largest places first, until there is room for all.
-            const int want = static_cast<int>(texelNeed + 2 * skinBytes);
+            // (Less what the models a weapon fires take when it is taken up:
+            // they are in video memory, beside it.)
+            const int want = std::min(static_cast<int>(texelNeed + 2 * skinBytes),
+                                      NEA_TextureFree4x4() - modelCache.lazyTexelBytes());
             while (regionCount < kMostRegions && regionTotal < want)
             {
                 NEA_TextureRegion &r = regions[regionCount];
@@ -308,7 +340,7 @@ namespace hlrt
             const std::uint32_t top = first - static_cast<std::uint32_t>(skinSlots) * skinBytes;
             void *const slots[2] = {static_cast<std::uint8_t *>(regions[0].texels) + top,
                                     static_cast<std::uint8_t *>(regions[0].texels) + top + skinBytes};
-            modelCache.setSlots(slots, skinSlots);
+            modelCache.setSlots(slots, skinSlots, skinBytes);
         }
         // The plan's offsets: the pieces one after another, a barrier between.
         std::uint32_t room = 0;

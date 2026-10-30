@@ -339,7 +339,12 @@ namespace hldata
         /// The percentage of map leaves whose PVS lists a surface wearing it.
         /// The textures every view wants are kept resident in video memory.
         std::uint8_t share;
-        std::uint8_t reservedTexture;
+        /// How much smaller a console sent the map has it (every texture in
+        /// video memory at once, none streamed): halvings of its width in
+        /// the low four bits, of its height in the high four. The host's
+        /// level only says it; the guest's has it done (the converter's
+        /// Pack: its size, and its surfaces' coordinates) and says 0.
+        std::uint8_t guestHalvings;
     };
 
     /// How a brush entity is drawn. From the entity's "rendermode" and

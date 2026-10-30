@@ -12,6 +12,8 @@
 #include "data/LevelFile.hpp"
 #include "data/TextureCache.hpp"
 #include "data/VramWriter.hpp"
+#include "game/Game.hpp"
+#include "game/Player.hpp"
 #include "net/GuestLoad.hpp"
 #include "HlRemap.hpp"
 
@@ -132,7 +134,11 @@ namespace hlrt
         std::free(materials_);
         std::free(palettes_);
         std::free(kept_);
+        std::free(lazy_);
         kept_ = nullptr;
+        lazy_ = nullptr;
+        lazyMask_ = haveSeen_ = 0;
+        haveKnown_ = false;
         wanted_ = resident_ = residentSlot_ = writing_ = writingSlot_ = -1;
         slotCount_ = 0;
         views_ = nullptr;
@@ -192,11 +198,12 @@ namespace hlrt
         slotCount_ = 0;
     }
 
-    void ModelCache::setSlots(void *const *texels, int count)
+    void ModelCache::setSlots(void *const *texels, int count, std::uint32_t bytes)
     {
         // (Whatever was in the old ones is gone with them.)
         dropSlots();
         slotCount_ = count < 0 ? 0 : (count > 2 ? 2 : count);
+        slotBytes_ = bytes;
         for (int k = 0; k < 2; ++k)
             slots_[k] = Slot{k < slotCount_ ? texels[k] : nullptr, 0, false};
         if (slotCount_ == 0)
@@ -226,6 +233,7 @@ namespace hlrt
 
     void ModelCache::apply()
     {
+        lazyTick();
         if (kept_ == nullptr || slotCount_ == 0)
             return;
         const std::uint32_t now = textureStream.blanks();
@@ -257,7 +265,7 @@ namespace hlrt
         NEA_Material *m = wanted_ < count_ && kept_[wanted_] != 0 ? materials_[wanted_] : nullptr;
         const std::uint32_t texels = m != nullptr ? static_cast<std::uint32_t>(m->ram_sizex * m->ram_sizey / 4) : 0;
         if (m == nullptr || m->ram_data == nullptr || m->ram_format != NEA_TEX4X4 ||
-            m->ram_size < texels + texels / 2 || texels > largestSkin())
+            m->ram_size < texels + texels / 2 || texels > slotBytes_)
         {
             if (m != nullptr && kept_[wanted_] != 0)
             {
@@ -310,45 +318,117 @@ namespace hlrt
     void ModelCache::wield(int index)
     {
         wanted_ = index;
-        if (lazy(index) && views_[index].header == nullptr)
-            loadLazy(index);
+        if (!lazy(index))
+            return;
+        // (Now, not a frame on: the game looks into a weapon's clips as it
+        // takes it up. The rest of what goes with it, lazyTick.)
+        lazy_[index].usedAt = textureStream.blanks();
+        if (views_[index].header == nullptr)
+            loadLazy(index, true);
     }
 
-    /// A weapon the map has not, read when it is taken up: the one before
-    /// it of those let go first (not the tripmine's, which may be on a wall
-    /// -- nor one whose skin is being written).
-    void ModelCache::loadLazy(int index)
+    bool ModelCache::lazyInUse(int index) const
     {
+        if (index == wanted_ || index == resident_ || index == writing_)
+            return true;
+        const auto &actors = game.actors;
+        for (int i = 0; i < hldata::kMaxProjectiles; ++i)
+        {
+            if (actors.shots[i].active && game.thrownModel(actors.shots[i].kind) == index)
+                return true;
+        }
+        for (int i = 0; i < hldata::kMaxPieces; ++i)
+        {
+            if (actors.pieces[i].kind != 0 && game.shellModel(actors.pieces[i].kind) == index)
+                return true;
+        }
+        return false;
+    }
+
+    int ModelCache::lazyToDrop() const
+    {
+        const std::uint16_t inHand = wanted_ >= 0 && lazy(wanted_) ? lazy_[wanted_].bundles : 0;
+        int best = -1;
         for (int i = 0; i < count_; ++i)
         {
-            if (i != index && lazy(i) && views_[i].header != nullptr && i != writing_ &&
-                std::strcmp(level.view.modelRefs[i].name, "v_tripmine") != 0)
-                dropLazy(i);
+            if (!lazy(i) || views_[i].header == nullptr || (lazy_[i].bundles & inHand) != 0 || lazyInUse(i))
+                continue;
+            if (best < 0 || lazy_[i].usedAt < lazy_[best].usedAt)
+                best = i;
         }
+        return best;
+    }
+
+    /// A model the map has not, read when it is wanted.
+    bool ModelCache::loadLazy(int index, bool evict)
+    {
+        const std::uint32_t now = textureStream.blanks();
         const char *name = level.view.modelRefs[index].name;
-        std::uint32_t size = 0;
-        // (The map's own memory comes first: room left beside it, or not
-        // at all.)
+        // (The map's own memory comes first: room left beside it, or not at
+        // all. A console sent the game was promised less: what it was sent
+        // was reckoned up with this in it.)
+#ifdef HLDS_CHILD
+        constexpr std::size_t kSpare = hldata::kGuestPlayBytes / 2;
+#else
         constexpr std::size_t kSpare = 200 * 1024;
-        std::uint8_t *block = nullptr;
+#endif
+        // A place among those in memory, and the room it takes: the longest
+        // unused let go until there is. (Not for one that is not there.)
+        std::string path = global.commonPath(std::string("wpn/") + name + ".hmd");
         if (global.isDSi)
-            block = readModel(global.commonPath(std::string("wpn/") + name + ".dsi.hmd"), size, kSpare);
-        if (block == nullptr)
-            block = readModel(global.commonPath(std::string("wpn/") + name + ".hmd"), size, kSpare);
+        {
+            const std::string finer = global.commonPath(std::string("wpn/") + name + ".dsi.hmd");
+            if (std::FILE *file = std::fopen(finer.c_str(), "rb"))
+            {
+                std::fclose(file);
+                path = finer;
+            }
+        }
+        long length = 0;
+        if (std::FILE *file = std::fopen(path.c_str(), "rb"))
+        {
+            std::fseek(file, 0, SEEK_END);
+            length = std::ftell(file);
+            std::fclose(file);
+        }
+        int resident = 0;
+        for (int i = 0; i < count_; ++i)
+            resident += lazy(i) && views_[i].header != nullptr ? 1 : 0;
+        while (length > 0 && (resident >= hldata::kLazyResident ||
+                              global.heapHeadroom() < static_cast<std::size_t>(length) + kSpare))
+        {
+            const int gone = evict ? lazyToDrop() : -1;
+            if (gone < 0)
+                break;
+            dropLazy(gone);
+            --resident;
+        }
+        std::uint32_t size = 0;
+        std::uint8_t *block = nullptr;
+        if (length > 0 && (evict || resident < hldata::kLazyResident))
+            block = readModel(path, size, kSpare);
         if (block == nullptr || !views_[index].open(block, size))
         {
             std::free(block);
             views_[index] = hldata::ModelView();
-            ++missing_;
-            return;
+            if (!lazy_[index].failed)
+                ++missing_;
+            lazy_[index].failed = true;
+            lazy_[index].triedAt = now;
+            return false;
         }
+        if (lazy_[index].failed)
+            --missing_;
+        lazy_[index].failed = false;
+        lazy_[index].usedAt = now;
         blocks_[index] = block;
         if (views_[index].header->atlasWidth == 0)
-            return;
+            return true;
         // Its skin kept in main memory, as a weapon's is, while there are
-        // slots to write it to; else (and the tripmine's: it is on walls
-        // too) straight into video memory, where there is room.
-        const bool kept = slotCount_ > 0 && std::strcmp(name, "v_tripmine") != 0;
+        // slots to write it to; else (the tripmine's: it is on walls too --
+        // and what is not held) straight into video memory, where there is
+        // room.
+        const bool kept = slotCount_ > 0 && std::strncmp(name, "v_", 2) == 0 && std::strcmp(name, "v_tripmine") != 0;
         kept_[index] = kept ? 1 : 0;
         if (!TextureCache::loadFile(skinPath(index).c_str(), false, views_[index].header->atlasWidth,
                                     views_[index].header->atlasHeight, 0, materials_[index], palettes_[index],
@@ -357,6 +437,53 @@ namespace hlrt
             ++bare_;
             kept_[index] = 0;
         }
+        return true;
+    }
+
+    void ModelCache::lazyTick()
+    {
+        if (lazy_ == nullptr || !anyLazy_)
+            return;
+        const std::uint32_t now = textureStream.blanks();
+        const auto &actors = game.actors;
+        // What was just picked up is likely taken in hand: read ahead, if
+        // there is room for it without anything going.
+        std::uint16_t have = 0;
+        for (int weapon = hldata::kWeaponCrowbar; weapon < hldata::kWeaponCount; ++weapon)
+            have = static_cast<std::uint16_t>(have | (hldata::hasWeapon(player.state, weapon) ? 1u << weapon : 0u));
+        if (haveKnown_)
+            lazyMask_ = static_cast<std::uint16_t>(lazyMask_ | (have & ~haveSeen_));
+        haveSeen_ = have;
+        haveKnown_ = true;
+        const std::uint16_t inHand = wanted_ >= 0 && lazy(wanted_) ? lazy_[wanted_].bundles : 0;
+        for (int i = 0; i < count_; ++i)
+        {
+            if (!lazy(i))
+                continue;
+            LazyState &state = lazy_[i];
+            const bool needed = (state.bundles & inHand) != 0;
+            if (needed)
+                state.usedAt = now;
+            if (views_[i].header != nullptr || (state.failed && now - state.triedAt < 60))
+                continue;
+            bool flying = false;
+            for (int s = 0; s < hldata::kMaxProjectiles && !flying; ++s)
+                flying = actors.shots[s].active && game.thrownModel(actors.shots[s].kind) == i;
+            for (int p = 0; p < hldata::kMaxPieces && !flying; ++p)
+                flying = actors.pieces[p].kind != 0 && game.shellModel(actors.pieces[p].kind) == i;
+            if (needed || flying)
+            {
+                loadLazy(i, true);
+                return;
+            }
+            if ((state.bundles & lazyMask_) != 0)
+            {
+                loadLazy(i, false);
+                lazyMask_ = static_cast<std::uint16_t>(lazyMask_ & ~state.bundles);
+                return;
+            }
+        }
+        lazyMask_ = 0;
     }
 
     void ModelCache::dropLazy(int index)
@@ -418,8 +545,9 @@ namespace hlrt
         materials_ = static_cast<NEA_Material **>(std::calloc(count + 1, sizeof(NEA_Material *)));
         palettes_ = static_cast<NEA_Palette **>(std::calloc(count + 1, sizeof(NEA_Palette *)));
         kept_ = static_cast<std::uint8_t *>(std::calloc(count + 1, 1));
+        lazy_ = static_cast<LazyState *>(std::calloc(count + 1, sizeof(LazyState)));
         if (views_ == nullptr || blocks_ == nullptr || materials_ == nullptr || palettes_ == nullptr ||
-            kept_ == nullptr)
+            kept_ == nullptr || lazy_ == nullptr)
         {
             destroy();
             return false;
@@ -429,12 +557,13 @@ namespace hlrt
         {
             new (&views_[i]) hldata::ModelView();
             // (A weapon the map has not: when it is taken up.)
+            const char *name = level.view.modelRefs[i].name;
             if (lazy(i))
             {
                 anyLazy_ = true;
+                lazy_[i].bundles = hldata::bundlesOf(name);
                 continue;
             }
-            const char *name = level.view.modelRefs[i].name;
 #ifdef HLDS_CHILD
             // (Sent the game: a model of the group's base was kept when it
             // came, and is borrowed -- never this cache's to free.)

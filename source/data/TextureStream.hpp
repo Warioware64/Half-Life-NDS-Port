@@ -67,6 +67,11 @@ namespace hlrt
     public:
         /// Load after everything else has, as much fits.
         void begin();
+        /// Before anything of a map is in video memory: the weapons' two
+        /// skin slots, `bytes` each, set by first (a console sent the game
+        /// has every texture of the map in video memory, none streamed, and
+        /// would have nothing left for them). begin() takes them up.
+        void reserveSkinSlots(std::uint32_t bytes);
         void end();
         bool active() const { return active_; }
 

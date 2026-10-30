@@ -91,6 +91,9 @@ namespace hlrt::guest
     /// What is told how far a map's stream has got as it loads (0..100), as
     /// receiveAir's `progress` is for the others.
     void onMapProgress(void (*progress)(int percent));
+    /// Between the steps of a map's load: the map's stream heard and
+    /// answered, or the host, hearing nothing, leaves this console out.
+    void hear();
     /// The stream being taken: how long it is, and how fast it has come
     /// (KB a second, since it began).
     std::uint32_t airLength();

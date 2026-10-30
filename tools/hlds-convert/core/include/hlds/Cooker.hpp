@@ -39,6 +39,10 @@ namespace hlds
         /// it), so that a surface is drawn only where its own leaf is seen
         /// (the portal flood: HlPortals.hpp). Off: across leaves, as before.
         bool groupByLeaf = true;
+        /// The sizes a console sent the map has its textures at
+        /// (guestTexturePlan), said in each TextureRef::guestHalvings; null:
+        /// as the host has them.
+        const TexturePlan *guestPlan = nullptr;
             /// The map's sky, when its six pictures are there to be cooked: the
         /// name they go by ("2desert"). Empty: the map is cooked without one.
         std::string skyName;

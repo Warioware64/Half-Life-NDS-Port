@@ -546,6 +546,34 @@ namespace
         check(!sender.asked(1, frame, airHave(AirStream::Base, 8, 137519, frame)),
               "an answer about another sending is not taken");
 
+        // A guest that has lost its place, saying over and over that it has
+        // nothing: no sign of life, or the match would wait for it for ever.
+        {
+            const auto answer = [&](std::uint32_t first)
+            {
+                hldata::detail::NetOut out{frame, frame + sizeof(frame)};
+                out.u16(kNetMagic);
+                out.u8(kNetVersion);
+                out.u8(kNetFrameAirAsk);
+                out.u8(static_cast<std::uint8_t>(AirStream::Map));
+                out.u16(5);
+                out.u32(first);
+                out.u32(0);
+                out.u32(0);
+                out.u32(first + kAirWindow);
+                return static_cast<int>(out.at - frame);
+            };
+            sender.begin(AirStream::Map, "doublecross", 1000000, 5, 1u << 1);
+            check(sender.asked(1, frame, answer(100)) && sender.wants[1].base == 100, "a guest says how far it is");
+            bool left = false;
+            for (std::uint32_t n = 0; n <= kAirSilentFrames + 1 && !left; ++n)
+            {
+                sender.asked(1, frame, answer(0));
+                left = sender.frame() != 0;
+            }
+            check(left && sender.done(), "one that goes back to nothing is left out in the end");
+        }
+
         // A map's picture (HlPreview.hpp): whole in one window, so the
         // window's slots are the file, in order, once it has all come.
         {

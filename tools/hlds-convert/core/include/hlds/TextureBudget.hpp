@@ -38,6 +38,10 @@ namespace hlds
     inline constexpr int kWorldTexelBudget = 480 * 1024;
     inline constexpr int kSinglePassTexelBudget = 720 * 1024;
     inline constexpr int kPaletteColourBudget = 30000;
+    /// Of kSinglePassTexelBudget, what a console sent the map keeps free
+    /// besides (guestTexturePlan): what is in video memory from one map
+    /// to the next -- the marks, the lamp, the sprays -- and NEA's own.
+    inline constexpr int kGuestVramMargin = 16 * 1024;
     /// (Of the 64 KB that half holds, twelve are there in every map: eight
     /// the head-up display's, four the marks shots and blood leave --
     /// HlUi.hpp.)
@@ -106,6 +110,16 @@ namespace hlds
                              int colourBudget = kPaletteColourBudget,
                              int alphaBudget = kAlphaTexelBudget,
                              const StreamOptions &stream = StreamOptions());
+
+    /// The sizes a console sent the map has its textures at, from the host's
+    /// `plan`: every one of them in video memory at once (nothing is
+    /// streamed on it), in `texelBudget`. The largest are made smaller --
+    /// a side halved at a time, never below kMinTextureSide, never one
+    /// wider than the host's -- until they fit; the pictures of one cycle
+    /// ('+' and '-' textures) all alike, as one surface shows each in
+    /// turn; liquid left as it is. A3I5 textures are as the host has them.
+    /// `fits` false: even that is not enough.
+    TexturePlan guestTexturePlan(const BspFile &bsp, const TexturePlan &plan, int texelBudget);
 
     /// For a map taken as plain geometry -- every model opaque, no entities
     /// consulted. `hidden` marks textures to leave out (findHiddenTextures).

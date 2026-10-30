@@ -29,8 +29,26 @@ namespace hlrt
         IconsView icons;
 
         /// The touch screen's tiles, as the screen's, for the pad drawn off
-        /// it while the weapon list slides (setWeaponList, present).
+        /// it while the weapon list slides (setWeaponList, present) -- and
+        /// for a page of words, drawn off it and put on it whole (offPage).
         std::uint32_t padTiles[768 * 8];
+
+        /// A page (showMessage, showProgress) drawn into padTiles, not on the
+        /// screen: wiped and drawn again where it is seen, it is seen wiped
+        /// -- a page said many times a second (a map coming in) blinks.
+        /// Begun: the canvas is the copy. Ended: what differs is copied on,
+        /// a word at a time, every word from the old straight to the new.
+        void offPage() { touchCanvas.offScreen(padTiles); }
+        void onPage()
+        {
+            touchCanvas.onScreen();
+            volatile std::uint32_t *to = touchCanvas.screenTiles();
+            for (int i = 0; i < 768 * 8; ++i)
+            {
+                if (to[i] != padTiles[i])
+                    to[i] = padTiles[i];
+            }
+        }
 
         /// The pad's tiles (it is whole tiles: 208 by 132 from 0 or 48, 24)
         /// copied from `from` to `to`, both laid out as the screen's.
@@ -442,6 +460,7 @@ namespace hlrt
     {
         stopShown = false;
         create();
+        offPage();
         Canvas &canvas = touchCanvas.canvas();
         canvas.clear();
         shown_ = Shown::Message;
@@ -452,12 +471,14 @@ namespace hlrt
         char cut[64];
         std::snprintf(cut, sizeof(cut), "%.*s", textFit(font, line2, 248), line2);
         drawTextCentred(canvas, font, 128, 112, cut, inkFor(font, kUiWhite));
+        onPage();
     }
 
     void BottomScreen::showProgress(const char *title, const char *step, const char *note, int done, int total,
                                     bool stop, bool percent)
     {
         create();
+        offPage();
         Canvas &canvas = touchCanvas.canvas();
         canvas.clear();
         shown_ = Shown::Message;
@@ -487,15 +508,14 @@ namespace hlrt
                 std::snprintf(cut, sizeof(cut), "%d of %d", done, total);
             drawTextCentred(canvas, small, 128, kBarY + kBarH + 6, cut, inkFor(small, kUiGrey));
         }
-        if (!stop)
+        if (stop)
         {
-            stopShown = false;
-            return;
+            canvas.button(kStopX, kStopY, kStopW, kStopH, stopHit);
+            drawTextCentred(canvas, medium, kStopX + kStopW / 2, kStopY + (kStopH - medium.height()) / 2,
+                            stopHit ? "STOPPING" : "STOP", inkFor(medium, stopHit ? kUiWhite : kUiOrange));
         }
-        canvas.button(kStopX, kStopY, kStopW, kStopH, stopHit);
-        drawTextCentred(canvas, medium, kStopX + kStopW / 2, kStopY + (kStopH - medium.height()) / 2,
-                        stopHit ? "STOPPING" : "STOP", inkFor(medium, stopHit ? kUiWhite : kUiOrange));
-        stopShown = true;
+        stopShown = stop;
+        onPage();
     }
 
     bool BottomScreen::stopTouched()
