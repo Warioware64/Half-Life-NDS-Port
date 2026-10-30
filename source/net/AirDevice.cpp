@@ -20,7 +20,7 @@ namespace hlrt::air
     {
         constexpr int kNameBytes = 32;
 
-        constexpr int kOwnedFiles = 40;
+        constexpr int kOwnedFiles = 64;
 
         struct File
         {

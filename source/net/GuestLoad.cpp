@@ -59,6 +59,7 @@ namespace hlrt::guest
         std::uint8_t takenSkill = 2;
         /// How long (vblanks) a guest waits for the host to say anything.
         constexpr std::uint32_t kAirQuietVblanks = 600;
+        constexpr std::uint32_t kAirStoppedVblanks = 240;
         std::uint32_t pumpedAt = 0; ///< when the radio was last listened to
         /// ... and how many times it says it has all of a stream once it
         /// has, before it goes back to the game's frames (one lost answer
@@ -171,7 +172,10 @@ namespace hlrt::guest
                 if (size > 0)
                     netlink::send(ask, size);
             }
-            if (Global::vblanks() - quietSince > kAirQuietVblanks)
+            // (Quiet too long -- or the host heard, but no longer sending: it
+            // gave up, and said so in what is not read here.)
+            const std::uint32_t quiet = Global::vblanks() - quietSince;
+            if (quiet > kAirQuietVblanks || (heard && receiver.known && quiet > kAirStoppedVblanks))
                 airLost = true;
             return !airLost;
         }
@@ -515,6 +519,8 @@ namespace hlrt::guest
     }
 
     void onMapProgress(void (*progress)(int percent)) { mapProgress = progress; }
+
+    void forgetTaken() { takenMap[0] = 0; }
 
     void hear()
     {

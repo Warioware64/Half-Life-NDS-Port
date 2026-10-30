@@ -105,6 +105,9 @@ namespace hlrt
         bool showMenu();
         void menuFrame();
         void hideMenu();
+        /// The animated title drawn with the picture, or not (a lobby's
+        /// top screen has other things to say).
+        void setMenuLogo(bool on) { menuLogoOn_ = on; }
 
     private:
         bool atlas_ = false; ///< the display's pictures are read (HudDraw.arm.cpp)
@@ -115,6 +118,7 @@ namespace hlrt
         void *decalPalette_ = nullptr;
         void *loadingMaterial_ = nullptr;
         void *loadingPalette_ = nullptr;
+        bool menuLogoOn_ = true;
         // The title screen's (showMenu): its background, its animated title
         // (a texture rewritten as it moves, the file it moves through), and
         // which of its pictures is shown, since when.

@@ -20,6 +20,7 @@
 
 #include "HlModel.hpp"
 #include "HlWeaponBundle.hpp"
+#include "HlCharacters.hpp"
 
 namespace hlrt
 {
@@ -39,8 +40,24 @@ namespace hlrt
         void forgetSkins();
         void loadSkins();
 
+        /// What another player holding `weapon` is seen with: its ModelRef
+        /// (-1: none on this map). In memory if views()[it].header is.
+        int heldModel(int weapon) const
+        {
+            return heldRefs_ != nullptr && weapon > 0 && weapon < hldata::kWeaponCount ? heldRefs_[weapon] : -1;
+        }
         const hldata::ModelView *views() const { return views_; }
-        int count() const { return count_; }
+        /// (The map's models, then the slots of those who chose to be another.)
+        int count() const { return count_ + hldata::kCharacterSlots; }
+        /// Who the players here chose to be, read (a console with the game;
+        /// before the map's textures stream, for the room for their skins).
+        void loadCharacters();
+        /// The ModelRef-like index of character `id`, if it is in memory; -1
+        /// (the suit, or not here): the map's own player.
+        int characterSlot(int id) const;
+        /// Player `slot` is drawn as that (from characterSlot): their colours
+        /// go over its skin.
+        void setPlayerCharacter(int slot, int model);
         NEA_Material *skin(unsigned index) const { return materials_[index]; }
         /// Drawing the model `index` as player `slot` of a game between
         /// consoles: the palette word of that player's colours, for a skin
@@ -48,7 +65,8 @@ namespace hlrt
         /// the skin's own.
         std::uint32_t playerPalette(unsigned index, int slot) const
         {
-            return static_cast<int>(index) == playerModel_ && slot >= 0 && slot < kPlayerColours
+            return (static_cast<int>(index) == playerModel_ || static_cast<int>(index) >= count_) && slot >= 0 &&
+                           slot < kPlayerColours
                        ? playerPaletteWords_[slot]
                        : 0;
         }
@@ -127,6 +145,7 @@ namespace hlrt
         /// hand's, what is flying about, what was just picked up. One a frame.
         void lazyTick();
         bool lazyInUse(int index) const;
+        bool heldByAnother(int index) const;
 
         /// By ModelRef, of the lazy ones.
         struct LazyState
@@ -136,6 +155,10 @@ namespace hlrt
             bool failed = false;
             std::uint16_t bundles = 0; ///< hldata::bundlesOf
         };
+        std::int16_t *heldRefs_ = nullptr;
+        std::uint16_t *characterBases_ = nullptr; ///< 256 colours a slot, as its skin came
+        int characterIds_[hldata::kCharacterSlots] = {};
+        int playerCharacter_[kPlayerColours] = {-1, -1, -1, -1, -1, -1, -1, -1};
         LazyState *lazy_ = nullptr;
         std::uint16_t lazyMask_ = 0;     ///< the weapons (bits) picked up just now, to load ahead
         std::uint16_t haveSeen_ = 0;     ///< what the player had when last looked

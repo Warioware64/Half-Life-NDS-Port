@@ -133,9 +133,11 @@ namespace
     void guestArrive(bool withGame)
     {
         hldata::NetDlParam param;
-        const bool sent = hldata::netDlRead(reinterpret_cast<const std::uint8_t *>(0x027FFBE0), param);
-        while (true)
+        bool sent = hldata::netDlRead(reinterpret_cast<const std::uint8_t *>(0x027FFBE0), param);
+        // (The one that sent it, for a while: gone, whoever else is near.)
+        for (int rounds = 0;; ++rounds)
         {
+            sent = sent && rounds < 4;
             guestSay("Waiting for the host...", sent ? "Joining the console that sent the game."
                                                      : "Looking for a game to join.");
             bool in = false;
@@ -505,6 +507,8 @@ namespace
         made = made && hlrt::spriteCache.create();
         clock.mark("spr");
         made = made && hlrt::modelCache.create();
+        if (made)
+            hlrt::modelCache.loadCharacters();
         clock.mark("mdl");
         hearStream();
         // What video memory has left is for the textures that stream.
@@ -639,6 +643,14 @@ namespace
             hlrt::netGame.frame();
             if (!hlrt::netGame.on() || hlrt::netGame.cancelled())
                 return false;
+            // (The host may give it up from here too: B.)
+            scanKeys();
+            if (hlrt::netGame.isHost() && (keysDown() & KEY_B))
+            {
+                hlrt::netGame.abortMatch();
+                hlrt::netGame.toLobbyFromLoad();
+                return false;
+            }
             if (hlrt::netGame.goAsked())
             {
                 hlrt::netGame.mapLoaded();
@@ -1252,6 +1264,7 @@ int main(int argc, char *argv[])
         // (Sent the game: the host told what a map may take of it, for the
         // maps it offers -- a DSi's room is not a DS's.)
         guestSayRoom();
+        bool saidRoom = true;
 #endif
         while (true)
         {
@@ -1270,14 +1283,16 @@ int main(int argc, char *argv[])
 #ifdef HLDS_CHILD
             // Sent the game: out of the host's game (left, or the host
             // gone), a host again -- there is nothing else here.
-            if (!hlrt::netGame.on())
+            if (!hlrt::netGame.on() || hlrt::menu.onJoin())
             {
-                leaving();
-                guestArrive(false);
-                back();
-                hlrt::menu.openLobby();
+                saidRoom = false;
+                if (!hlrt::netGame.on() && !hlrt::menu.onJoin())
+                    hlrt::menu.openJoin();
+            }
+            else if (!saidRoom && hlrt::netGame.phase() == hlrt::NetGame::Phase::Lobby)
+            {
+                saidRoom = true;
                 guestSayRoom();
-                continue;
             }
             // A match about to begin: its group's base, and its map as it
             // comes -- then held, under the curtain, until the host starts it.
@@ -1554,6 +1569,13 @@ int main(int argc, char *argv[])
                     backToLobby();
                     return;
                 }
+                // The match over: the table, on the touch screen, as it
+                // stands, until the lobby.
+                {
+                    static unsigned scoresDue = 0;
+                    if (inMatch && !paused && hlrt::netGame.match().over && ++scoresDue % 15 == 1)
+                        hlrt::bottomScreen.showScores();
+                }
                 // Who killed whom, who came and went: a line at the top of
                 // the picture for a few seconds (the touch screen is the
                 // player's controls, and stays so).
@@ -1612,6 +1634,8 @@ int main(int argc, char *argv[])
                         backToTitle();
                         return;
                     }
+                    if (item == Menu::Action::AbortMatch)
+                        hlrt::netGame.abortMatch();
                     if (item == Menu::Action::Save || item == Menu::Action::SaveTo)
                     {
                         // The quick one, or the player's own that was

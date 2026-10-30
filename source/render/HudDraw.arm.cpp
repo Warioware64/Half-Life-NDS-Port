@@ -1192,7 +1192,12 @@ namespace hlrt
             return;
         // The title's picture due now (round and round), into its texture in
         // this blank, if it is another.
-        if (logoMaterial_ != nullptr)
+        if (!menuLogoOn_)
+        {
+            logoShown = nullptr;
+            logoFrame_ = -1;
+        }
+        else if (logoMaterial_ != nullptr)
         {
             auto *material = static_cast<NEA_Material *>(logoMaterial_);
             const std::uint64_t micros = static_cast<std::uint64_t>(Global::vblanks() - menuSince_) * 1000000u / 60u;
@@ -1219,6 +1224,7 @@ namespace hlrt
 
     void HudDraw::hideMenu()
     {
+        profileView.close();
         // (The lobby's map card goes with the title: its textures are not
         // to be beside a map's.)
         mapCard.hide();

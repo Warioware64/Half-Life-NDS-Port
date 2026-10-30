@@ -139,6 +139,11 @@ namespace hlds
     /// A sound's name as an event has it, as the level knows it.
     std::string eventSoundName(std::string path);
 
+    /// What a player holds (a game's p_*.mdl): every vertex put in the space
+    /// of its right hand, and the model made one bone, with nothing that moves
+    /// it. False if it has no such hand.
+    bool bakeHeldModel(MdlFile &mdl, std::string &error);
+
     bool cookModel(const MdlFile &mdl, const std::vector<std::string> &clipNames, CookedModel &out,
                    ModelCookReport &report, std::string &error, int skinTexels = kModelSkinTexels,
                    bool full = false, const ModelLean &lean = ModelLean());

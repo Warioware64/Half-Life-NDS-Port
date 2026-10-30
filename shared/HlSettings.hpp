@@ -1,5 +1,7 @@
 #pragma once
 
+#include "HlCharacters.hpp"
+
 // The player's settings: <card>/_nds/hl_nds/data/settings.dat
 //
 // Written by the game, never by the converter. A yas archive behind the same
@@ -301,6 +303,8 @@ namespace hldata
         // (The names are as they were typed, and not judged: only ended.)
         read.name[kProfileNameBytes - 1] = 0;
         read.hostMap[kHostMapBytes - 1] = 0;
+        if (read.playerModel >= kCharacterCount)
+            read.playerModel = 0;
         if (read.sprayColour >= kSprayColours || read.hostMode >= kModeChoices || read.weaponsStay > 1 ||
             read.fallDamage > 1 || read.friendlyFire > 1 || read.flashlight > 1 || read.hostAutoaim > 1 ||
             read.maxPlayers < kPlayersLeast || read.maxPlayers > kPlayersMost || read.allowGuests > 1)

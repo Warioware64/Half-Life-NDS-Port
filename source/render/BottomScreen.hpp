@@ -55,6 +55,11 @@ namespace hlrt
         /// Two lines in the middle of the screen, in place of the pad: for
         /// the moments the game is busy.
         void showMessage(const char *line1, const char *line2);
+        /// Who has how many frags, the most first, from `top` to the screen's
+        /// foot: for 8 players too (in the plain letters, then).
+        void drawScores(int top);
+        /// A match over: that table, all of the screen, until showPad().
+        void showScores();
         /// Three lines and nothing else: what is said when the game cannot
         /// go on. Sets the screen up itself if nothing has.
         void showFatal(const char *line1, const char *line2, const char *line3);

@@ -28,28 +28,6 @@ namespace hlrt
         std::uint32_t iconWords[(sizeof(IconsHeader) + kWeaponIcons * kIconMaxHeight * iconRowWords(kIconMaxWidth) * 4) / 4];
         IconsView icons;
 
-        /// The touch screen's tiles, as the screen's, for the pad drawn off
-        /// it while the weapon list slides (setWeaponList, present) -- and
-        /// for a page of words, drawn off it and put on it whole (offPage).
-        std::uint32_t padTiles[768 * 8];
-
-        /// A page (showMessage, showProgress) drawn into padTiles, not on the
-        /// screen: wiped and drawn again where it is seen, it is seen wiped
-        /// -- a page said many times a second (a map coming in) blinks.
-        /// Begun: the canvas is the copy. Ended: what differs is copied on,
-        /// a word at a time, every word from the old straight to the new.
-        void offPage() { touchCanvas.offScreen(padTiles); }
-        void onPage()
-        {
-            touchCanvas.onScreen();
-            volatile std::uint32_t *to = touchCanvas.screenTiles();
-            for (int i = 0; i < 768 * 8; ++i)
-            {
-                if (to[i] != padTiles[i])
-                    to[i] = padTiles[i];
-            }
-        }
-
         /// The pad's tiles (it is whole tiles: 208 by 132 from 0 or 48, 24)
         /// copied from `from` to `to`, both laid out as the screen's.
         void copyPad(std::uint32_t *to, const std::uint32_t *from, bool mirrored)
@@ -335,8 +313,8 @@ namespace hlrt
         // What was under it (it is all inside the pad's frame), then it where
         // it is now -- off the screen, from the pad as it is on it: put on
         // it whole, in the next vertical blank (present).
-        copyPad(padTiles, touchCanvas.screenTiles(), mirrored_);
-        touchCanvas.offScreen(padTiles);
+        copyPad(touchCanvas.copyTiles(), touchCanvas.screenTiles(), mirrored_);
+        touchCanvas.offScreen(touchCanvas.copyTiles());
         drawPad();
         if (list_.open())
             drawWeaponList();
@@ -350,7 +328,7 @@ namespace hlrt
             return;
         padPending_ = false;
         if (shown_ == Shown::Pad)
-            copyPad(touchCanvas.screenTiles(), padTiles, mirrored_);
+            copyPad(touchCanvas.screenTiles(), touchCanvas.copyTiles(), mirrored_);
     }
 
     /// The list of a slot's weapons: each its picture and its name, the one
@@ -460,7 +438,7 @@ namespace hlrt
     {
         stopShown = false;
         create();
-        offPage();
+        touchCanvas.pageOff();
         Canvas &canvas = touchCanvas.canvas();
         canvas.clear();
         shown_ = Shown::Message;
@@ -471,14 +449,94 @@ namespace hlrt
         char cut[64];
         std::snprintf(cut, sizeof(cut), "%.*s", textFit(font, line2, 248), line2);
         drawTextCentred(canvas, font, 128, 112, cut, inkFor(font, kUiWhite));
-        onPage();
+        touchCanvas.pageOn();
+    }
+
+    void BottomScreen::drawScores(int top)
+    {
+        Canvas &canvas = touchCanvas.canvas();
+        const NetMatch &match = netGame.match();
+        // Who is here, the most frags first (then the fewest deaths).
+        int order[kNetPlayers], count = 0;
+        for (int p = 0; p < kNetPlayers; ++p)
+        {
+            if (!netHere(match, p))
+                continue;
+            int at = count++;
+            for (; at > 0; --at)
+            {
+                const int q = order[at - 1];
+                if (match.frags[q] > match.frags[p] ||
+                    (match.frags[q] == match.frags[p] && match.deaths[q] <= match.deaths[p]))
+                    break;
+                order[at] = q;
+            }
+            order[at] = p;
+        }
+        // Whole rows of cells (each player's colours have cells of their
+        // own): two to a player while they fit, one, in the plain letters,
+        // when they do not.
+        const int firstCell = (top + 7) / 8 + 1;
+        const bool roomy = firstCell + count * 2 <= 24;
+        const int rowCells = roomy ? 2 : 1;
+        const FontView &font = roomy ? touchCanvas.font(kFontSmall) : touchCanvas.plain();
+        canvas.fill(0, top, 256, 192 - top, kUiBack);
+        const int headY = firstCell * 8 - font.height() - 1;
+        constexpr int kNameX = 28, kFragsX = 196, kDeathsX = 236;
+        char text[24];
+        if (match.rules.teams())
+        {
+            std::snprintf(text, sizeof(text), "TEAMS  %d : %d", match.teamFrags[1], match.teamFrags[2]);
+            drawText(canvas, font, kNameX, headY, text, inkFor(font, kUiOrange));
+        }
+        else
+            drawText(canvas, font, kNameX, headY, "PLAYER", inkFor(font, kUiGrey));
+        drawTextCentred(canvas, font, kFragsX, headY, "FRAGS", inkFor(font, kUiGrey));
+        drawTextCentred(canvas, font, kDeathsX, headY, "DIED", inkFor(font, kUiGrey));
+        for (int row = 0; row < count; ++row)
+        {
+            const int p = order[row], cell = firstCell + row * rowCells, y = cell * 8;
+            const int textY = y + (rowCells * 8 - font.height()) / 2;
+            if (p == match.me)
+                canvas.fill(24, y, 232, rowCells * 8, kUiPanel);
+            // The player's own colours (TouchCanvas::tint: its 1 and 2).
+            canvas.fill(8, y, 8, 8, 1);
+            canvas.fill(16, y, 8, 8, 2);
+            const NetProfile &profile = match.profiles[p];
+            const std::uint16_t three[3] = {hueColour(profile.known ? profile.top : 30),
+                                            hueColour(profile.known ? profile.bottom : 6), uiColour(kUiEdge)};
+            touchCanvas.tint(1, cell, 2, 1, three, 2 + row);
+            const int ink = p == match.me ? kUiWhite : kUiOrange;
+            std::snprintf(text, sizeof(text), "%.*s", textFit(font, match.names[p][0] != 0 ? match.names[p] : "...", 140),
+                          match.names[p][0] != 0 ? match.names[p] : "...");
+            drawText(canvas, font, kNameX + 2, textY, text, inkFor(font, ink));
+            std::snprintf(text, sizeof(text), "%d", match.frags[p]);
+            drawTextCentred(canvas, font, kFragsX, textY, text, inkFor(font, ink));
+            std::snprintf(text, sizeof(text), "%d", match.deaths[p]);
+            drawTextCentred(canvas, font, kDeathsX, textY, text, inkFor(font, ink));
+        }
+    }
+
+    void BottomScreen::showScores()
+    {
+        stopShown = false;
+        touchCanvas.pageOff();
+        Canvas &canvas = touchCanvas.canvas();
+        canvas.clear();
+        touchCanvas.untintAll();
+        shown_ = Shown::Message;
+        padPending_ = false;
+        const FontView &title = touchCanvas.font(kFontTitle);
+        drawTextCentred(canvas, title, 128, 6, "THE MATCH IS OVER", inkFor(title, kUiOrange));
+        drawScores(6 + title.height() + 2);
+        touchCanvas.pageOn();
     }
 
     void BottomScreen::showProgress(const char *title, const char *step, const char *note, int done, int total,
                                     bool stop, bool percent)
     {
         create();
-        offPage();
+        touchCanvas.pageOff();
         Canvas &canvas = touchCanvas.canvas();
         canvas.clear();
         shown_ = Shown::Message;
@@ -515,7 +573,7 @@ namespace hlrt
                             stopHit ? "STOPPING" : "STOP", inkFor(medium, stopHit ? kUiWhite : kUiOrange));
         }
         stopShown = stop;
-        onPage();
+        touchCanvas.pageOn();
     }
 
     bool BottomScreen::stopTouched()

@@ -3,6 +3,7 @@
 #include "ui/TouchCanvas.hpp"
 
 #include "Global.hpp"
+#include "HlRemap.hpp"
 
 namespace hlrt
 {
@@ -12,6 +13,9 @@ namespace hlrt
     {
         constexpr int kFirstTile = 64; // (the map is where tiles 0 to 63 would be)
         std::uint32_t plainWords[hldata::kPlainFontWords];
+        std::uint32_t tilesCopy[768 * 8];
+        /// The rows of the map a page's tints are made in.
+        std::uint16_t mapCopy[24 * 32];
     } // namespace
 
     void TouchCanvas::create()
@@ -50,11 +54,56 @@ namespace hlrt
             for (int i = 0; i < 16; ++i)
                 BG_PALETTE_SUB[bank * 16 + i] = i >= 1 && i <= 3 ? three[i - 1] : hldata::uiColour(i);
         }
-        std::uint16_t *map = BG_MAP_RAM_SUB(0);
+        std::uint16_t *map = pageDepth_ > 0 ? mapCopy : BG_MAP_RAM_SUB(0);
         for (int cy = y; cy < y + h && cy < 24; ++cy)
         {
             for (int cx = x; cx < x + w && cx < 32; ++cx)
                 map[cy * 32 + cx] = static_cast<std::uint16_t>((kFirstTile + cy * 32 + cx) | (three != nullptr ? bank << 12 : 0));
+        }
+    }
+
+    /// A player's colours, as their swatch shows them: a hue each, strong
+    /// and bright (a hue is laid over a colour keeping how strong it is:
+    /// a grey's would stay grey).
+    std::uint16_t hueColour(int hue)
+    {
+        std::uint8_t c[1][3] = {{230, 60, 50}};
+        hldata::hueReplace(c, hue, 0, 0);
+        return static_cast<std::uint16_t>((c[0][0] >> 3) | (c[0][1] >> 3) << 5 | (c[0][2] >> 3) << 10);
+    }
+
+    std::uint32_t *TouchCanvas::copyTiles() { return tilesCopy; }
+
+    void TouchCanvas::pageOff()
+    {
+        if (pageDepth_++ > 0)
+            return;
+        create();
+        const volatile std::uint32_t *from = screen_;
+        for (int i = 0; i < 768 * 8; ++i)
+            tilesCopy[i] = from[i];
+        const volatile std::uint16_t *map = BG_MAP_RAM_SUB(0);
+        for (int i = 0; i < 24 * 32; ++i)
+            mapCopy[i] = map[i];
+        canvas_.tiles = tilesCopy;
+    }
+
+    void TouchCanvas::pageOn()
+    {
+        if (pageDepth_ == 0 || --pageDepth_ > 0)
+            return;
+        canvas_.tiles = screen_;
+        volatile std::uint32_t *to = screen_;
+        for (int i = 0; i < 768 * 8; ++i)
+        {
+            if (to[i] != tilesCopy[i])
+                to[i] = tilesCopy[i];
+        }
+        volatile std::uint16_t *map = BG_MAP_RAM_SUB(0);
+        for (int i = 0; i < 24 * 32; ++i)
+        {
+            if (map[i] != mapCopy[i])
+                map[i] = mapCopy[i];
         }
     }
 

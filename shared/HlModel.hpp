@@ -37,7 +37,7 @@
 namespace hldata
 {
     inline constexpr char kModelMagic[4] = {'H', 'L', 'M', 'D'};
-    inline constexpr std::uint16_t kModelVersion = 6;
+    inline constexpr std::uint16_t kModelVersion = 7;
     /// A model comes at up to this many levels of detail: 0 the finest the
     /// file has, each after it of fewer triangles. A level's error is how
     /// far it is from the model as the game has it, in sixteenths of a
@@ -91,6 +91,12 @@ namespace hldata
         std::uint16_t radius; ///< of a ball round its origin that holds it in any pose
         std::uint16_t polygons; ///< the most any choice of body draws (at level 0)
         std::uint8_t levelError[kModelLevels];
+        /// A person's bones, by what the game calls them (-1: it has none):
+        /// the right hand, what they hold is drawn at; the spine, from which
+        /// up they take the pose of holding it.
+        std::int8_t handBone;
+        std::int8_t spineBone;
+        std::uint16_t padHeader;
     };
 
     /// One body part: how an entity's "body" number picks a sub-model of it,
@@ -288,7 +294,7 @@ namespace hldata
     static_assert(sizeof(ModelController) == 12);
     static_assert(sizeof(ModelControlAxis) == 8);
     static_assert(sizeof(ModelHitbox) == 16);
-    static_assert(sizeof(ModelHeader) == 64);
+    static_assert(sizeof(ModelHeader) == 68);
     static_assert(sizeof(ModelBatch) == 48);
     static_assert(sizeof(ModelClip) == 44);
     static_assert(sizeof(ModelTrack) == 16);

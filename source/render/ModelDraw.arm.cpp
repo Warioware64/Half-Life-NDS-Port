@@ -88,11 +88,83 @@ namespace hlrt
             std::uint32_t frame = 0;
             std::int32_t controls[2] = {0, 0}; ///< what its bone controllers are set to
             int blend = 0;                     ///< where between a blending clip's poses
+            int aim = -1;                      ///< (a player) the pose of holding what they hold; and how far up
             std::uint32_t used = 0;
             BoneMatrix bones[kModelMaxBones];
         };
         Posed posedSlots[ModelDraw::kMaxDrawn + 1];
         std::uint32_t posedClock = 0;
+
+        /// How a player stands holding their gun: which clip, and its blend
+        /// by how far up they look (in `aim`: clip * 256 + blend). -1: not one.
+        int playerAim(const ActorState &actor, const ModelView &model, int id)
+        {
+            const NetMatch &match = netGame.match();
+            const int p = id - match.firstActor;
+            if (actor.kind != static_cast<std::uint8_t>(ActorKind::Player) || p < 0 || p >= kNetPlayers ||
+                model.header->spineBone < 0)
+                return -1;
+            const NetPlayer &player = netPlayer(match, p);
+            if ((player.flags & kNetAlive) == 0 || player.weapon >= kWeaponCount)
+                return -1;
+            const int clip = model.findClip(nameHash(kAimClips[kAimOf[player.weapon]]));
+            if (clip < 0)
+                return -1;
+            int blend = 128 - player.pitch * 3;
+            blend = blend < 0 ? 0 : (blend > 255 ? 255 : blend);
+            return clip * 256 + blend;
+        }
+
+        /// `bones` from the spine up, as they are in the aim's pose: the rest
+        /// of the body goes on walking under them.
+        void overlayAim(const ModelView &model, BoneMatrix *bones, int aim)
+        {
+            static BoneMatrix held[kModelMaxBones];
+            poseModel(model, aim / 256, 0, held, nullptr, aim & 255);
+            const int spine = model.header->spineBone, count = model.header->boneCount;
+            const int under = model.parents[spine];
+            if (under < 0)
+                return;
+            // What takes the aim's "under the spine" to this pose's.
+            const BoneMatrix &to = bones[under];
+            const BoneMatrix &from = held[under];
+            std::int32_t turn[9];
+            for (int r = 0; r < 3; ++r)
+            {
+                for (int c = 0; c < 3; ++c)
+                    turn[r * 3 + c] = static_cast<std::int32_t>(
+                        (static_cast<std::int64_t>(to.r[r * 3]) * from.r[c * 3] +
+                         static_cast<std::int64_t>(to.r[r * 3 + 1]) * from.r[c * 3 + 1] +
+                         static_cast<std::int64_t>(to.r[r * 3 + 2]) * from.r[c * 3 + 2]) >>
+                        kBoneRotShift);
+            }
+            static std::uint8_t up[kModelMaxBones];
+            for (int b = 0; b < count; ++b)
+            {
+                const int parent = model.parents[b];
+                up[b] = b == spine || (parent >= 0 && up[parent]) ? 1 : 0;
+                if (!up[b])
+                    continue;
+                const BoneMatrix &m = held[b];
+                BoneMatrix &o = bones[b];
+                fx away[3];
+                for (int a = 0; a < 3; ++a)
+                    away[a] = m.t[a] - from.t[a];
+                for (int r = 0; r < 3; ++r)
+                {
+                    for (int c = 0; c < 3; ++c)
+                        o.r[r * 3 + c] = static_cast<std::int32_t>(
+                            (static_cast<std::int64_t>(turn[r * 3]) * m.r[c] +
+                             static_cast<std::int64_t>(turn[r * 3 + 1]) * m.r[3 + c] +
+                             static_cast<std::int64_t>(turn[r * 3 + 2]) * m.r[6 + c]) >>
+                            kBoneRotShift);
+                    o.t[r] = to.t[r] + static_cast<fx>((static_cast<std::int64_t>(turn[r * 3]) * away[0] +
+                                                        static_cast<std::int64_t>(turn[r * 3 + 1]) * away[1] +
+                                                        static_cast<std::int64_t>(turn[r * 3 + 2]) * away[2]) >>
+                                                       kBoneRotShift);
+                }
+            }
+        }
     } // namespace
 
     void ModelDraw::forgetPoses()
@@ -112,12 +184,13 @@ namespace hlrt
         // let out, a turret's gun turned (HlActors.hpp).
         std::int32_t controls[kModelControls];
         const bool controlled = actorControls(actor, controls);
+        const int aim = playerAim(actor, model, id);
         Posed *oldest = &posedSlots[0];
         for (Posed &slot : posedSlots)
         {
             if (slot.id == id && slot.model == modelIndex && slot.clip == actor.clip &&
                 slot.frame == frame && slot.controls[0] == controls[0] &&
-                slot.controls[1] == controls[1] && slot.blend == actor.blend.value)
+                slot.controls[1] == controls[1] && slot.blend == actor.blend.value && slot.aim == aim)
             {
                 slot.used = ++posedClock;
                 return slot.bones;
@@ -134,11 +207,14 @@ namespace hlrt
         slot.controls[0] = controls[0];
         slot.controls[1] = controls[1];
         slot.blend = actor.blend.value;
+        slot.aim = aim;
         slot.used = ++posedClock;
         const int bones = model.header->boneCount;
         if (actor.clip >= 0)
         {
             poseModel(model, actor.clip, frame, slot.bones, controlled ? controls : nullptr, actor.blend.value);
+            if (aim >= 0)
+                overlayAim(model, slot.bones, aim);
         }
         else
         {
@@ -161,6 +237,41 @@ namespace hlrt
             out[n] = static_cast<char>('0' + level_[n]);
         if (size > 0)
             out[n] = '\0';
+    }
+
+    void ModelDraw::drawGun(const ActorState &actor, const ModelView &model, const fx *turn, int id)
+    {
+        const NetMatch &match = netGame.match();
+        const int p = id - match.firstActor;
+        if (actor.kind != static_cast<std::uint8_t>(ActorKind::Player) || p < 0 || p >= kNetPlayers ||
+            model.header->handBone < 0 || worldDraw.pressure() >= 2 || strained_)
+            return;
+        const NetPlayer &player = netPlayer(match, p);
+        const int m = modelCache.heldModel(player.weapon);
+        if ((player.flags & kNetAlive) == 0 || m < 0 || m >= game.actors.modelCount ||
+            game.actors.models[m].header == nullptr)
+            return;
+        // (Copied: the next pose asked for may take this one's place.)
+        const BoneMatrix hand = posed(actor, model, actor.model, id)[model.header->handBone];
+        ActorState gun;
+        gun.active = true;
+        gun.kind = static_cast<std::uint8_t>(ActorKind::Generic);
+        gun.model = static_cast<std::uint16_t>(m);
+        gun.light = actor.light;
+        gun.clip = -1;
+        fx gunTurn[9];
+        for (int r = 0; r < 3; ++r)
+        {
+            for (int c = 0; c < 3; ++c)
+                gunTurn[r * 3 + c] = static_cast<fx>(
+                    (static_cast<std::int64_t>(turn[r * 3]) * hand.r[c] + static_cast<std::int64_t>(turn[r * 3 + 1]) * hand.r[3 + c] +
+                     static_cast<std::int64_t>(turn[r * 3 + 2]) * hand.r[6 + c]) >>
+                    kBoneRotShift);
+            gun.pos[r] = actor.pos[r] + fxMul(turn[r * 3], hand.t[0]) + fxMul(turn[r * 3 + 1], hand.t[1]) +
+                         fxMul(turn[r * 3 + 2], hand.t[2]);
+        }
+        drawActor(gun, game.actors.models[m], static_cast<unsigned>(m), gunTurn, -3 - m,
+                  game.actors.models[m].levelCount() - 1);
     }
 
     HL_ITCM void ModelDraw::drawActor(const ActorState &actor, const ModelView &model, unsigned modelIndex,
@@ -836,6 +947,7 @@ namespace hlrt
             else if (cloaked >= 0)
                 modelAlpha(cloaked);
             drawActor(actor, model, actor.model, ceiling ? over : turn, order[n], level_[n]);
+            drawGun(actor, model, ceiling ? over : turn, order[n]);
             if (fading >= 0 || cloaked >= 0)
                 modelAlpha(31);
             ++drawn;

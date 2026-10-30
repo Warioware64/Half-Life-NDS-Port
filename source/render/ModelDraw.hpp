@@ -86,6 +86,8 @@ namespace hlrt
         /// `level`: which of the model's levels of detail.
         /// `shrink`: drawn 2^shrink times smaller about the eye -- the same
         /// picture, nearer (what is in hand: drawHeld).
+        /// What a player is holding, in their hand as they are posed.
+        void drawGun(const hldata::ActorState &actor, const hldata::ModelView &model, const hldata::fx *turn, int id);
         void drawActor(const hldata::ActorState &actor, const hldata::ModelView &model,
                        unsigned modelIndex, const hldata::fx *turn, int id, int level, int shrink = 0);
         const hldata::BoneMatrix *posed(const hldata::ActorState &actor,

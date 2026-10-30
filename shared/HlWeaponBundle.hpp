@@ -22,7 +22,7 @@ namespace hldata
     /// How many of a map's lazy models are in memory at once: the most any
     /// one weapon has. (Each has a palette in video memory: the converter
     /// keeps room for this many.)
-    inline constexpr int kLazyResident = 3;
+    inline constexpr int kLazyResident = 6;
 
     struct WeaponBundle
     {
@@ -47,6 +47,29 @@ namespace hldata
         {{"v_egon", nullptr, nullptr}},
         {{"v_hgun", "hornet", nullptr}},
     };
+
+    /// What another player is seen holding, by kWeapon* (null: nothing: the
+    /// game's p_egon is not on the hand). Cooked as one piece, relative to the
+    /// hand it is in.
+    inline constexpr const char *kHeldModels[kWeaponCount] = {
+        nullptr,    "p_crowbar", "p_9mmhandgun", "p_shotgun", "p_grenade", "p_9mmar", "p_357", "p_crossbow",
+        "p_satchel", "p_tripmine", "p_squeak", "p_rpg",      "p_gauss",   nullptr,   "p_hgun"};
+    /// How they stand holding it, by kWeapon*: the upper body of one of these
+    /// clips (each cooked one frame, its two ends for how far up they look).
+    inline constexpr const char *kAimClips[] = {"ref_aim_crowbar", "ref_aim_onehanded", "ref_aim_shotgun",
+                                                "ref_aim_mp5",     "ref_aim_rpg",       "ref_aim_gauss"};
+    inline constexpr std::uint8_t kAimOf[kWeaponCount] = {1, 0, 1, 2, 1, 3, 1, 4, 1, 1, 1, 4, 5, 5, 1};
+
+    /// The weapon whose held model this is; -1: not one.
+    inline int heldWeaponOf(const char *model)
+    {
+        for (int weapon = 0; weapon < kWeaponCount; ++weapon)
+        {
+            if (kHeldModels[weapon] != nullptr && std::strcmp(kHeldModels[weapon], model) == 0)
+                return weapon;
+        }
+        return -1;
+    }
 
     /// The weapons (a bit each, by kWeapon*) whose bundles have the model.
     inline std::uint16_t bundlesOf(const char *model)

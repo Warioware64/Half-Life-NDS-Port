@@ -32,6 +32,16 @@ namespace hlrt
         void offScreen(std::uint32_t *tiles) { canvas_.tiles = tiles; }
         void onScreen() { canvas_.tiles = screen_; }
         std::uint32_t *screenTiles() const { return screen_; }
+        /// The one copy of the screen (24 KB, kept: a console sent the game
+        /// has no room for two): the pad as it slides, a page being drawn.
+        std::uint32_t *copyTiles();
+        /// A page drawn off the screen, starting from what is on it: wiped
+        /// and drawn again where it is seen, it is seen wiped, and blinks.
+        /// Until pageOn(): the canvas, and tint()'s cells, are the copy's.
+        /// Then what differs goes on, each word from the old to the new.
+        /// (Within another: it is that one's.)
+        void pageOff();
+        void pageOn();
         /// kFontSmall, kFontMedium or kFontTitle -- or the plain letters,
         /// where the card has not got that one.
         const hldata::FontView &font(int which);
@@ -55,9 +65,12 @@ namespace hlrt
         bool loaded_ = false;
         hldata::Canvas canvas_;
         std::uint32_t *screen_ = nullptr;
+        int pageDepth_ = 0;
         hldata::FontView fonts_[hldata::kFontCount];
         hldata::FontView plain_;
     };
 
     extern TouchCanvas touchCanvas;
+    /// A player's colour (0..255, the game's hue), to show.
+    std::uint16_t hueColour(int hue);
 } // namespace hlrt

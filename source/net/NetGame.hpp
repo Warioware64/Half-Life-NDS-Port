@@ -154,6 +154,20 @@ namespace hlrt
         /// ... and it has been left (the map is gone): the lobby again, with
         /// whoever is still there.
         void toLobby();
+        /// The host: player `p` let go, told why (and, a moment on, the
+        /// radio's link cut); not let back in while this game lasts.
+        void kick(int p);
+        /// The host, its map loaded and not begun: its lobby again.
+        void toLobbyFromLoad();
+        /// The host: the match given up, everyone back in its lobby -- those
+        /// still loading it too.
+        void abortMatch();
+        /// The host: everyone told it is off to send the game, and back soon.
+        void sayBackSoon();
+        /// Told so by the host: its name, whose game to look for and join
+        /// again ("": none, or no longer). Then it is let go of.
+        const char *backSoon();
+        void backSoonDone() { backSoon_[0] = 0; }
 
         // ---------------------------------------------------------- frames
         void frame();
@@ -185,6 +199,11 @@ namespace hlrt
         unsigned clientsWere_ = 0;
         int lostFrames_ = 0;
         const char *ended_ = "";
+        char backSoon_[hldata::kNetTextBytes] = {};
+        std::uint32_t backSoonAt_ = 0;
+        std::uint32_t kickAt_[hldata::kNetPlayers] = {};
+        int joinFrames_ = 0;
+        unsigned answered_ = 0; ///< (a client's) heard_ when it last answered
         std::string pendingMap_;
         int pendingSkill_ = 2; ///< (kSkillMedium)
         bool startPending_ = false;
@@ -202,11 +221,17 @@ namespace hlrt
         hldata::AirReceiver preview_;
         std::uint8_t *previewRing_ = nullptr;
         std::uint32_t previewHash_ = 0, previewHad_ = 0, previewSince_ = 0;
-        int previewLinger_ = 0;
         std::string previewName_;
         void previewTick();
         void previewFrame(const hldata::AirHead &head);
-        int previewReply(std::uint8_t *bytes);
+#ifndef HLDS_CHILD
+        void previewPush();
+        hldata::AirSender previewOut_;
+        std::FILE *previewFile_ = nullptr;
+        std::string previewSent_;
+        std::uint32_t previewAt_ = 0;
+        unsigned previewTicks_ = 0;
+#endif
         void previewEnd();
         unsigned ready_ = 0;
         std::uint32_t rooms_[hldata::kNetPlayers] = {}; ///< (the host's: KB, by client; 0 not said)
@@ -235,9 +260,10 @@ namespace hlrt
         int airReplySize_ = 0;
 #endif
 
-        void send();
+        void send(bool always = false);
         void sayRules();
         void lost(const char *why);
+        void forgetGuest(); ///< out of a game: nothing kept of what the last host said
     };
 
     HL_ENGINE_OBJECT(NetGame, netGame);

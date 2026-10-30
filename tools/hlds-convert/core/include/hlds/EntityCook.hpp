@@ -92,6 +92,9 @@ namespace hlds
         std::string name; ///< lower-case, no directory or extension: "scientist"
         std::string file; ///< as the game names it: "models/scientist.mdl"
         std::vector<std::string> clips; ///< sequence labels, lower-case
+        /// What a player holds (HlWeaponBundle.hpp): baked to one piece,
+        /// relative to the hand.
+        bool held = false;
         bool firstSequence = false;     ///< ... and whichever its first sequence is
         /// ... and every sequence the game's code may choose by what it is for
         /// (its activity): a monster that thinks as the game's do. On a DSi

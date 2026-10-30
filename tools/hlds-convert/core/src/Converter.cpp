@@ -5,6 +5,7 @@
 #include "hlds/SpriteCook.hpp"
 #include "hlds/Converter.hpp"
 #include "HlWeaponBundle.hpp"
+#include "HlCharacters.hpp"
 
 #include "hlds/AviFile.hpp"
 #include "hlds/EntityCook.hpp"
@@ -491,6 +492,17 @@ namespace hlds
         // all of them, the game's own player in the suit, with what a body
         // does whole -- standing, running, crouching, jumping, dying.
         addMultiplayerNeeds(entities, needs);
+        // ... each holding what they hold: loaded when someone is seen to.
+        for (const char *held : hldata::kHeldModels)
+        {
+            if (held == nullptr || !isMultiplayerMap(entities))
+                continue;
+            ModelNeed need;
+            need.name = held;
+            need.file = std::string("models/") + held + ".mdl";
+            need.held = true;
+            lazyNeeds.push_back(need);
+        }
         // Of the weapons the map has not, and what goes with them, those
         // wanted for something else -- a tripmine on a wall, a soldier's
         // casings, a tank's rocket -- are the map's own.
@@ -544,6 +556,8 @@ namespace hlds
                                               (why.empty() ? "" : ": " + why));
                 return false;
             }
+            if (need.held && !bakeHeldModel(mdl, why))
+                return false;
             std::vector<std::string> clips, clipsDsi;
             modelClips(mdl, need, clips, clipsDsi);
             CookedModel cooked;
@@ -794,7 +808,7 @@ namespace hlds
         {
             ModelOut out;
             if (!cookOne(need, need.name.rfind("v_", 0) == 0 ? hldata::kLazySkinTexels : hldata::kLazyPieceSkinTexels, out,
-                         true))
+                         true, need.held ? kGuestLean : ModelLean()))
                 continue;
             out.lazy = true;
             cookOptions.lazyModels.push_back(out.name);
@@ -1619,6 +1633,47 @@ namespace hlds
         {
             RgbaImage background;
             const auto find = [&](const std::string &relative) { return findNoCase(options_.gameDir, relative); };
+            // Who else a player may be seen as (HlCharacters.hpp).
+            std::vector<std::string> clips;
+            {
+                std::vector<ModelNeed> one;
+                std::vector<Entity> dm(1);
+                dm[0].pairs.emplace_back("classname", "info_player_deathmatch");
+                addMultiplayerNeeds(dm, one);
+                if (!one.empty())
+                    clips = one[0].clips;
+            }
+            for (int c = 1; c < hldata::kCharacterCount; ++c)
+            {
+                const std::string name = hldata::kCharacterFiles[c];
+                const fs::path file = findNoCase(options_.gameDir, "models/player/" + name + "/" + name + ".mdl");
+                MdlFile mdl;
+                CookedModel cooked;
+                ModelCookReport modelReport;
+                std::vector<std::uint8_t> bytes;
+                std::string failed;
+                if (file.empty() || !mdl.load(file, failed) ||
+                    !cookModel(mdl, clips, cooked, modelReport, failed, 128 * 128, false, kGuestLean) ||
+                    !writeModel(cooked, bytes, failed) || cooked.indexed.width == 0)
+                    continue;
+                CookedTexture skin;
+                skin.width = cooked.indexed.width;
+                skin.height = cooked.indexed.height;
+                skin.texels = cooked.indexed.texels;
+                for (int i = 0; i < 256; ++i)
+                {
+                    const auto *rgb = &cooked.indexed.palette[static_cast<std::size_t>(i * 3)];
+                    const std::uint16_t colour =
+                        static_cast<std::uint16_t>((rgb[0] >> 3) | ((rgb[1] >> 3) << 5) | ((rgb[2] >> 3) << 10));
+                    skin.palette.push_back(static_cast<std::uint8_t>(colour & 0xFF));
+                    skin.palette.push_back(static_cast<std::uint8_t>(colour >> 8));
+                }
+                std::error_code made;
+                fs::create_directories(stageDir() / "chr", made);
+                writeFileAtomic(stageDir() / "chr" / (name + ".hmd"), bytes, failed);
+                writeFileAtomic(stageDir() / "chr" / (name + ".htx"),
+                                packTexture(skin, hldata::kTexturePal256 | hldata::kTextureRemapRuns, 0), failed);
+            }
             if (menuBackground(find, background, why) &&
                 texture(background, TextureFormat::Tex4x4, 1024, 0, hldata::kMenuFile))
                 result.menu = true;

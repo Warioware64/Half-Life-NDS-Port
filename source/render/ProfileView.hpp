@@ -20,12 +20,15 @@ namespace hlrt
         /// Read the model and its skin, and show it in these colours. False
         /// (and nothing shown) if the card has not got them, or there is no
         /// room.
-        bool open(int top, int bottom);
+        bool open(int top, int bottom, int character = 0);
         /// The colours changed: the skin's palette made again.
         void setColours(int top, int bottom);
         /// Let it all go.
         void close();
         bool shown() const { return data_ != nullptr; }
+        /// To the right of the screen's middle, by this many units of its
+        /// view (a lobby's: the map's card has the left).
+        void setPlace(int x) { atX_ = x; }
         /// Inside NEA_Process, after the picture behind it: the model, a
         /// little further round than last time.
         void draw();
@@ -41,6 +44,7 @@ namespace hlrt
         std::uint32_t frame_ = 0;
         std::uint16_t yaw_ = 0;
         std::uint32_t since_ = 0;
+        int atX_ = 0;
     };
 
     extern ProfileView profileView;

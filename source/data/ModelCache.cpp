@@ -15,6 +15,8 @@
 #include "game/Game.hpp"
 #include "game/Player.hpp"
 #include "net/GuestLoad.hpp"
+#include "net/NetGame.hpp"
+#include "HlNetGame.hpp"
 #include "HlRemap.hpp"
 
 namespace hlrt
@@ -96,9 +98,13 @@ namespace hlrt
         std::uint8_t base[256][3];
         for (int i = 0; i < 256; ++i)
         {
-            base[i][0] = static_cast<std::uint8_t>((playerBase_[i] & 31) << 3);
-            base[i][1] = static_cast<std::uint8_t>(((playerBase_[i] >> 5) & 31) << 3);
-            base[i][2] = static_cast<std::uint8_t>(((playerBase_[i] >> 10) & 31) << 3);
+            const int model = playerCharacter_[slot];
+            const std::uint16_t colour = model >= count_ && characterBases_ != nullptr
+                                             ? characterBases_[(model - count_) * 256 + i]
+                                             : playerBase_[i];
+            base[i][0] = static_cast<std::uint8_t>((colour & 31) << 3);
+            base[i][1] = static_cast<std::uint8_t>(((colour >> 5) & 31) << 3);
+            base[i][2] = static_cast<std::uint8_t>(((colour >> 10) & 31) << 3);
         }
         std::uint16_t colours[256];
         hldata::playerPalette(base, hldata::remapRunsOf("DM_Base"), top, bottom, colours);
@@ -110,9 +116,74 @@ namespace hlrt
             playerPaletteWords_[slot] = 0;
     }
 
+    int ModelCache::characterSlot(int id) const
+    {
+        for (int s = 0; id > 0 && s < hldata::kCharacterSlots; ++s)
+        {
+            if (characterIds_[s] == id && views_ != nullptr && views_[count_ + s].header != nullptr)
+                return count_ + s;
+        }
+        return -1;
+    }
+
+    void ModelCache::setPlayerCharacter(int slot, int model)
+    {
+        if (slot >= 0 && slot < kPlayerColours)
+            playerCharacter_[slot] = model;
+    }
+
+    void ModelCache::loadCharacters()
+    {
+#ifndef HLDS_CHILD
+        const hldata::NetMatch &match = netGame.match();
+        if (!netGame.on() || views_ == nullptr || !global.hasFat)
+            return;
+        int slot = 0;
+        for (int p = 0; p < hldata::kNetPlayers && slot < hldata::kCharacterSlots; ++p)
+        {
+            const int id = match.profiles[p].model;
+            if (!hldata::netHere(match, p) || !match.profiles[p].known || id <= 0 || id >= hldata::kCharacterCount ||
+                characterSlot(id) >= 0)
+                continue;
+            if (characterBases_ == nullptr)
+                characterBases_ = static_cast<std::uint16_t *>(std::malloc(hldata::kCharacterSlots * 256 * 2));
+            if (characterBases_ == nullptr)
+                return;
+            const std::string name = hldata::kCharacterFiles[id];
+            std::uint32_t size = 0;
+            std::uint8_t *block = readModel(global.commonPath("chr/" + name + ".hmd"), size, 200 * 1024);
+            const int at = count_ + slot;
+            if (block == nullptr || !views_[at].open(block, size))
+            {
+                std::free(block);
+                views_[at] = hldata::ModelView();
+                continue;
+            }
+            if (!TextureCache::loadFile(global.commonPath("chr/" + name + ".htx").c_str(), false,
+                                        views_[at].header->atlasWidth, views_[at].header->atlasHeight, 0, materials_[at],
+                                        palettes_[at]) ||
+                !TextureCache::takeRemapBase(characterBases_ + slot * 256))
+            {
+                // (No room for its skin: the suit, for those who chose it.)
+                if (materials_[at] != nullptr)
+                    NEA_MaterialDelete(materials_[at]);
+                if (palettes_[at] != nullptr)
+                    NEA_PaletteDelete(palettes_[at]);
+                materials_[at] = nullptr;
+                palettes_[at] = nullptr;
+                views_[at] = hldata::ModelView();
+                std::free(block);
+                continue;
+            }
+            blocks_[at] = block;
+            characterIds_[slot++] = id;
+        }
+#endif
+    }
+
     void ModelCache::release(bool engineGone)
     {
-        for (int i = 0; i < count_; ++i)
+        for (int i = 0; i < count_ + hldata::kCharacterSlots && views_ != nullptr; ++i)
         {
             if (blocks_ != nullptr)
                 std::free(blocks_[i]);
@@ -135,6 +206,14 @@ namespace hlrt
         std::free(palettes_);
         std::free(kept_);
         std::free(lazy_);
+        std::free(heldRefs_);
+        std::free(characterBases_);
+        characterBases_ = nullptr;
+        for (int &id : characterIds_)
+            id = 0;
+        for (int &model : playerCharacter_)
+            model = -1;
+        heldRefs_ = nullptr;
         kept_ = nullptr;
         lazy_ = nullptr;
         lazyMask_ = haveSeen_ = 0;
@@ -155,7 +234,7 @@ namespace hlrt
 
     void ModelCache::forgetSkins()
     {
-        for (int i = 0; i < count_; ++i)
+        for (int i = 0; i < count_ + hldata::kCharacterSlots && materials_ != nullptr; ++i)
         {
             materials_[i] = nullptr;
             palettes_[i] = nullptr;
@@ -342,6 +421,19 @@ namespace hlrt
             if (actors.pieces[i].kind != 0 && game.shellModel(actors.pieces[i].kind) == index)
                 return true;
         }
+        return heldByAnother(index);
+    }
+
+    bool ModelCache::heldByAnother(int index) const
+    {
+        const hldata::NetMatch &match = netGame.match();
+        for (int p = 0; match.playing && p < hldata::kNetPlayers; ++p)
+        {
+            const hldata::NetPlayer &other = hldata::netPlayer(match, p);
+            if (p != match.me && (other.flags & hldata::kNetHere) != 0 && (other.flags & hldata::kNetInGame) != 0 &&
+                heldModel(other.weapon) == index)
+                return true;
+        }
         return false;
     }
 
@@ -471,6 +563,7 @@ namespace hlrt
                 flying = actors.shots[s].active && game.thrownModel(actors.shots[s].kind) == i;
             for (int p = 0; p < hldata::kMaxPieces && !flying; ++p)
                 flying = actors.pieces[p].kind != 0 && game.shellModel(actors.pieces[p].kind) == i;
+            flying = flying || heldByAnother(i);
             if (needed || flying)
             {
                 loadLazy(i, true);
@@ -540,11 +633,11 @@ namespace hlrt
     {
         destroy();
         const int count = static_cast<int>(level.view.modelRefCount);
-        views_ = static_cast<hldata::ModelView *>(std::calloc(count + 1, sizeof(hldata::ModelView)));
-        blocks_ = static_cast<std::uint8_t **>(std::calloc(count + 1, sizeof(std::uint8_t *)));
-        materials_ = static_cast<NEA_Material **>(std::calloc(count + 1, sizeof(NEA_Material *)));
-        palettes_ = static_cast<NEA_Palette **>(std::calloc(count + 1, sizeof(NEA_Palette *)));
-        kept_ = static_cast<std::uint8_t *>(std::calloc(count + 1, 1));
+        views_ = static_cast<hldata::ModelView *>(std::calloc(count + hldata::kCharacterSlots + 1, sizeof(hldata::ModelView)));
+        blocks_ = static_cast<std::uint8_t **>(std::calloc(count + hldata::kCharacterSlots + 1, sizeof(std::uint8_t *)));
+        materials_ = static_cast<NEA_Material **>(std::calloc(count + hldata::kCharacterSlots + 1, sizeof(NEA_Material *)));
+        palettes_ = static_cast<NEA_Palette **>(std::calloc(count + hldata::kCharacterSlots + 1, sizeof(NEA_Palette *)));
+        kept_ = static_cast<std::uint8_t *>(std::calloc(count + hldata::kCharacterSlots + 1, 1));
         lazy_ = static_cast<LazyState *>(std::calloc(count + 1, sizeof(LazyState)));
         if (views_ == nullptr || blocks_ == nullptr || materials_ == nullptr || palettes_ == nullptr ||
             kept_ == nullptr || lazy_ == nullptr)
@@ -553,6 +646,18 @@ namespace hlrt
             return false;
         }
         count_ = count;
+        heldRefs_ = static_cast<std::int16_t *>(std::malloc(hldata::kWeaponCount * sizeof(std::int16_t)));
+        for (int w = 0; heldRefs_ != nullptr && w < hldata::kWeaponCount; ++w)
+        {
+            heldRefs_[w] = -1;
+            for (int i = 0; hldata::kHeldModels[w] != nullptr && i < count; ++i)
+            {
+                if (std::strcmp(level.view.modelRefs[i].name, hldata::kHeldModels[w]) == 0)
+                    heldRefs_[w] = static_cast<std::int16_t>(i);
+            }
+        }
+        for (int i = count; i < count + hldata::kCharacterSlots; ++i)
+            new (&views_[i]) hldata::ModelView();
         for (int i = 0; i < count; ++i)
         {
             new (&views_[i]) hldata::ModelView();

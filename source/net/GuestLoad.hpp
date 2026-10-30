@@ -94,6 +94,9 @@ namespace hlrt::guest
     /// Between the steps of a map's load: the map's stream heard and
     /// answered, or the host, hearing nothing, leaves this console out.
     void hear();
+    /// Out of a game: no map is said to be held (the next host's numbers
+    /// begin again, and would look like this one's).
+    void forgetTaken();
     /// The stream being taken: how long it is, and how fast it has come
     /// (KB a second, since it began).
     std::uint32_t airLength();

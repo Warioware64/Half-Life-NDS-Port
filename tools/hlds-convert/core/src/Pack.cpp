@@ -13,6 +13,7 @@
 #include "HlSprite.hpp"
 #include "HlUi.hpp"
 #include "HlWeaponBundle.hpp"
+#include "HlCharacters.hpp"
 #include "hlds/AtomicWrite.hpp"
 #include "hlds/Lz77.hpp"
 #include "hlds/NpacWriter.hpp"
@@ -666,6 +667,13 @@ namespace hlds
             packing.members = std::move(kept_);
             leanGuns(stage, packing, true);
             // ... and those that came later, it has lying about: packed, last.
+            // (... and it held, by anyone.)
+            auto guestSeesHeld = [&](const char *name)
+            {
+                const int weapon = hldata::heldWeaponOf(name);
+                return weapon >= 0 && hldata::kWeaponBundles[weapon].models[0] != nullptr &&
+                       held.count(hldata::kWeaponBundles[weapon].models[0]) != 0;
+            };
             // (With what they fire: a guest sees it fired, by anyone.)
             std::uint16_t heldBundles = 0;
             for (const std::string &gun : held)
@@ -674,7 +682,8 @@ namespace hlds
             {
                 const char *name = view.modelRefs[i].name;
                 if (!hldata::modelRefLazy(view.modelRefs[i]) ||
-                    (held.count(name) == 0 && (std::strncmp(name, "v_", 2) == 0 || (hldata::bundlesOf(name) & heldBundles) == 0)))
+                    (held.count(name) == 0 && (std::strncmp(name, "v_", 2) == 0 ||
+                                               ((hldata::bundlesOf(name) & heldBundles) == 0 && !guestSeesHeld(name)))))
                     continue;
                 // (The lighter cook, if the stage has it; else the card's.)
                 const fs::path lean = stage / "gst" / (std::string(name) + ".hmd");
@@ -954,6 +963,13 @@ namespace hlds
                     packing.add(stage / "gst" / hldata::modelSkinFile(kPlayerModel, header.atlasWidth, header.atlasHeight),
                                 hldata::kProfileSkinFile, true);
             }
+        }
+        // Who else a player may be seen as, on a console with the game.
+        for (int c = 1; c < hldata::kCharacterCount; ++c)
+        {
+            const std::string name = hldata::kCharacterFiles[c];
+            packing.add(stage / "chr" / (name + ".hmd"), "chr/" + name + ".hmd", true, false);
+            packing.add(stage / "chr" / (name + ".htx"), "chr/" + name + ".htx", true, false);
         }
         if (packing.members.empty())
         {

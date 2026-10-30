@@ -40,6 +40,17 @@ namespace hlrt
                 shownName_.clear(); // (said again)
             }
         }
+        /// How the match is set up, said under the map's facts, or not (`stamp`:
+        /// changes as that does, for the card to be made again).
+        void setRules(bool show, unsigned stamp)
+        {
+            if (show != showRules_ || (show && stamp != rulesStamp_))
+            {
+                showRules_ = show;
+                rulesStamp_ = stamp;
+                shownName_.clear();
+            }
+        }
         bool shown() const { return text_ != nullptr; }
         /// Inside NEA_Process, after the picture behind it.
         void draw(void (*corner)(int sx, int sy, int s, int t));
@@ -48,6 +59,8 @@ namespace hlrt
         std::string shownName_;
         std::string givenName_;
         std::uint32_t room_ = 0;
+        bool showRules_ = false;
+        unsigned rulesStamp_ = 0;
         std::uint8_t *given_ = nullptr; ///< (a .hpv, kPreviewBytes)
         void *picture_ = nullptr; ///< (NEA_Material), when there is a picture
         void *text_ = nullptr;    ///< (NEA_Material)

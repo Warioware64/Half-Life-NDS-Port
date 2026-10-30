@@ -11,6 +11,8 @@
 #include "Global.hpp"
 #include "HlFont.hpp"
 #include "HlPreview.hpp"
+#include "HlNetGame.hpp"
+#include "net/NetGame.hpp"
 #include "ui/TouchCanvas.hpp"
 
 namespace hlrt
@@ -22,9 +24,9 @@ namespace hlrt
         using namespace hldata;
 
         // Where it is on the top screen: the picture, then the words.
-        constexpr int kTop = 100;
-        constexpr int kPictureX = 8, kPictureW = 96, kPictureH = 72;
-        constexpr int kTextX = 112, kTextW = 128, kTextH = 88;
+        constexpr int kTop = 4;
+        constexpr int kPictureX = 6, kPictureW = 96, kPictureH = 72;
+        constexpr int kTextX = 6, kTextTop = kTop + kPictureH + 4, kTextW = 128, kTextH = 104;
         constexpr int kTextureH = 128; ///< (a texture's height is a power of two: the words in its top rows)
     } // namespace
 
@@ -162,18 +164,10 @@ namespace hlrt
                 if (netMapFits(*map, room_))
                     say("Fits every console", kUiWhite);
                 else
-                {
-                    say("Too big for a console", kUiGrey);
-                    say("sent the game", kUiGrey);
-                }
+                    say("Too big for a guest", kUiGrey);
             }
             else if (map->guestFits)
-            {
-                say("Fits a console", kUiWhite);
-                say("without the game", kUiWhite);
-            }
-            if (!pictured)
-                say("No picture yet", kUiGrey);
+                say("Fits a guest", kUiWhite);
         }
         else
 #ifdef HLDS_CHILD
@@ -181,6 +175,18 @@ namespace hlrt
 #else
             say("Not on this card", kUiGrey);
 #endif
+        // How the match is set up, as the host says it (HOST's and a lobby's).
+        if (showRules_)
+        {
+            const NetRules &rules = netGame.match().rules;
+            std::snprintf(line, sizeof(line), "%s, %d frags", rules.teams() ? "Teamplay" : "Deathmatch", rules.frags);
+            say(line, kUiWhite);
+            std::snprintf(line, sizeof(line), "%d minutes", rules.minutes);
+            say(line, kUiWhite);
+            std::snprintf(line, sizeof(line), "Weapons %s; %s", rules.has(kRuleWeaponsStay) ? "stay" : "go",
+                          rules.has(kRuleFlashlight) ? "lamp" : "no lamp");
+            say(line, kUiGrey);
+        }
         for (int py = 0; py < kTextH; ++py)
         {
             for (int px = 0; px < kTextW; ++px)
@@ -241,9 +247,9 @@ namespace hlrt
         NEA_PolyFormat(31, 3, static_cast<NEA_LightEnum>(0), NEA_CULL_NONE, NEA_DEPTH_TEST_EQUAL);
         NEA_MaterialUse(static_cast<const NEA_Material *>(text_));
         GFX_BEGIN = GL_QUADS;
-        corner(kTextX, kTop, 0, 0);
-        corner(kTextX, kTop + kTextH, 0, kTextH);
-        corner(kTextX + kTextW, kTop + kTextH, kTextW, kTextH);
-        corner(kTextX + kTextW, kTop, kTextW, 0);
+        corner(kTextX, kTextTop, 0, 0);
+        corner(kTextX, kTextTop + kTextH, 0, kTextH);
+        corner(kTextX + kTextW, kTextTop + kTextH, kTextW, kTextH);
+        corner(kTextX + kTextW, kTextTop, kTextW, 0);
     }
 } // namespace hlrt

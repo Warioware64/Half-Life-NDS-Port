@@ -36,6 +36,7 @@ namespace hlrt
             /// HOST, with maps never photographed: their pictures taken
             /// first (main.cpp), then openHost().
             TakePreviews,
+            AbortMatch, ///< the host's: everyone back to its lobby
         };
 
         /// Whether QUIT is offered: there is somewhere to go back to (the
@@ -43,7 +44,7 @@ namespace hlrt
         void setQuittable(bool can);
 
         /// Take the touch screen and show the first page.
-        void open();
+        void open(bool show = true);
         /// HOST: the host's game opened and its page shown (or, if the radio
         /// would not start, why, on MULTIPLAYER).
         void openHost();
@@ -53,6 +54,10 @@ namespace hlrt
         /// The same, on the lobby of the game between consoles this console
         /// is in (a match over: back to it).
         void openLobby();
+        /// The games near, to choose one: where a console out of a game lands
+        /// if it has nowhere else (one sent the game), and says why.
+        void openJoin();
+        bool onJoin() const { return page_ == Page::NetJoin; }
         /// The list of saves that the load and save pages show (the
         /// caller's: SaveGame::index()).
         void setSaves(const hldata::SaveIndex *saves) { saves_ = saves; }
@@ -227,13 +232,15 @@ namespace hlrt
         unsigned netShown_ = 0;
         int netTick_ = 0;
         void showFound();
-        void drawPlayers(int top, bool scores);
         unsigned netSignature() const;
         bool big() const;
         int active_ = -1; ///< the row the stylus went down on, or -1
         bool touching_ = false;
         int lastX_ = 0, lastY_ = 0;
         void draw();
+        void drawWhole();
+        void outOfGame();
+        void askKick(int row);
         void drawRow(int row, bool down);
         int rowAt(int x, int y) const;
         int rowCount() const;

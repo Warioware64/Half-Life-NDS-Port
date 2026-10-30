@@ -42,6 +42,7 @@ namespace hlrt
         enum Id
         {
             kResume,
+            kAbort,
             kSave,
             kSaveGame,
             kLoadGame,
@@ -160,12 +161,23 @@ namespace hlrt
                                   {Kind::Button, kOptions, "OPTIONS"},
                                   {Kind::Button, kBack, "BACK"}};
         const Row kNetPauseRows[] = {{Kind::Button, kResume, "RESUME"}, {Kind::Button, kOptions, "OPTIONS"},
-                                     {Kind::Button, kLeave, "LEAVE GAME"}};
+                                     {Kind::Button, kAbort, "ABORT MATCH"}, {Kind::Button, kLeave, "LEAVE GAME"}};
         // The games found: made when they are shown, then BACK.
         constexpr int kFoundListed = 4;
         Row foundRows[kFoundListed + 1];
         NetGame::Found foundList[kFoundListed];
         int foundCount = 0;
+        char joinWhy[48] = "";
+#ifdef HLDS_CHILD
+        constexpr bool childConsole = true;
+#else
+        constexpr bool childConsole = false;
+#endif
+        // The lobby's model of the player chosen: whether it could not be
+        // read (not tried again), the colours it has, and whether it is up.
+        int lobbyModelTried = 0, lobbyModelColours = -1;
+        bool lobbyWas = false;
+        int lobbyCharacter = 0;
         const Row kConfirmRows[] = {{Kind::Button, kYes, "YES"}, {Kind::Button, kNo, "NO"}};
         // A new game's difficulty, as the game's NEW GAME asks it.
         const Row kSkillRows[] = {{Kind::Button, kSkillEasy, "EASY"},
@@ -232,7 +244,7 @@ namespace hlrt
         bool hiddenRow(Id id)
         {
             return (id == kGameTraining && !onCard[1]) || (id == kGameUplink && !onCard[2]) ||
-                   (id == kContinue && !saveThere) || (id == kQuit && !quitThere);
+                   (id == kContinue && !saveThere) || (id == kQuit && !quitThere) || (id == kAbort && !netGame.isHost());
         }
 
         const Row *tableOf(int page, int &count);
@@ -290,9 +302,10 @@ namespace hlrt
 
     void Menu::openLobby()
     {
-        open();
+        open(false);
         probeCard();
         title_ = true;
+        sheetFrom_ = Page::Main; // (a page left behind by a stream, or a lost link)
         openSheet(netGame.isHost() ? Page::NetHost : Page::NetLobby);
     }
 
@@ -360,30 +373,35 @@ namespace hlrt
         return sum;
     }
 
-    /// Who is in the game, from `top` down: their names, and with `scores`
-    /// their frags and deaths.
-    void Menu::drawPlayers(int top, bool scores)
+    /// Out of a game: where a console goes. (Sent the game: there is only
+    /// looking for another. And one told its host is coming back too.)
+    void Menu::outOfGame()
     {
-        Canvas &canvas = touchCanvas.canvas();
-        const FontView &small = touchCanvas.font(kFontSmall);
-        const NetMatch &match = netGame.match();
-        canvas.fill(0, top, 256, 4 * (small.height() + 3) + 2, kUiBack);
-        int line = 0;
-        for (int p = 0; p < kNetPlayers; ++p)
+#ifndef HLDS_CHILD
+        if (netGame.backSoon()[0] == 0)
         {
-            if (!netHere(match, p))
-                continue;
-            char text[48];
-            const char *name = match.names[p][0] != 0 ? match.names[p] : "...";
-            if (scores)
-                std::snprintf(text, sizeof(text), "%s%s   %d frags   %d deaths", name, p == match.me ? " (you)" : "",
-                              match.frags[p], match.deaths[p]);
-            else
-                std::snprintf(text, sizeof(text), "%s%s%s", name, p == 0 ? " (host)" : "", p == match.me ? " (you)" : "");
-            drawTextCentred(canvas, small, 128, top + line++ * (small.height() + 3), text,
-                            inkFor(small, p == match.me ? kUiWhite : kUiGrey));
+            page_ = Page::Multiplayer;
+            draw();
+            const char *why = netGame.ended();
+            if (why[0] != 0)
+                showReason(why);
+            return;
         }
-        netShown_ = netSignature();
+#endif
+        openJoin();
+    }
+
+    void Menu::openJoin()
+    {
+        open(false);
+        title_ = true;
+        mapCard.hide();
+        netTick_ = 0;
+        // (Said under the list for as long as it is looked at.)
+        std::snprintf(joinWhy, sizeof(joinWhy), "%s", netGame.ended());
+        page_ = Page::NetJoin;
+        netGame.scan();
+        showFound();
     }
 
     /// The games found, as rows; then BACK.
@@ -392,12 +410,16 @@ namespace hlrt
         foundCount = netGame.found(foundList, kFoundListed);
         for (int i = 0; i < foundCount; ++i)
             foundRows[i] = Row{Kind::Button, kNetFound, foundList[i].line};
+#ifdef HLDS_CHILD
+        foundRows[foundCount] = Row{Kind::Button, kBack, "LOOK AGAIN"};
+#else
         foundRows[foundCount] = Row{Kind::Button, kBack, "BACK"};
+#endif
         page_ = Page::NetJoin;
         draw();
     }
 
-    void Menu::open()
+    void Menu::open(bool show)
     {
         bottomScreen.release();
         title_ = false;
@@ -405,13 +427,23 @@ namespace hlrt
         active_ = -1;
         // (The touch that opened it, if there was one, is not a press.)
         touching_ = (keysHeld() & KEY_TOUCH) != 0;
-        draw();
+        if (show)
+            draw();
     }
 
     void Menu::draw()
     {
+        touchCanvas.pageOff();
+        drawWhole();
+        touchCanvas.pageOn();
+    }
+
+    void Menu::drawWhole()
+    {
         Canvas &canvas = touchCanvas.canvas();
         canvas.clear();
+        // (Whatever the last page coloured: a score table's, a lobby's.)
+        touchCanvas.tint(1, 0, 2, 24, nullptr);
         if (sheet())
         {
             drawSheet();
@@ -439,9 +471,14 @@ namespace hlrt
             drawTextCentred(canvas, small, 128, top,
                             netGame.phase() == NetGame::Phase::Joining ? "Joining..." : "Looking for games...",
                             inkFor(small, kUiOrange));
+            if (joinWhy[0] != 0)
+                drawTextCentred(canvas, small, 128, 170, joinWhy, inkFor(small, kUiGrey));
         }
         if (page_ == Page::NetPause)
-            drawPlayers(kMainLayout.top + rowCount() * kMainLayout.pitch + 6, true);
+        {
+            bottomScreen.drawScores(kMainLayout.top + rowCount() * kMainLayout.pitch + 4);
+            netShown_ = netSignature();
+        }
     }
 
     // -------------------------------------------------------------- sheets
@@ -537,7 +574,9 @@ namespace hlrt
             return SheetBox{4 + n * 84, kSheetBarTop, 80, kSheetBarHeight};
         }
         // What YES does, once asked.
-        constexpr int kAskReset = 1, kAskOverwrite = 2, kAskLoad = 3, kAskDelete = 4, kAskLeave = 5;
+        constexpr int kAskReset = 1, kAskOverwrite = 2, kAskLoad = 3, kAskDelete = 4, kAskLeave = 5, kAskKick = 6,
+                      kAskSend = 7;
+        int kickWho = -1;
 
         /// What depends on the letters' height.
         struct SheetGeometry
@@ -964,15 +1003,6 @@ namespace hlrt
                 canvas.fill(x + b * 3, y + 9 - high, 2, high, b < bars ? kUiOrange + 2 : kUiGrey + 1);
             }
         }
-        /// A player's colours, as their swatch shows them: a hue each, strong
-        /// and bright (a hue is laid over a colour keeping how strong it is:
-        /// a grey's would stay grey).
-        std::uint16_t hueColour(int hue)
-        {
-            std::uint8_t c[1][3] = {{230, 60, 50}};
-            hueReplace(c, hue, 0, 0);
-            return static_cast<std::uint16_t>((c[0][0] >> 3) | (c[0][1] >> 3) << 5 | (c[0][2] >> 3) << 10);
-        }
 
         /// What a setting is now, as its row says it.
         void settingValue(Id id, int action, char *out, std::size_t size)
@@ -1018,7 +1048,7 @@ namespace hlrt
                 break;
             }
             case kProfName: std::snprintf(out, size, "%s", settings.playerName()); break;
-            case kProfModel: std::snprintf(out, size, "HEV suit"); break;
+            case kProfModel: std::snprintf(out, size, "%s", kCharacterNames[settings.playerModel % kCharacterCount]); break;
             case kProfSpray:
                 std::snprintf(out, size, "%s", logos.count() == 0 ? "none here" : logos.name(settings.spray % logos.count()));
                 break;
@@ -1119,7 +1149,11 @@ namespace hlrt
             case kReadout: return "Numbers along the top of the touch screen: how fast, where, how much.";
             case kPopups: return "An achievement earned is shown on the top screen as it is. Off, it is still earned.";
             case kKey: return "Touch an action, then press its button. START: leave it as it was.";
+#ifdef HLDS_CHILD
+            case kProfName: return "The name the others see in a match: this console's own.";
+#else
             case kProfName: return "The name the others see in a match. Touch it again to type another.";
+#endif
             case kNetMode:
                 return "Deathmatch: every one for themselves. Teamplay: two teams, the frags of each added up. Co-op: coming later.";
             case kNetMap: return "Where the match is played. The top screen shows it.";
@@ -1135,7 +1169,7 @@ namespace hlrt
             case kNetGuests:
                 return "Consoles without Half-Life can join, sent the game: only the maps that fit them are offered.";
             case kNetTeam: return "The team you would be on. The host puts you there if it keeps the teams even.";
-            case kProfModel: return "The player in the others' eyes. More models: coming later.";
+            case kProfModel: return "Who the others see you as. A console sent the game sees the suit, in your colours.";
             case kProfTop: return "The colour of the top of the suit, as the others see it.";
             case kProfBottom: return "The colour of the rest of the suit.";
             case kProfSpray: return "The picture sprayed on a wall in a match: the game's logos, and your own logos/.";
@@ -1222,6 +1256,13 @@ namespace hlrt
                                                            logos.count());
                 return true;
             case kProfSprayColour: cycle(settings.sprayColour, kSprayColours); return true;
+            case kProfModel:
+                if (childConsole)
+                    return false;
+                cycle(settings.playerModel, kCharacterCount);
+                profileView.open(settings.topColour, settings.bottomColour, settings.playerModel);
+                netGame.sayProfile();
+                return true;
             case kNetMode:
                 // (Deathmatch and teamplay: co-op is not played yet.)
                 settings.hostMode = settings.hostMode == kModeTeamplay ? kModeDeathmatch : kModeTeamplay;
@@ -1359,7 +1400,7 @@ namespace hlrt
         if (page == Page::Profile)
         {
             readLogos();
-            profileView.open(settings.topColour, settings.bottomColour);
+            profileView.open(settings.topColour, settings.bottomColour, settings.playerModel);
         }
         // (The touch that opened it is not one here, nor a button still held.)
         sheetHeld_ = keysHeld();
@@ -1539,8 +1580,13 @@ namespace hlrt
                     continue;
                 }
 #endif
-                const bool dead = (item.id == kFirmPress && !Input::pressureSeen()) ||
-                                  (item.id == kQuality && !isDSiMode()) || item.id == kProfModel ||
+#ifdef HLDS_CHILD
+                const bool nameLocked = item.id == kProfName;
+#else
+                constexpr bool nameLocked = false;
+#endif
+                const bool dead = nameLocked || (item.id == kFirmPress && !Input::pressureSeen()) ||
+                                  (item.id == kQuality && !isDSiMode()) || (item.id == kProfModel && childConsole) ||
                                   (item.id == kProfSpray && logos.count() == 0) || hostDead(item.id) != nullptr;
                 drawText(band, small, x + 8, textY, item.label, inkFor(small, dead ? kUiGrey : kUiWhite));
                 if (item.kind == Kind::Slider)
@@ -1611,7 +1657,7 @@ namespace hlrt
         void untintSeats()
         {
             for (int bank = 0; bank < kNetPlayers; ++bank)
-                touchCanvas.tint(kSwatchCellX, kSheetListTop / 8, 2, 18, nullptr, kSwatchFirstBank + bank);
+                touchCanvas.tint(kSwatchCellX, 0, 2, 24, nullptr, kSwatchFirstBank + bank);
         }
     } // namespace
 
@@ -1633,7 +1679,8 @@ namespace hlrt
         // The swatch: the first whole row of cells inside the row.
         const int screenY = kSheetListTop + y;
         const int cellY = (screenY + 2 + 7) / 8;
-        if (tinted && cellY * 8 + 8 <= screenY + g.row - 1 && cellY < 24)
+        // (Not one scrolled up past the list's top: those cells are the header's.)
+        if (tinted && cellY >= kSheetListTop / 8 && cellY * 8 + 8 <= screenY + g.row - 1 && cellY < 24)
         {
             const NetProfile &profile = match.profiles[p];
             const int bandY = cellY * 8 - kSheetListTop;
@@ -1832,6 +1879,8 @@ namespace hlrt
                                   static_cast<unsigned long>(free / 1024),
                                   static_cast<unsigned long>(free % 1024 * 10 / 1024));
                 }
+                if (page_ == Page::NetHost && p > 0)
+                    std::strncat(room, " Touch again to kick.", sizeof(room) - std::strlen(room) - 1);
                 std::snprintf(said, sizeof(said), "%s: %d frags, %d deaths.%s%s%s", match.names[p][0] ? match.names[p] : "...",
                               match.frags[p], match.deaths[p], bars >= 0 && p != match.me ? " Link: " : "",
                               bars >= 0 && p != match.me ? kLinks[bars > 4 ? 4 : bars] : "", room);
@@ -2199,6 +2248,14 @@ namespace hlrt
             return Action::Load;
         case kAskLeave:
             return sheetLeave();
+        case kAskKick:
+            netGame.kick(kickWho);
+            drawSheet();
+            return Action::None;
+        case kAskSend:
+            netGame.sayBackSoon();
+            sendBegin();
+            return Action::None;
         case kAskDelete:
             SaveGame::remove(slot_);
             listSaves();
@@ -2209,6 +2266,21 @@ namespace hlrt
             drawSheetBar();
             return Action::None;
         }
+    }
+
+    /// A seat of HOST's PLAYERS, chosen again: its player let go, if asked.
+    void Menu::askKick(int row)
+    {
+        int count = 0;
+        const int chapter = sheetChapter();
+        const Row *rows = sheetRows(static_cast<int>(page_), chapter, count);
+        const int p = seatPlayer(row - (rows[0].id == kNetTeam ? 1 : 0));
+        if (page_ != Page::NetHost || p <= 0)
+            return;
+        kickWho = p;
+        static char question[32];
+        std::snprintf(question, sizeof(question), "KICK %s?", netGame.match().names[p]);
+        sheetAsk(kAskKick, question);
     }
 
     /// PROFILE's name typed on the keyboard; empty, the console's owner's
@@ -2236,8 +2308,14 @@ namespace hlrt
         {
             int count = 0;
             const Row *rows = sheetRows(static_cast<int>(page_), sheetChapter(), count);
-            if (row >= 0 && row < count && rows[row].id == kProfName)
+            if (row >= 0 && row < count && rows[row].id == kSeat)
+                askKick(row);
+            else if (row >= 0 && row < count && rows[row].id == kProfName)
+            {
+#ifndef HLDS_CHILD
                 typeName();
+#endif
+            }
             else
                 sheetAdjust(row, 1);
             return Action::None;
@@ -2305,6 +2383,8 @@ namespace hlrt
         {
             if (playersHere() <= 1)
                 sendBegin();
+            else
+                sheetAsk(kAskSend, "ALL OUT FOR A MOMENT: SEND?");
             return Action::None;
         }
 #ifndef HLDS_CHILD
@@ -2770,11 +2850,18 @@ namespace hlrt
                     // read out.)
                     int shown = 0;
                     const Row *rows = sheetRows(static_cast<int>(page_), sheetChapter(), shown);
-                    if (rows[was].id != kProfName)
+                    if (rows[was].id == kSeat)
+                    {
+                        if (again)
+                            askKick(was);
+                    }
+                    else if (rows[was].id != kProfName)
                         sheetAdjust(was, 1);
                     else if (again)
                     {
+#ifndef HLDS_CHILD
                         typeName();
+#endif
                         return Action::None;
                     }
                 }
@@ -2833,7 +2920,13 @@ namespace hlrt
             char text[64];
             std::snprintf(text, sizeof(text), "%s  %s  %s  %d/%d", found.name,
                           found.room.version == 0 ? "" : (found.room.mode == kNetModeTeamplay ? "teamplay" : "deathmatch"),
-                          found.map != nullptr ? found.map : (found.room.mapHash != 0 ? "(not on this card)" : ""),
+                          found.map != nullptr ? found.map
+#ifndef HLDS_CHILD
+                                              : (found.room.mapHash != 0 ? "(not on this card)" : ""),
+#else
+                                              : "",
+#endif
+
                           found.players, found.room.version != 0 ? found.room.most : found.most);
             const int textY = y + (kOptionLayout.height - small.height()) / 2;
             drawFitted(canvas, small, kOptionLayout.x + 6, textY, text,
@@ -2923,6 +3016,10 @@ namespace hlrt
         const int most = found.room.version != 0 ? found.room.most : found.most;
         if (found.players >= most)
             return "Full";
+#ifdef HLDS_CHILD
+        if (found.room.version == 0 || !found.room.guests)
+            return "It lets in only consoles with the game";
+#endif
         return nullptr;
     }
 
@@ -2949,6 +3046,10 @@ namespace hlrt
         switch (item.id)
         {
         case kResume:  return Action::Resume;
+        case kAbort:
+            asker_ = page_;
+            ask(Action::AbortMatch, "ABORT THE MATCH?");
+            break;
         case kSave:    return Action::Save;
         case kCommand: return Action::Command;
         case kQuit:    return Action::Quit;
@@ -3030,9 +3131,9 @@ namespace hlrt
             // Out of a lobby: out of the game, and the radio silent.
             if (page_ == Page::NetHost || page_ == Page::NetJoin || page_ == Page::NetLobby)
             {
+                netGame.backSoonDone();
                 netGame.leave();
-                page_ = Page::Multiplayer;
-                draw();
+                outOfGame();
                 break;
             }
             // (From how hard, back to which game; from which game, to where
@@ -3063,6 +3164,7 @@ namespace hlrt
             break;
         }
         case kNetJoin:
+            joinWhy[0] = 0;
             if (netGame.scan())
                 showFound();
             break;
@@ -3118,8 +3220,10 @@ namespace hlrt
                     if (name[0] != 0 && map.name == name)
                         card = &map;
                 }
+#ifndef HLDS_CHILD
                 if (card == nullptr && page_ == Page::NetJoin && foundCount > 0)
                     elsewhere = "?";
+#endif
                 // (The host's map, not on this card -- or no card: its name,
                 // and the host's picture of it, if it sent one.)
                 if (card == nullptr && page_ == Page::NetLobby && name[0] != 0)
@@ -3128,7 +3232,54 @@ namespace hlrt
             // (What fits is what fits the consoles sent the game that are
             // here, as the host has it.)
             mapCard.setRoom(page_ == Page::NetHost || page_ == Page::NetStarting ? netGame.guestRoom() : 0);
+            // The lobbies' top screen: no moving title; the map and how the
+            // match is set up on the left, the player chosen on the right.
+            const bool lobby = page_ == Page::NetHost || page_ == Page::NetLobby || page_ == Page::NetStarting;
+            hudDraw.setMenuLogo(!lobby && page_ != Page::NetJoin);
+            const NetRules &rules = netGame.match().rules;
+            mapCard.setRules(lobby, rules.mode * 31u + rules.flags * 131u + rules.most * 7u + rules.frags * 1009u +
+                                        rules.minutes * 65537u);
             mapCard.show(card, elsewhere);
+            int seat = netGame.match().me;
+            if (lobby && (page_ == Page::NetHost ? hostChapter_ == 1 : true) && sheetSelected_ >= 0)
+            {
+                int count = 0;
+                const Row *rows = sheetRows(static_cast<int>(page_), sheetChapter(), count);
+                if (sheetSelected_ < count && rows[sheetSelected_].id == kSeat)
+                {
+                    const int chosen = seatPlayer(sheetSelected_ - (rows[0].id == kNetTeam ? 1 : 0));
+                    seat = chosen >= 0 ? chosen : seat;
+                }
+            }
+            if (lobby)
+            {
+                const NetProfile &profile = netGame.match().profiles[seat];
+                const int top = profile.known ? profile.top : settings.topColour;
+                const int bottom = profile.known ? profile.bottom : settings.bottomColour;
+                profileView.setPlace(42);
+                const int who = profile.known ? profile.model : settings.playerModel;
+                if (who != lobbyCharacter && profileView.shown())
+                    profileView.close();
+                lobbyCharacter = who;
+                if (!profileView.shown())
+                {
+                    if (lobbyModelTried != 1 && profileView.open(top, bottom, who))
+                        lobbyModelColours = top | bottom << 8;
+                    lobbyModelTried = profileView.shown() ? 0 : 1;
+                }
+                else if ((top | bottom << 8) != lobbyModelColours)
+                {
+                    profileView.setColours(top, bottom);
+                    lobbyModelColours = top | bottom << 8;
+                }
+            }
+            else if (lobbyWas)
+            {
+                profileView.setPlace(0);
+                if (page_ != Page::Profile)
+                    profileView.close();
+            }
+            lobbyWas = lobby;
         }
 #ifndef HLDS_CHILD
         // SEND THE GAME: the sending goes on, and is shown as it does; once
@@ -3168,9 +3319,11 @@ namespace hlrt
                 netShown_ = sum;
                 if (sheetSelected_ >= sheetCount(0))
                     sheetSelected_ = -1;
+                touchCanvas.pageOff();
                 drawSheetList();
                 drawSheetDetail();
                 drawSheetBar();
+                touchCanvas.pageOn();
             }
         }
 #endif
@@ -3179,8 +3332,7 @@ namespace hlrt
         {
             if (netGame.phase() == NetGame::Phase::Off)
             {
-                page_ = Page::Multiplayer;
-                draw();
+                outOfGame();
                 return Action::None;
             }
             unsigned sum = netSignature();
@@ -3200,8 +3352,10 @@ namespace hlrt
                 netShown_ = sum;
                 if (sheetSelected_ >= sheetCount(0))
                     sheetSelected_ = -1;
+                touchCanvas.pageOff();
                 drawSheetList();
                 drawSheetDetail();
+                touchCanvas.pageOn();
             }
         }
         // HOST and the lobby change without being touched: who comes, how
@@ -3212,8 +3366,7 @@ namespace hlrt
             {
                 untintSeats();
                 mapCard.hide();
-                page_ = Page::Multiplayer;
-                draw();
+                outOfGame();
                 return Action::None;
             }
             if (netSignature() != netShown_ && !sheetTouching_ && sheetSlide_ == 0 && sheetDrag_ == 0)
@@ -3235,9 +3388,11 @@ namespace hlrt
                 // (Fewer places than before: nothing past them read out.)
                 if (sheetSelected_ >= sheetCount(sheetChapter()))
                     sheetSelected_ = -1;
+                touchCanvas.pageOff();
                 drawSheetList();
                 drawSheetDetail();
                 drawSheetBar();
+                touchCanvas.pageOn();
             }
         }
         if (sheet())
@@ -3253,13 +3408,28 @@ namespace hlrt
             }
             else if (netGame.phase() == NetGame::Phase::Off)
             {
-                page_ = Page::Multiplayer;
-                draw();
+#ifdef HLDS_CHILD
+                openJoin(); // (a game that would not have it: the reason, and the list)
+#else
+                outOfGame();
+#endif
             }
             else if (netGame.phase() == NetGame::Phase::Scanning && ++netTick_ >= 45 && active_ < 0)
             {
                 netTick_ = 0;
                 showFound();
+                // (The host that said it would be back, come back.)
+                const char *back = netGame.backSoon();
+                for (int i = 0; back[0] != 0 && i < foundCount; ++i)
+                {
+                    if (std::strcmp(foundList[i].name, back) == 0 && foundDead(i) == nullptr)
+                    {
+                        netGame.backSoonDone();
+                        if (netGame.join(foundList[i].index))
+                            draw();
+                        break;
+                    }
+                }
             }
         }
         else if (page_ == Page::NetPause)

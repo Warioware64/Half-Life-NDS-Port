@@ -36,6 +36,11 @@ namespace hldata
     inline constexpr int kNetWeaponBackMs = 20000; ///< a weapon or ammunition taken is back after this
     inline constexpr int kNetItemBackMs = 30000;   ///< ... a medkit or a battery after this
     inline constexpr int kNetBlameMs = 5000;     ///< a death this soon after a hit is the hitter's
+    /// A host's Bye, its first value: nothing, it has left; to one console,
+    /// it will not have it (the game is full, or it has let it go); to all,
+    /// it is off to send the game, and will be back.
+    inline constexpr int kNetRefuseFull = 1, kNetRefuseKicked = 2, kNetByeBackSoon = 3;
+
     /// The match over, the scores shown this long before everyone is back in
     /// the host's lobby (the game's mp_chattime, before its next map).
     inline constexpr int kNetIntermissionMs = 10000;
@@ -69,6 +74,7 @@ namespace hldata
         std::uint16_t flags = kRuleAutoaim; ///< kRule*
         std::uint8_t most = 4;              ///< how many may play
         std::uint32_t mapHash = 0;          ///< nameHash of the map it is to be on (0: not said)
+        std::uint8_t frags = 0, minutes = 0; ///< the limits, for the lobby to show (0: none)
         bool teams() const { return mode == kNetModeTeamplay; }
         bool has(std::uint16_t flag) const { return (flags & flag) != 0; }
     };
@@ -137,7 +143,14 @@ namespace hldata
         /// The host: of each player's spray, the pieces it has passed on.
         std::uint32_t relayed[kNetPlayers] = {};
         /// The host would not let this console in (too many).
-        bool refused = false;
+        /// The host would not have this console: why (kNetRefuse*; 0: it would).
+        /// Each player's model, if not `model` (0: is `model`): who they chose
+        /// to be, where this console has that one.
+        std::uint16_t characterModel[kNetPlayers] = {};
+        std::uint8_t refused = 0;
+        /// The host's: those it has let go (their tokens), who are not let
+        /// back in while its game lasts.
+        std::uint16_t banned[8] = {};
         NetSprayMark sprays[kNetPlayers];
         std::int32_t sprayWaitMs = 0; ///< until this console's player may spray again
         std::int32_t playedMs = 0;
@@ -386,7 +399,8 @@ namespace hldata
         inline void netTellAll(NetMatch &match)
         {
             NetEvent rules = netEvent(NetEventType::Rules, 0, match.rules.mode, match.rules.flags, match.rules.most,
-                                    static_cast<int>(match.rules.mapHash & 0xFFFF), static_cast<int>(match.rules.mapHash >> 16));
+                                    static_cast<int>(match.rules.mapHash & 0xFFFF), static_cast<int>(match.rules.mapHash >> 16),
+                                    match.rules.frags | match.rules.minutes << 8);
             match.host.out.add(rules);
             for (int p = 0; p < kNetPlayers; ++p)
             {
@@ -467,7 +481,16 @@ namespace hldata
                         here += p != from && match.names[p][0] != 0 && netHere(match, p) ? 1 : 0;
                     if (here > match.rules.most)
                     {
-                        match.host.out.add(netEvent(NetEventType::Bye, from, 1));
+                        match.host.out.add(netEvent(NetEventType::Bye, from, kNetRefuseFull));
+                        break;
+                    }
+                    // (One it has let go, come back.)
+                    bool banned = false;
+                    for (const std::uint16_t token : match.banned)
+                        banned = banned || (token != 0 && token == match.host.clients[from].token);
+                    if (banned)
+                    {
+                        match.host.out.add(netEvent(NetEventType::Bye, from, kNetRefuseKicked));
                         break;
                     }
                     std::memcpy(match.names[from], event.text, kNetTextBytes);
@@ -538,6 +561,8 @@ namespace hldata
                     match.rules.most = static_cast<std::uint8_t>(event.v[2] < 2 ? 2 : (event.v[2] > kNetPlayers ? kNetPlayers : event.v[2]));
                     match.rules.mapHash = static_cast<std::uint16_t>(event.v[3]) |
                                           static_cast<std::uint32_t>(static_cast<std::uint16_t>(event.v[4])) << 16;
+                    match.rules.frags = static_cast<std::uint8_t>(event.v[5] & 0xFF);
+                    match.rules.minutes = static_cast<std::uint8_t>((event.v[5] >> 8) & 0xFF);
                     ++match.profileStamp; // (what the lobby shows has changed)
                 }
                 break;
@@ -632,17 +657,18 @@ namespace hldata
             case NetEventType::Bye:
                 // (The host's to a client it will not have: for that one
                 // alone, and the match goes on for the rest.)
-                if (from == 0 && event.v[0] == 1)
+                if (from == 0 && (event.v[0] == kNetRefuseFull || event.v[0] == kNetRefuseKicked))
                 {
                     if (event.a != match.me || match.me == 0)
                         break;
-                    match.refused = true;
+                    match.refused = static_cast<std::uint8_t>(event.v[0]);
                 }
                 if (match.passedCount < NetMatch::kMostNotices)
                     match.passed[match.passedCount++] = event;
                 break;
             case NetEventType::End:
                 match.over = true;
+                netNotice(match, NetEventType::End, 0);
                 [[fallthrough]];
             case NetEventType::Start:
             case NetEventType::Ready:
@@ -878,7 +904,8 @@ namespace hldata
         match.rules = rules;
         match.rules.most = static_cast<std::uint8_t>(rules.most < 2 ? 2 : (rules.most > kNetPlayers ? kNetPlayers : rules.most));
         match.host.out.add(netEvent(NetEventType::Rules, 0, match.rules.mode, match.rules.flags, match.rules.most,
-                                    static_cast<int>(match.rules.mapHash & 0xFFFF), static_cast<int>(match.rules.mapHash >> 16)));
+                                    static_cast<int>(match.rules.mapHash & 0xFFFF), static_cast<int>(match.rules.mapHash >> 16),
+                                    match.rules.frags | match.rules.minutes << 8));
         for (int p = 0; p < kNetPlayers && again; ++p)
             match.profiles[p].team = 0;
         for (int p = 0; p < kNetPlayers; ++p)
@@ -1177,6 +1204,7 @@ namespace hldata
                 actor.health = kNetActorHealth;
                 match.pose[p] = 0;
             }
+            actor.model = static_cast<std::uint16_t>(match.characterModel[p] != 0 ? match.characterModel[p] : match.model);
             // (Where their middle is: the players' model has its origin
             // there, as the game's player has -- not at their feet, as most
             // actors' do. HlActors.hpp's boxes for a Player know it.)

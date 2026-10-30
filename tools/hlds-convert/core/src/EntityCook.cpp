@@ -1,6 +1,7 @@
 #include "HlSound.hpp"
 #include "HlSprite.hpp"
 #include "hlds/EntityCook.hpp"
+#include "HlWeaponBundle.hpp"
 #include "hlds/MdlFile.hpp"
 
 #include "HlMonsters.hpp"
@@ -851,6 +852,8 @@ namespace hlds
         other.file = "models/player/gordon/gordon.mdl";
         other.clips = {"look_idle", "run",        "walk",          "crouch_idle",  "crawl",   "jump",
                        "die_simple", "die_backwards", "die_forwards", "headshot", "gutshot"};
+    for (const char *aim : hldata::kAimClips)
+        other.clips.push_back(aim);
         needs.push_back(other);
     }
 

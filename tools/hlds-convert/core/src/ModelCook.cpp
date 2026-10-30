@@ -575,6 +575,61 @@ namespace hlds
         return path.size() > 4 && path.substr(path.size() - 4) == ".wav" ? path : std::string();
     }
 
+    bool bakeHeldModel(MdlFile &mdl, std::string &error)
+    {
+        int hand = -1;
+        for (std::size_t b = 0; b < mdl.bones.size(); ++b)
+        {
+            if (lower(mdl.bones[b].name) == "bip01 r hand")
+                hand = static_cast<int>(b);
+        }
+        if (hand < 0 || mdl.sequences.empty())
+        {
+            error = mdl.name + " has no right hand to be held in";
+            return false;
+        }
+        std::vector<MdlPose> poses;
+        if (!mdl.decode(0, poses, error))
+            return false;
+        std::vector<std::array<double, 12>> matrices(mdl.bones.size());
+        mdlBoneMatrices(mdl, poses.data(), matrices);
+        const std::array<double, 12> &h = matrices[static_cast<std::size_t>(hand)];
+        auto place = [&](const std::array<double, 12> &m, const std::array<float, 3> &v, bool moves)
+        {
+            double world[3];
+            for (int a = 0; a < 3; ++a)
+                world[a] = m[a * 4] * v[0] + m[a * 4 + 1] * v[1] + m[a * 4 + 2] * v[2] + (moves ? m[a * 4 + 3] - h[a * 4 + 3] : 0.0);
+            std::array<float, 3> out;
+            for (int a = 0; a < 3; ++a)
+                out[a] = static_cast<float>(h[a] * world[0] + h[4 + a] * world[1] + h[8 + a] * world[2]);
+            return out;
+        };
+        for (MdlBodyPart &part : mdl.bodyParts)
+        {
+            for (MdlSubModel &model : part.models)
+            {
+                for (std::size_t v = 0; v < model.vertices.size(); ++v)
+                {
+                    model.vertices[v] = place(matrices[model.vertexBone[v]], model.vertices[v], true);
+                    model.vertexBone[v] = 0;
+                }
+                for (std::size_t n = 0; n < model.normals.size(); ++n)
+                {
+                    model.normals[n] = place(matrices[model.normalBone[n]], model.normals[n], false);
+                    model.normalBone[n] = 0;
+                }
+            }
+        }
+        MdlBone one;
+        one.name = "hand";
+        mdl.bones.assign(1, one);
+        mdl.sequences.clear();
+        mdl.controllers.clear();
+        mdl.hitboxes.clear();
+        mdl.attachments.clear();
+        return true;
+    }
+
     bool cookModel(const MdlFile &mdl, const std::vector<std::string> &clipNames, CookedModel &out,
                    ModelCookReport &report, std::string &error, int skinTexels, bool full,
                    const ModelLean &lean)
@@ -832,7 +887,9 @@ namespace hlds
             clipFirstZ.emplace_back();
             for (int b = 0; b < boneCount; ++b)
                 clipFirstZ.back().push_back(poses[b].rot[2]);
-            const int frameCount = seq.frameCount;
+            // (A pose to hold a gun in: its one frame is enough, and what it
+            // saves of its thirty-odd is what makes it affordable.)
+            const int frameCount = label.rfind("ref_aim_", 0) == 0 ? 1 : seq.frameCount;
 
             ModelClip clip{};
             clip.name = nameHash(label.c_str());
@@ -1150,6 +1207,14 @@ namespace hlds
         std::memcpy(h.magic, kModelMagic, 4);
         h.version = kModelVersion;
         h.boneCount = static_cast<std::uint16_t>(mdl.bones.size());
+        h.handBone = h.spineBone = -1;
+        for (std::size_t b = 0; b < mdl.bones.size() && b < 127; ++b)
+        {
+            if (lower(mdl.bones[b].name) == "bip01 r hand")
+                h.handBone = static_cast<std::int8_t>(b);
+            if (lower(mdl.bones[b].name) == "bip01 spine")
+                h.spineBone = static_cast<std::int8_t>(b);
+        }
         h.batchCount = static_cast<std::uint16_t>(out.batches.size());
         h.clipCount = static_cast<std::uint16_t>(out.clips.size());
         h.eventCount = static_cast<std::uint16_t>(out.events.size());

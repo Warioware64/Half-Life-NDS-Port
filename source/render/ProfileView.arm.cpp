@@ -16,13 +16,15 @@
 #include "data/CardRead.hpp"
 #include "data/TextureCache.hpp"
 
+#include "HlCharacters.hpp"
+
 namespace hlrt
 {
     ProfileView profileView;
 
 #ifdef HLDS_CHILD
     // (A console sent the game has no model of its own to show: none of it.)
-    bool ProfileView::open(int, int) { return false; }
+    bool ProfileView::open(int, int, int) { return false; }
     void ProfileView::setColours(int, int) {}
     void ProfileView::close() {}
     void ProfileView::draw() {}
@@ -48,10 +50,14 @@ namespace hlrt
         BoneMatrix pose[kModelMaxBones];
     } // namespace
 
-    bool ProfileView::open(int top, int bottom)
+    bool ProfileView::open(int top, int bottom, int character)
     {
         close();
-        std::FILE *file = std::fopen(global.commonPath(kProfileModelFile).c_str(), "rb");
+        const bool other = character > 0 && character < kCharacterCount;
+        const std::string own = std::string("chr/") + kCharacterFiles[other ? character : 0];
+        const std::string modelFile = other ? own + ".hmd" : std::string(kProfileModelFile);
+        const std::string skinFile = other ? own + ".htx" : std::string(kProfileSkinFile);
+        std::FILE *file = std::fopen(global.commonPath(modelFile).c_str(), "rb");
         if (file == nullptr)
             return false;
         std::fseek(file, 0, SEEK_END);
@@ -75,7 +81,7 @@ namespace hlrt
         // to lay a player's over).
         NEA_Material *material = nullptr;
         NEA_Palette *palette = nullptr;
-        if (!TextureCache::loadFile(global.commonPath(kProfileSkinFile).c_str(), false, view->header->atlasWidth,
+        if (!TextureCache::loadFile(global.commonPath(skinFile).c_str(), false, view->header->atlasWidth,
                                     view->header->atlasHeight, 0, material, palette) ||
             !TextureCache::takeRemapBase(base_))
         {
@@ -207,7 +213,7 @@ namespace hlrt
                 }
                 // The bone's origin (Q12 units, by Q12): to the view's Q12,
                 // a 128th.
-                const int at[3] = {0, kAtY << 5, kAtZ << 5};
+                const int at[3] = {atX_ << 5, kAtY << 5, kAtZ << 5};
                 for (int j = 0; j < 3; ++j)
                 {
                     const std::int64_t sum = static_cast<std::int64_t>(bone.t[0]) * turned[j] +
