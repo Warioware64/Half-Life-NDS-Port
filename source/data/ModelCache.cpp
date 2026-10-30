@@ -158,7 +158,13 @@ namespace hlrt
                 return;
             const std::string name = hldata::kCharacterFiles[id];
             std::uint32_t size = 0;
-            std::uint8_t *block = readModel(global.commonPath("chr/" + name + ".hmd"), size, kSpare);
+            // (At its finest on a DSi with the game. Sent it, it came so, or not.)
+            std::string kind;
+            std::uint8_t *block = global.isDSi ? readModel(global.commonPath("chr/" + name + ".dsi.hmd"), size, kSpare) : nullptr;
+            if (block != nullptr)
+                kind = ".dsi";
+            else
+                block = readModel(global.commonPath("chr/" + name + ".hmd"), size, kSpare);
             const int at = count_ + slot;
             if (block == nullptr || !views_[at].open(block, size))
             {
@@ -166,7 +172,7 @@ namespace hlrt
                 views_[at] = hldata::ModelView();
                 continue;
             }
-            if (!TextureCache::loadFile(global.commonPath("chr/" + name + ".htx").c_str(), false,
+            if (!TextureCache::loadFile(global.commonPath("chr/" + name + kind + ".htx").c_str(), false,
                                         views_[at].header->atlasWidth, views_[at].header->atlasHeight, 0, materials_[at],
                                         palettes_[at]) ||
                 !TextureCache::takeRemapBase(characterBases_ + slot * 256))

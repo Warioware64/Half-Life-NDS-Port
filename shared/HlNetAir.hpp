@@ -72,6 +72,8 @@ namespace hldata
         Base,   ///< a group's (HlManifest.hpp's AirGroup), by its name: "match"
         Map,    ///< a map's own, by its name
         Preview, ///< the picture of the host's map (HlPreview.hpp), by the map's name: to any console without one
+        MapFull, ///< a map's own at full quality (<map>.dsi.hgs), to a console in DSi mode: before the others' base and map
+        CharacterFull, ///< ... at its finest, to a console in DSi mode (before the others' Character)
         Character, ///< who a player chose to be (HlCharacters.hpp), by its name: after the map, to those with room
     };
     /// A stream's name on the wire.

@@ -473,6 +473,9 @@ namespace hlrt
                             inkFor(small, kUiOrange));
             if (joinWhy[0] != 0)
                 drawTextCentred(canvas, small, 128, 170, joinWhy, inkFor(small, kUiGrey));
+#ifdef HLDS_CHILD
+            drawTextCentred(canvas, small, 128, 150, global.twlChild ? "DSi mode, 16 MB" : "DS mode", inkFor(small, kUiGrey));
+#endif
         }
         if (page_ == Page::NetPause)
         {
@@ -1169,7 +1172,7 @@ namespace hlrt
             case kNetGuests:
                 return "Consoles without Half-Life can join, sent the game: only the maps that fit them are offered.";
             case kNetTeam: return "The team you would be on. The host puts you there if it keeps the teams even.";
-            case kProfModel: return "Who the others see you as. A console sent the game sees the suit, in your colours.";
+            case kProfModel: return "Who the others see you as. A console with no room for it sees the suit, in your colours.";
             case kProfTop: return "The colour of the top of the suit, as the others see it.";
             case kProfBottom: return "The colour of the rest of the suit.";
             case kProfSpray: return "The picture sprayed on a wall in a match: the game's logos, and your own logos/.";
@@ -1257,7 +1260,7 @@ namespace hlrt
                 return true;
             case kProfSprayColour: cycle(settings.sprayColour, kSprayColours); return true;
             case kProfModel:
-                if (childConsole)
+                if (childConsole && !global.twlChild)
                     return false;
                 cycle(settings.playerModel, kCharacterCount);
                 profileView.open(settings.topColour, settings.bottomColour, settings.playerModel);
@@ -1586,7 +1589,7 @@ namespace hlrt
                 constexpr bool nameLocked = false;
 #endif
                 const bool dead = nameLocked || (item.id == kFirmPress && !Input::pressureSeen()) ||
-                                  (item.id == kQuality && !isDSiMode()) || (item.id == kProfModel && childConsole) ||
+                                  (item.id == kQuality && !isDSiMode()) || (item.id == kProfModel && childConsole && !global.twlChild) ||
                                   (item.id == kProfSpray && logos.count() == 0) || hostDead(item.id) != nullptr;
                 drawText(band, small, x + 8, textY, item.label, inkFor(small, dead ? kUiGrey : kUiWhite));
                 if (item.kind == Kind::Slider)
@@ -1762,16 +1765,17 @@ namespace hlrt
             switch (dlsend::state())
             {
             case dlsend::State::Gathering:
-                std::snprintf(said, sizeof(said), "%d console%s here%s. START sends the game to them all at once. X: %s.",
+                std::snprintf(said, sizeof(said), "%d console%s here%s. START sends the game to them all at once. X: %s. Y: DSi mode, %s maps.",
                               here, here == 1 ? "" : "s", dlsend::full() ? " (the most there is room for)"
                                                                          : "; more can still come",
-                              dlsend::fast() ? "fast" : "standard pace");
+                              dlsend::fast() ? "fast" : "standard pace", netGame.fullGuests() ? "full" : "lean");
                 break;
             case dlsend::State::Sending:
                 // (And what the radio is doing: the rate, and the counts that
                 // say why it is not more; X, the other pace, to compare.)
-                std::snprintf(said, sizeof(said), "Sending the game (%s, X): %d%%. %s",
-                              dlsend::fast() ? "fast" : "standard", dlsend::percent(), dlsend::rate());
+                std::snprintf(said, sizeof(said), "Sending the game (%s, X; DSi mode: %s, Y): %d%%. %s",
+                              dlsend::fast() ? "fast" : "standard", netGame.fullGuests() ? "full maps" : "lean maps",
+                              dlsend::percent(), dlsend::rate());
                 break;
             case dlsend::State::Starting:
             case dlsend::State::Done:
@@ -1874,7 +1878,8 @@ namespace hlrt
                 if (const std::uint32_t kb = netGame.roomOf(p))
                 {
                     const std::uint32_t free = netGame.freeOf(p);
-                    std::snprintf(room, sizeof(room), " Sent the game: %lu.%lu MB, %lu.%lu free.",
+                    std::snprintf(room, sizeof(room), " %s: %lu.%lu MB, %lu.%lu free.",
+                                  netGame.dsiTier(p) ? "DSi mode" : "Sent the game",
                                   static_cast<unsigned long>(kb / 1024), static_cast<unsigned long>(kb % 1024 * 10 / 1024),
                                   static_cast<unsigned long>(free / 1024),
                                   static_cast<unsigned long>(free % 1024 * 10 / 1024));
@@ -3290,6 +3295,13 @@ namespace hlrt
             if (keysDown() & KEY_X)
             {
                 dlsend::setFast(!dlsend::fast());
+                sound.ui(kUiSoundTick);
+                drawSheetDetail();
+            }
+            // (Y: what a console in DSi mode is then sent of the maps.)
+            if (keysDown() & KEY_Y)
+            {
+                netGame.setFullGuests(!netGame.fullGuests());
                 sound.ui(kUiSoundTick);
                 drawSheetDetail();
             }

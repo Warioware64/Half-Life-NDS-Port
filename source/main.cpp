@@ -76,7 +76,8 @@ namespace
     /// Sent the game: what is said while there is nothing else to show.
     void guestSay(const char *l1, const char *l2)
     {
-        hlrt::bottomScreen.showProgress("HALF-LIFE DS", l1, l2, 0, 0, false);
+        // (Which it is running as: all that can be seen of it from here.)
+        hlrt::bottomScreen.showProgress(global.twlChild ? "DSi mode, 16 MB" : "DS mode", l1, l2, 0, 0, false);
     }
     /// What is being taken from the host, how big and how fast, how far.
     void guestPage(const char *title, const char *step, int percent)
@@ -136,7 +137,7 @@ namespace
     void guestArrive(bool withGame)
     {
         hldata::NetDlParam param;
-        bool sent = hldata::netDlRead(reinterpret_cast<const std::uint8_t *>(0x027FFBE0), param);
+        bool sent = hlrt::guest::bootParam(param);
         // (The one that sent it, for a while: gone, whoever else is near.)
         for (int rounds = 0;; ++rounds)
         {
@@ -502,7 +503,15 @@ namespace
         // (Sent the game, every texture is in video memory at once: the
         // weapon in hand has its slots first, or it is the one left bare.
         // A guest's weapons' skins are all of one size.)
-        hlrt::textureStream.reserveSkinSlots(hldata::kLazySkinTexels / 4);
+        // (Not a map at full quality, which streams its textures as a card's
+        // does -- from memory here -- and has its slots among them.)
+        {
+            bool streams = false;
+            for (std::uint32_t t = 0; t < hlrt::level.view.textureCount; ++t)
+                streams = streams || (hlrt::level.view.textures[t].flags & hldata::kTextureStreamed) != 0;
+            if (!streams)
+                hlrt::textureStream.reserveSkinSlots(hldata::kLazySkinTexels / 4);
+        }
 #endif
         bool made = hlrt::worldDraw.create() && hlrt::textureCache.create();
         clock.mark("tex");
@@ -650,7 +659,8 @@ namespace
             // Who another chose to be, on its way: taken, read, let go of.
             {
                 hldata::AirHead air;
-                if (hlrt::netGame.airAsked(air) && air.stream == hldata::AirStream::Character)
+                if (hlrt::netGame.airAsked(air) &&
+                    (air.stream == hldata::AirStream::Character || air.stream == hldata::AirStream::CharacterFull))
                 {
                     hlrt::bottomScreen.showProgress("JOINING THE MATCH", "Ready", "Hearing who the others are", 100, 100, false, true);
                     if (hlrt::guest::receiveAir(nullptr))
@@ -1329,7 +1339,7 @@ int main(int argc, char *argv[])
                             swiWaitForVBlank();
                     }
                 }
-                else if (air.stream == hldata::AirStream::Map)
+                else if (air.stream == hldata::AirStream::Map || air.stream == hldata::AirStream::MapFull)
                 {
                     hlrt::game.resetProgress();
                     hlrt::game.globals.set(hldata::kGlobalSkill, air.skill);

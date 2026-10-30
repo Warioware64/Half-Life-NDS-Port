@@ -2,6 +2,8 @@
 
 #include "render/FrameFreeze.hpp"
 
+#include "Global.hpp"
+
 #include "render/ScreenFade.hpp"
 
 #include "HlPreview.hpp"
@@ -29,9 +31,10 @@ namespace hlrt
     bool FrameFreeze::freeze()
     {
 #ifdef HLDS_CHILD
-        // (Sent the game, bank D is the ARM7's -- the sounds' -- not this
-        // picture's: a load goes dark instead.)
-        return false;
+        // (Sent the game, the memory of a DS is short of what the picture
+        // takes, and a load goes dark instead. Not in DSi mode.)
+        if (!global.twlChild)
+            return false;
 #endif
         if (frozen_)
             return true;

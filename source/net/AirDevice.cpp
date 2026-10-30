@@ -1,6 +1,7 @@
 // (A console that was sent the game only: HLDS_CHILD.)
 #ifdef HLDS_CHILD
 #include "net/AirDevice.hpp"
+#include "Global.hpp"
 
 #include "HlUi.hpp"
 
@@ -335,7 +336,9 @@ namespace hlrt::air
         bool keptCommon(const char *name)
         {
             return std::strcmp(name, hldata::kMenuFile) == 0 || std::strcmp(name, hldata::kLogosFile) == 0 ||
-                   std::strcmp(name, hldata::kProfileModelFile) == 0 || std::strcmp(name, hldata::kProfileSkinFile) == 0;
+                   std::strcmp(name, hldata::kProfileModelFile) == 0 || std::strcmp(name, hldata::kProfileSkinFile) == 0 ||
+                   (global.twlChild &&
+                    (std::strcmp(name, hldata::kProfileFineModelFile) == 0 || std::strcmp(name, hldata::kProfileFineSkinFile) == 0));
         }
 
         void drop(bool ofMap)

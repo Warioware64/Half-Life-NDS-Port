@@ -113,6 +113,9 @@ void Global::Init(const char *launchedFrom)
     // and every budget chosen from isDSi assumes the clock is already what it
     // is going to be. setCpuClock is a no-op outside DSi mode.
     isDSi = isDSiMode();
+    #ifdef HLDS_CHILD
+    twlChild = isDSi && *reinterpret_cast<const volatile std::uint32_t *>(0x02FFDFF8) == 0x434C5754;
+    #endif
     if (isDSi)
     {
         setCpuClock(true);

@@ -397,7 +397,14 @@ namespace hlrt
     {
         // What the loader that started this program left: who sent it.
         std::uint8_t address[6];
-        std::memcpy(address, reinterpret_cast<const void *>(0x027FFC46), sizeof(address));
+        // (Said by the host itself where its word got here; else the loader's.)
+        NetDlParam param;
+#ifdef HLDS_CHILD
+        if (guest::bootParam(param))
+            std::memcpy(address, param.host, sizeof(address));
+        else
+#endif
+            std::memcpy(address, reinterpret_cast<const void *>(0x027FFC46), sizeof(address));
         if (!netlink::joinDirect(address, phase_ == Phase::Joining))
             return false;
         if (phase_ != Phase::Joining)
@@ -556,6 +563,7 @@ namespace hlrt
         serveSkill_ = skill;
         serveStage_ = 0;
         serveCharacter_ = 1;
+        fullTried_ = false;
         serveCharacters_ = 0;
         starting_ = true;
         ready_ = 0;
@@ -590,7 +598,25 @@ namespace hlrt
 
     void NetGame::serveNext()
     {
-        const unsigned mask = guests_ & netlink::clients();
+        unsigned mask = guests_ & netlink::clients();
+        // Those in DSi mode first, the map at full quality, all of it in one
+        // stream (if this card has it); the rest of what follows is the others'.
+        if (serveStage_ == 0 && !fullTried_)
+        {
+            fullTried_ = true;
+            fullSent_ = 0;
+            unsigned dsi = 0;
+            for (int c = 1; c < kNetPlayers; ++c)
+                dsi |= tiers_[c] != 0 ? 1u << c : 0u;
+            dsi &= mask;
+            if (fullGuests_ && dsi != 0 && airBegin(AirStream::MapFull, pendingMap_, "air/" + pendingMap_ + ".dsi.hgs", dsi, serveSkill_))
+            {
+                fullSent_ = dsi;
+                return;
+            }
+        }
+        const unsigned everyone = mask;
+        mask &= ~fullSent_;
         const NetMapInfo *info = nullptr;
         for (const NetMapInfo &one : mapInfo_)
         {
@@ -621,18 +647,29 @@ namespace hlrt
         }
         // Who they chose to be, for those sent the game (a guest takes what it
         // has room for: HlCharacters.hpp).
+        mask = everyone;
         for (; mask != 0 && serveCharacter_ < kCharacterCount && serveCharacters_ < kCharacterSlots; ++serveCharacter_)
         {
             bool wanted = false;
             for (int p = 0; p < kNetPlayers; ++p)
                 wanted = wanted || (netHere(match_, p) && match_.profiles[p].known && match_.profiles[p].model == serveCharacter_);
             const std::string name = kCharacterFiles[serveCharacter_];
-            if (wanted && airBegin(AirStream::Character, name, "air/chr_" + name + ".hgs", mask))
+            // Those in DSi mode first, at its finest; then the others, once.
+            if (wanted && fullSent_ != 0 && !characterFullDone_ &&
+                airBegin(AirStream::CharacterFull, name, "air/chr_" + name + ".dsi.hgs", fullSent_))
+            {
+                characterFullDone_ = true;
+                return;
+            }
+            characterFullDone_ = false;
+            const unsigned others = mask & ~fullSent_;
+            if (wanted && others != 0 && airBegin(AirStream::Character, name, "air/chr_" + name + ".hgs", others))
             {
                 ++serveCharacter_;
                 ++serveCharacters_;
                 return;
             }
+            serveCharacters_ += wanted ? 1 : 0;
         }
         // Sent (or nobody to send it to): this console's own map now.
         serveStage_ = 3;
@@ -824,7 +861,7 @@ namespace hlrt
         if (on() && !isHost())
             netSay(match_, netEvent(NetEventType::Room, 0, static_cast<std::int16_t>(top & 0xFFFF),
                                     static_cast<std::int16_t>(top >> 16), static_cast<std::int16_t>(free & 0xFFFF),
-                                    static_cast<std::int16_t>(free >> 16)));
+                                    static_cast<std::int16_t>(free >> 16), global.twlChild ? 1 : 0));
     }
 
     void NetGame::loadedMap()
@@ -1007,6 +1044,7 @@ namespace hlrt
                     guests_ &= ~bit;
 #endif
                     rooms_[c] = 0;
+                    tiers_[c] = 0;
                     netHostLeave(match_.host, c);
                     match_.names[c][0] = 0;
                     NetEvent gone;
@@ -1202,6 +1240,7 @@ namespace hlrt
                                      static_cast<std::uint32_t>(static_cast<std::uint16_t>(event.v[1])) << 16;
                 frees_[event.from] = static_cast<std::uint16_t>(event.v[2]) |
                                      static_cast<std::uint32_t>(static_cast<std::uint16_t>(event.v[3])) << 16;
+                tiers_[event.from] = static_cast<std::uint8_t>(event.v[4]);
 #ifndef HLDS_CHILD
                 // (Only a console sent the game says this: one come back has
                 // asked for nothing, and is to be sent the maps all the same.)
@@ -1227,6 +1266,9 @@ namespace hlrt
             }
             if (event.type == NetEventType::Start && !isHost())
             {
+#ifdef HLDS_CHILD
+                guest::forgetTaken(); // (a new match: nothing of the last is held)
+#endif
                 starting_ = true;
                 goAsked_ = cancelled_ = false;
                 const std::uint32_t hash = static_cast<std::uint16_t>(event.v[0]) |

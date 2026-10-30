@@ -110,6 +110,7 @@ namespace hlrt
         /// consoles sent the game that are here reach (KB; 0: none has said),
         /// and one's -- with what of it was free in its lobby.
         std::uint32_t guestRoom() const;
+        bool dsiTier(int p) const { return p >= 0 && p < hldata::kNetPlayers && tiers_[p] != 0; }
         std::uint32_t roomOf(int p) const;
         std::uint32_t freeOf(int p) const;
         /// A console sent the game: how far up its memory its heap reaches,
@@ -156,6 +157,10 @@ namespace hlrt
         void toLobby();
         /// The host: player `p` let go, told why (and, a moment on, the
         /// radio's link cut); not let back in while this game lasts.
+        /// Whether consoles in DSi mode are sent maps at full quality (else as
+        /// the others are).
+        bool fullGuests() const { return fullGuests_; }
+        void setFullGuests(bool on) { fullGuests_ = on; }
         void kick(int p);
         /// The host, its map loaded and not begun: its lobby again.
         void toLobbyFromLoad();
@@ -203,6 +208,10 @@ namespace hlrt
         std::uint32_t backSoonAt_ = 0;
         std::uint32_t kickAt_[hldata::kNetPlayers] = {};
         int joinFrames_ = 0;
+        bool fullGuests_ = true;
+        bool fullTried_ = false;
+        bool characterFullDone_ = false; ///< (Serving) this character has gone to those in DSi mode
+        unsigned fullSent_ = 0; ///< (Serving) those sent the map at full quality
         int silentFrames_ = 0;
         std::uint32_t heardWas_ = 0;
         int serveCharacter_ = 1, serveCharacters_ = 0;
@@ -239,6 +248,7 @@ namespace hlrt
         unsigned ready_ = 0;
         std::uint32_t rooms_[hldata::kNetPlayers] = {}; ///< (the host's: KB, by client; 0 not said)
         std::uint32_t frees_[hldata::kNetPlayers] = {};
+        std::uint8_t tiers_[hldata::kNetPlayers] = {}; ///< (the host's: 1, in DSi mode)
         std::uint32_t loadedAt_ = 0;
         /// How long the host waits for those not ready once it is.
         static constexpr std::uint32_t kReadyVblanks = 20 * 60;

@@ -411,6 +411,9 @@ namespace hldata
     /// map was cooked.
     inline constexpr const char *kProfileModelFile = "ply/player.hmd";
     inline constexpr const char *kProfileSkinFile = "ply/player.htx";
+    /// ... and finer, for a DSi (one sent the game, in DSi mode, too).
+    inline constexpr const char *kProfileFineModelFile = "ply/full.hmd";
+    inline constexpr const char *kProfileFineSkinFile = "ply/full.htx";
 
     /// The animated title: `frames` pictures of `width` x `height` texels, a
     /// byte each, A3I5 -- how bright as both the alpha (top 3 bits) and the

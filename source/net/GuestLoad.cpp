@@ -55,6 +55,7 @@ namespace hlrt::guest
         /// sending it to others), and its sending.
         char takenMap[hldata::kAirNameBytes] = {};
         std::uint16_t takenCharacter = 0;
+        bool takenFull = false; ///< (a console in DSi mode) the match's map came at full quality
         std::uint16_t takenServe = 0;
         std::uint32_t takenLength = 0;
         std::uint8_t takenSkill = 2;
@@ -361,7 +362,8 @@ namespace hlrt::guest
             {
                 // (Begun when the host's first frame of it was heard:
                 // airFrame.)
-                if (receiver.stream != hldata::AirStream::Map || receiver.ring == nullptr ||
+                if ((receiver.stream != hldata::AirStream::Map && receiver.stream != hldata::AirStream::MapFull) ||
+                    receiver.ring == nullptr ||
                     map != receiver.name)
                     return false;
                 airSupply.progress = mapProgress;
@@ -409,7 +411,8 @@ namespace hlrt::guest
         // A map from the air: all of it here, which the host is told. (Not
         // one only begun to be heard: the map about to be read from it lets
         // go of whatever was mounted first.)
-        if (mapOnAir && receiver.stream == hldata::AirStream::Map && receiver.ring != nullptr)
+        if (mapOnAir && (receiver.stream == hldata::AirStream::Map || receiver.stream == hldata::AirStream::MapFull) &&
+            receiver.ring != nullptr)
         {
             // (The last piece read let go of: then it is all handed on --
             // and what the cursor did not ask for, there being no more of
@@ -424,6 +427,7 @@ namespace hlrt::guest
             {
                 std::strncpy(takenMap, receiver.name, sizeof(takenMap) - 1);
                 takenServe = receiver.serve;
+                takenFull = receiver.stream == hldata::AirStream::MapFull;
                 takenLength = receiver.length;
                 takenSkill = receiver.skill;
                 linger();
@@ -445,6 +449,20 @@ namespace hlrt::guest
         replySize = 0;
         if (!hldata::airRead(bytes, size, head))
             return false;
+        // At full quality: for a console in DSi mode alone. It has all it
+        // needs of the map then, and the others' base and map go by.
+        if (head.stream == hldata::AirStream::MapFull && !global.twlChild)
+            return false;
+        if (takenFull && (head.stream == hldata::AirStream::Base || head.stream == hldata::AirStream::Map))
+            return false;
+        if (receiver.stream == hldata::AirStream::MapFull && receiver.ring != nullptr &&
+            (head.stream == hldata::AirStream::Base || head.stream == hldata::AirStream::Map))
+            return false;
+        if (head.stream == hldata::AirStream::MapFull && std::strcmp(head.name, takenMap) == 0 && head.serve == takenServe)
+        {
+            replySize = hldata::airHave(head.stream, head.serve, head.length, reply);
+            return false;
+        }
         // What is held already: said so, and nothing taken.
         if (head.stream == hldata::AirStream::Base && std::strcmp(head.name, heldBase) == 0)
         {
@@ -458,8 +476,13 @@ namespace hlrt::guest
         }
         // Who another chose to be: taken only if there is room for it, twice
         // over for the moment it is read -- else said to be held, and they
-        // stay the suit here. (Taken already: the same.)
-        if (head.stream == hldata::AirStream::Character)
+        // stay the suit here. (Taken already: the same.) At its finest, for a
+        // console in DSi mode alone; the others', once that has it, go by.
+        if (head.stream == hldata::AirStream::CharacterFull && !global.twlChild)
+            return false;
+        if (head.stream == hldata::AirStream::Character && takenFull)
+            return false;
+        if (head.stream == hldata::AirStream::Character || head.stream == hldata::AirStream::CharacterFull)
         {
             if (head.serve == takenCharacter || global.heapHeadroom() < head.length * 2 + hldata::kGuestPlayBytes)
             {
@@ -468,7 +491,8 @@ namespace hlrt::guest
             }
         }
         // (The common stream, to a console that came later: this one has it.)
-        else if (head.stream != hldata::AirStream::Base && head.stream != hldata::AirStream::Map)
+        else if (head.stream != hldata::AirStream::Base && head.stream != hldata::AirStream::Map &&
+                 head.stream != hldata::AirStream::MapFull)
             return false;
         if (!ringOn(head.stream, head.name))
             return false;
@@ -489,7 +513,7 @@ namespace hlrt::guest
         bool ok = false;
         if (receiver.stream == hldata::AirStream::Common)
             ok = receiveCommon(airSupply);
-        else if (receiver.stream == hldata::AirStream::Character)
+        else if (receiver.stream == hldata::AirStream::Character || receiver.stream == hldata::AirStream::CharacterFull)
         {
             takenCharacter = receiver.serve;
             ok = receiveWhole(airSupply, [](const char *name, std::uint8_t *block, std::uint32_t size)
@@ -541,10 +565,33 @@ namespace hlrt::guest
 
     void onMapProgress(void (*progress)(int percent)) { mapProgress = progress; }
 
+    bool bootParam(hldata::NetDlParam &param)
+    {
+        static hldata::NetDlParam kept;
+        static int known = -1;
+        if (known < 0)
+        {
+            known = 0;
+            // (The same place of the memory the loader wrote in: where that is
+            // depends on how much of it was mapped then, and is now.)
+            for (const std::uintptr_t at : {std::uintptr_t(0x027FFBE0), std::uintptr_t(0x02FFFBE0), std::uintptr_t(0x023FFBE0)})
+            {
+                if (hldata::netDlRead(reinterpret_cast<const std::uint8_t *>(at), kept))
+                {
+                    known = 1;
+                    break;
+                }
+            }
+        }
+        param = kept;
+        return known == 1;
+    }
+
     void forgetTaken()
     {
         takenMap[0] = 0;
         takenCharacter = 0;
+        takenFull = false;
     }
 
     void hear()

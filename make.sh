@@ -42,6 +42,9 @@ python build.py "$@"
 # console that has no card. After the parent, whose ARM7 program it uses.
 (cd child && python build.py "$@")
 python tools/child_size.py
+# ... made into what can be sent: DSi mode where the console allows it, a plain
+# DS program where it does not (tools/dlp_twl_child.py).
+PATH="${WONDERFUL_TOOLCHAIN}/toolchain/gcc-arm-none-eabi/bin:${PATH}" python tools/dlp_twl_child.py child/out/hl-child.nds child/out/hl-child-twl.nds
 # ... and the parent again, now carrying the child to send (dlplay/child.nds).
 python build.py "$@"
 # The ELFs of every build, by its name, for looking up a crash screen's

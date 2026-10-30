@@ -13,6 +13,9 @@ namespace hldata
     inline constexpr const char *kCharacterNames[] = {"HEV suit", "Barney", "Gina", "G-Man",     "Helmet", "Soldier",
                                                       "Recon",    "Robo",   "Scientist", "Tmcm", "Zombie"};
     inline constexpr int kCharacterCount = sizeof(kCharacterFiles) / sizeof(kCharacterFiles[0]);
+    /// A player's skin at its finest, where the memory is there (a DSi): as
+    /// wide as the plain ones', twice as tall a share of what video memory has.
+    inline constexpr int kFinePlayerSkinTexels = 256 * 128;
     /// How many besides the suit a match has in memory at once.
     inline constexpr int kCharacterSlots = 4;
 } // namespace hldata

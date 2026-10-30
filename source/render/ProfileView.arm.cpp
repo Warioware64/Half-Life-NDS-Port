@@ -56,8 +56,19 @@ namespace hlrt
 #endif
         const bool other = character > 0 && character < kCharacterCount;
         const std::string own = std::string("chr/") + kCharacterFiles[other ? character : 0];
-        const std::string modelFile = other ? own + ".hmd" : std::string(kProfileModelFile);
-        const std::string skinFile = other ? own + ".htx" : std::string(kProfileSkinFile);
+        // (At its finest on a DSi, where it is there.)
+        std::string modelFile = other ? own + ".hmd" : std::string(kProfileModelFile);
+        std::string skinFile = other ? own + ".htx" : std::string(kProfileSkinFile);
+        if (global.isDSi)
+        {
+            const std::string fineModel = other ? own + ".dsi.hmd" : std::string(kProfileFineModelFile);
+            if (std::FILE *fine = std::fopen(global.commonPath(fineModel).c_str(), "rb"))
+            {
+                std::fclose(fine);
+                modelFile = fineModel;
+                skinFile = other ? own + ".dsi.htx" : std::string(kProfileFineSkinFile);
+            }
+        }
         std::FILE *file = std::fopen(global.commonPath(modelFile).c_str(), "rb");
         if (file == nullptr)
             return false;

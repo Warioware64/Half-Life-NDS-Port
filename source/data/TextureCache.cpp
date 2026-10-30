@@ -82,9 +82,10 @@ namespace hlrt
             // (The planner numbers a map's textures up to a limit; the rest
             // are loaded like any other.)
             // (Sent the game, there is nothing to stream from: what was sent
-            // is loaded, every one, as it comes.)
+            // is loaded, every one, as it comes -- but for a console in DSi
+            // mode, whose memory it can stream from, which keeps it as it comes.)
 #ifdef HLDS_CHILD
-            constexpr bool kMayStream = false;
+            const bool kMayStream = global.twlChild;
 #else
             constexpr bool kMayStream = true;
 #endif
@@ -99,6 +100,9 @@ namespace hlrt
 #endif
                          ))
             {
+#ifdef HLDS_CHILD
+                textureStream.keepFromStream(i);
+#endif
                 streamed_[i] = 1;
                 ++streamedCount_;
                 tints_[i] = ref.average;

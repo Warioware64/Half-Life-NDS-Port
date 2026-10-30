@@ -262,13 +262,30 @@ namespace hlrt
         earlyBytes = regionCount != 0 ? bytes : 0;
     }
 
+    void TextureStream::keepFromStream(int id)
+    {
+        TextureHeader header;
+        if (id < 0 || id >= kStreamMaxTextures || ram[id] != nullptr || !fileFor(id, header, stage, kStageBytes))
+            return;
+        const std::size_t body = header.texelBytes + header.indexBytes + header.paletteBytes;
+        auto *copy = static_cast<std::uint8_t *>(std::malloc(sizeof(header) + body));
+        if (copy == nullptr)
+            return;
+        std::memcpy(copy, &header, sizeof(header));
+        std::memcpy(copy + sizeof(header), stage, body);
+        ram[id] = copy;
+        ramBytes += sizeof(header) + body;
+        ++ramCount;
+    }
+
     void TextureStream::begin()
     {
         // (Slots set by before the map's textures: kept.)
         const std::uint32_t early = earlyBytes;
         earlyBytes = 0;
+        // (Nor what a stream's textures left in main memory: only the rest.)
         if (early == 0)
-            end();
+            end(true);
         const int count = std::min<int>(level.view.textureCount, kStreamMaxTextures);
         streamedTotal = 0;
         for (int i = 0; i < count; ++i)
@@ -366,7 +383,6 @@ namespace hlrt
         {
             groupFirst[i] = static_cast<std::int16_t>(i);
             groupCount[i] = 1;
-            ram[i] = nullptr;
         }
         auto markCycle = [&](int first, int pictures)
         {
@@ -393,14 +409,12 @@ namespace hlrt
         // wanted at the moment are let go and come back from here, not from the
         // card.
         {
-            ramCount = 0;
-            ramBytes = 0;
             const std::size_t room = std::min<std::size_t>(global.heapHeadroom() / 3, kCacheMost);
             for (int i = 0; i < count; ++i)
             {
                 const TextureRef &ref = level.view.textures[i];
                 const bool tiled = ref.name[0] == '-' && ref.name[1] >= '0' && ref.name[1] <= '9';
-                if (!infos[i].streamed || (groupCount[i] <= 1 && !tiled))
+                if (ram[i] != nullptr || !infos[i].streamed || (groupCount[i] <= 1 && !tiled))
                     continue;
                 TextureHeader header;
                 if (!fileFor(i, header, stage, kStageBytes))
@@ -537,7 +551,7 @@ namespace hlrt
         retiredCount = kept;
     }
 
-    void TextureStream::end()
+    void TextureStream::end(bool keepRam)
     {
         // Nothing more is written to the region, and it goes back to NEA
         // (what was bound in it goes with TextureCache and ModelCache).
@@ -551,13 +565,16 @@ namespace hlrt
         skinSlots = 0;
         skinBytes = 0;
         freeRetired(true);
-        for (int i = 0; i < kStreamMaxTextures; ++i)
+        for (int i = 0; i < kStreamMaxTextures && !keepRam; ++i)
         {
             std::free(ram[i]);
             ram[i] = nullptr;
         }
-        ramCount = 0;
-        ramBytes = 0;
+        if (!keepRam)
+        {
+            ramCount = 0;
+            ramBytes = 0;
+        }
         g_textureSeenAt = nullptr;
         active_ = false;
         stagedCount = 0;

@@ -40,6 +40,10 @@ public:
     /// False on a DS, a DS Lite, and on a DSi/3DS running the ROM in DS mode
     /// (most flashcards).
     bool isDSi = false;
+    /// Sent the game, and running in DSi mode with its 16 MB: set up by the
+    /// start of the program itself (tools/dlp_twl_child.py) -- not told apart
+    /// by isDSi alone, which a stale header can fool.
+    bool twlChild = false;
     /// The ARM9 is running at 134 MHz. Only ever true when isDSi is.
     bool fastClock = false;
 

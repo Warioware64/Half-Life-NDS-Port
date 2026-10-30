@@ -72,7 +72,11 @@ namespace hlrt
         /// has every texture of the map in video memory, none streamed, and
         /// would have nothing left for them). begin() takes them up.
         void reserveSkinSlots(std::uint32_t bytes);
-        void end();
+        /// A console in DSi mode, as a map's stream passes texture `id`: kept in
+        /// main memory, where begin() and the plan find it (there is no card
+        /// to read it off later).
+        void keepFromStream(int id);
+        void end(bool keepRam = false);
         bool active() const { return active_; }
 
         /// Once a frame, after the vertical blank: what was read two frames

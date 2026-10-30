@@ -191,7 +191,7 @@ namespace hlrt
                 // cannot be here: the map's stream is over by then. Those the
                 // base has are borrowed now -- they cost nothing -- and the
                 // rest go without.)
-                if (lazy_ != nullptr && lazy_[i])
+                if (lazy_ != nullptr && lazy_[i] && !global.twlChild)
                 {
                     if (borrowClip(view.sounds[i].name, clips_[i]))
                     {
@@ -200,8 +200,13 @@ namespace hlrt
                     }
                     continue;
                 }
-                if (borrowClip(view.sounds[i].name, clips_[i]) || readClip(view.sounds[i].name, clips_[i]))
+                // (At full quality, in DSi mode: the better copy, if it is next.)
+                char twin[sizeof(SoundRef)];
+                if ((global.twlChild && soundTwinName(view.sounds[i], twin, sizeof(twin)) && readClip(twin, clips_[i])) ||
+                    borrowClip(view.sounds[i].name, clips_[i]) || readClip(view.sounds[i].name, clips_[i]))
                 {
+                    if (lazy_ != nullptr)
+                        lazy_[i] = 0;
                     ++loaded_;
                     bytes_ += static_cast<int>(clips_[i].bytes);
                     if (!clips_[i].shared)
@@ -330,8 +335,8 @@ namespace hlrt
         // speakers, as a program's own sound is -- not captured and played
         // again by the ARM7. Started by Download Play on a 3DS, what went
         // through the capture was never heard; and a console sent the game
-        // has no music for it to mix.)
-        arm7Audio.setMode(false, effects, settings.outputMode, quality);
+        // has no music for it to mix. In DSi mode, as on a card.)
+        arm7Audio.setMode(global.twlChild && held_ == 0, effects, settings.outputMode, quality);
 #else
         arm7Audio.setMode(held_ == 0, effects, settings.outputMode, quality);
 #endif

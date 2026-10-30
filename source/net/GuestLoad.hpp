@@ -94,6 +94,10 @@ namespace hlrt::guest
     /// Between the steps of a map's load: the map's stream heard and
     /// answered, or the host, hearing nothing, leaves this console out.
     void hear();
+    /// What the program's sender left it (HlNetAir.hpp), wherever this memory
+    /// map has it: read once, at the very start, before the heap can reach
+    /// it. False: not sent by Download Play.
+    bool bootParam(hldata::NetDlParam &param);
     /// Out of a game: no map is said to be held (the next host's numbers
     /// begin again, and would look like this one's).
     void forgetTaken();

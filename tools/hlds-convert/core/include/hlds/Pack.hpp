@@ -79,6 +79,15 @@ namespace hlds
     bool packCommon(const std::filesystem::path &stage, const std::filesystem::path &card,
                     bool compress, PackReport &report, std::string &error);
 
+    /// <card>/air/<map>.dsi.hgs: the whole of a map at the quality this card
+    /// has it, for a console sent the game that runs in DSi mode with its
+    /// 16 MB: the host's level as it is, the finer models, the better sounds,
+    /// the weapons it has not, in the order that console's loaders ask for
+    /// them. `bytes`: how big, `memory`: what it comes to in that memory
+    /// (all but its textures' video-memory part).
+    bool packAirFull(const std::filesystem::path &stage, const std::filesystem::path &card, const std::string &map,
+                     std::size_t &bytes, std::size_t &memory, std::string &error);
+
     /// A level as a console sent the map has it: each texture made as much
     /// smaller as its TextureRef::guestHalvings say (the converter cooked it
     /// that size too), the coordinates its surfaces give it with it, and

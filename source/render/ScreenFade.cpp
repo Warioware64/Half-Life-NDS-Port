@@ -2,6 +2,8 @@
 
 #include "render/ScreenFade.hpp"
 
+#include "Global.hpp"
+
 #include "render/FrameFreeze.hpp"
 
 namespace hlrt
@@ -22,9 +24,10 @@ namespace hlrt
     void ScreenFade::showLayer(int eva)
     {
 #ifdef HLDS_CHILD
-        // (Sent the game, bank D is the ARM7's: a coloured fade is not shown.)
-        (void)eva;
-        return;
+        // (Sent the game, on a DS, a coloured fade is not shown. In DSi mode, as
+        // on a card.)
+        if (!global.twlChild)
+            return;
 #endif
         if (!layer_)
         {

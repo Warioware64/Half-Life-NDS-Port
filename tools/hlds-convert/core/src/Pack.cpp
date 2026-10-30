@@ -333,11 +333,19 @@ namespace hlds
             for (std::uint32_t i = 0; i < view.modelRefCount && !air; ++i)
             {
                 const char *name = view.modelRefs[i].name;
-                if (hldata::modelRefLazy(view.modelRefs[i]) || (coloured && std::strcmp(name, kPlayerModel) == 0))
+                if (hldata::modelRefLazy(view.modelRefs[i]))
                     continue;
-                if (packing.add(stage / "mdl" / map / (std::string(name) + ".dsi.hmd"),
+                // (The others in the game too, at their finest, in their colours.)
+                const bool player = coloured && std::strcmp(name, kPlayerModel) == 0;
+                const std::size_t skinsBefore = skins.size();
+                if (packing.add(player ? stage / "gst" / (std::string(name) + ".dsi.hmd")
+                                       : stage / "mdl" / map / (std::string(name) + ".dsi.hmd"),
                                 std::string("mdl/") + name + ".dsi.hmd", true, false))
+                {
                     skinOf(packing.members.back(), name);
+                    if (player && skins.size() != skinsBefore)
+                        colouredSkins.insert(skins.back());
+                }
             }
             // (The skins go between the two: named now that both kinds have
             // said which they want.)
@@ -716,6 +724,148 @@ namespace hlds
         return finish(packing, card / "maps" / (map + ".npac"), compress, error);
     }
 
+    bool packAirFull(const fs::path &stage, const fs::path &card, const std::string &map, std::size_t &bytes,
+                     std::size_t &memory, std::string &error)
+    {
+        PackReport report;
+        Packing packing;
+        packing.report = &report;
+        if (!collectMap(stage, map, false, packing, error))
+            return false;
+        std::vector<std::uint8_t> level;
+        hldata::LevelView view;
+        if (!readFile(stage / "maps" / (map + ".hlm"), level, error) ||
+            view.open(level.data(), static_cast<std::uint32_t>(level.size())) != hldata::LevelError::Ok)
+        {
+            error = "the staged level does not open: " + map;
+            return false;
+        }
+        // The finer model where there is one, in the plain one's place: the
+        // console asks for that first, and for the plain only if it is not next.
+        std::vector<NpacMember> members;
+        std::map<std::string, std::size_t> plainAt;
+        for (NpacMember &member : packing.members)
+        {
+            if (member.path.rfind("snd/", 0) == 0)
+                continue;
+            const std::size_t finer = member.path.find(".dsi.hmd");
+            if (finer != std::string::npos)
+            {
+                const auto at = plainAt.find(member.path.substr(0, finer) + ".hmd");
+                if (at != plainAt.end())
+                    members[at->second] = std::move(member);
+                continue;
+            }
+            if (member.path.rfind("mdl/", 0) == 0)
+                plainAt[member.path] = members.size();
+            members.push_back(std::move(member));
+        }
+        // The skins, those the models here name and in their order: the finer
+        // model may have another of its own, which is not found if another
+        // of the same kind comes first.
+        {
+            std::map<std::string, NpacMember> skins;
+            std::vector<NpacMember> rest;
+            for (NpacMember &member : members)
+            {
+                if (member.path.rfind("mdl/", 0) == 0 && member.path.compare(member.path.size() - 4, 4, ".htx") == 0)
+                    skins[member.path] = std::move(member);
+                else
+                    rest.push_back(std::move(member));
+            }
+            members.clear();
+            std::vector<std::string> wanted;
+            std::size_t after = 0;
+            for (std::size_t m = 0; m < rest.size(); ++m)
+            {
+                const NpacMember &member = rest[m];
+                if (member.path.rfind("mdl/", 0) != 0)
+                    continue;
+                after = m + 1;
+                std::string name = member.path.substr(4, member.path.find('.') - 4);
+                hldata::ModelHeader header;
+                std::memcpy(&header, member.data.data(), sizeof(header));
+                if (header.atlasWidth != 0)
+                    wanted.push_back("mdl/" + hldata::modelSkinFile(name.c_str(), header.atlasWidth, header.atlasHeight));
+            }
+            for (std::size_t m = 0; m < rest.size(); ++m)
+            {
+                if (m == after)
+                {
+                    for (const std::string &path : wanted)
+                    {
+                        const auto skin = skins.find(path);
+                        if (skin != skins.end())
+                        {
+                            members.push_back(std::move(skin->second));
+                            skins.erase(skin);
+                        }
+                    }
+                }
+                members.push_back(std::move(rest[m]));
+            }
+        }
+        // Every sound, in the order the console reads them: those kept, then
+        // the rest, the better copy where there is one -- those of the
+        // weapons it has not too, there being room (it cannot read them when
+        // first played, as a card can); and what the people say, on a map
+        // where they speak.
+        bool match = false;
+        for (std::uint32_t e = 0; e < view.entityCount; ++e)
+            match = match || view.entities[e].classId == static_cast<std::uint16_t>(hldata::EntityClass::InfoPlayerDeathmatch);
+        std::vector<char> kept(view.soundCount + 1, 0);
+        hldata::soundsKept(view.logic, view.logicCount, view.logicSounds, view.logicSoundCount, view.soundCount,
+                           reinterpret_cast<bool *>(kept.data()), view.modelSounds, view.modelSoundCount, view.sounds);
+        std::vector<char> talk;
+        talkWords(view, talk);
+        Packing sounds;
+        sounds.report = &report;
+        for (int pass = 0; pass < 2; ++pass)
+        {
+            for (std::uint32_t i = 0; i < view.soundCount; ++i)
+            {
+                const hldata::SoundRef &ref = view.sounds[i];
+                if (ref.name[0] == '\0' || (kept[i] != 0) != (pass == 0) || (match && talk[i] != 0))
+                    continue;
+                char twin[sizeof(hldata::SoundRef)];
+                if (hldata::soundTwinName(ref, twin, sizeof(twin)) &&
+                    sounds.add(stage / "snd" / (std::string(twin) + ".hsn"), std::string("snd/") + twin + ".hsn", false, false))
+                    continue;
+                sounds.add(stage / "snd" / (std::string(ref.name) + ".hsn"), std::string("snd/") + ref.name + ".hsn", false, false);
+            }
+        }
+        for (NpacMember &member : sounds.members)
+            members.push_back(std::move(member));
+        // ... and the weapons it has not, kept packed, last.
+        Packing weapons;
+        weapons.report = &report;
+        for (std::uint32_t i = 0; i < view.modelRefCount; ++i)
+        {
+            const char *name = view.modelRefs[i].name;
+            if (!hldata::modelRefLazy(view.modelRefs[i]) ||
+                (!weapons.add(stage / "wpn" / (std::string(name) + ".dsi.hmd"), std::string("wpn/") + name + ".dsi.hmd", true, false) &&
+                 !weapons.add(stage / "wpn" / (std::string(name) + ".hmd"), std::string("wpn/") + name + ".hmd", true, false)))
+                continue;
+            hldata::ModelHeader header;
+            std::memcpy(&header, weapons.members.back().data.data(), sizeof(header));
+            if (header.atlasWidth != 0)
+            {
+                const std::string skin = hldata::modelSkinFile(name, header.atlasWidth, header.atlasHeight);
+                weapons.add(stage / "mdl" / skin, "wpn/" + skin, true, false);
+            }
+        }
+        for (NpacMember &member : weapons.members)
+            members.push_back(std::move(member));
+        std::size_t raw[static_cast<int>(hldata::GuestKind::Count) + 2] = {};
+        fs::create_directories(card / "air");
+        if (!writeGuest(members, card / "air" / (map + ".dsi.hgs"), raw, bytes, error))
+            return false;
+        memory = 0;
+        for (const std::size_t each : raw)
+            memory += each;
+        return true;
+    }
+
     bool packAir(const fs::path &stage, const fs::path &card, const std::string &group,
                  const std::vector<std::string> &maps, bool multiplayer, AirReport &report, std::string &error)
     {
@@ -964,12 +1114,23 @@ namespace hlds
                                 hldata::kProfileSkinFile, true);
             }
         }
+        // (The suit at its finest, for a DSi's lobby and PROFILE.)
+        if (packing.add(stage / "gst" / (std::string(kPlayerModel) + ".dsi.hmd"), hldata::kProfileFineModelFile, true, false))
+        {
+            hldata::ModelHeader header;
+            std::memcpy(&header, packing.members.back().data.data(), sizeof(header));
+            if (header.atlasWidth != 0)
+                packing.add(stage / "gst" / hldata::modelSkinFile(kPlayerModel, header.atlasWidth, header.atlasHeight),
+                            hldata::kProfileFineSkinFile, true, false);
+        }
         // Who else a player may be seen as, on a console with the game.
         for (int c = 1; c < hldata::kCharacterCount; ++c)
         {
             const std::string name = hldata::kCharacterFiles[c];
             packing.add(stage / "chr" / (name + ".hmd"), "chr/" + name + ".hmd", true, false);
             packing.add(stage / "chr" / (name + ".htx"), "chr/" + name + ".htx", true, false);
+            packing.add(stage / "chr" / (name + ".dsi.hmd"), "chr/" + name + ".dsi.hmd", true, false);
+            packing.add(stage / "chr" / (name + ".dsi.htx"), "chr/" + name + ".dsi.htx", true, false);
         }
         if (packing.members.empty())
         {
@@ -1009,6 +1170,15 @@ namespace hlds
         // The suit, for its lobby (AirDevice's keptCommon).
         packing.add(stage / "gst" / "lobby.hmd", hldata::kProfileModelFile, false, false);
         packing.add(stage / "gst" / "lobby.htx", hldata::kProfileSkinFile, false, false);
+        // (The suit at its finest, for a DSi's lobby and PROFILE.)
+        if (packing.add(stage / "gst" / (std::string(kPlayerModel) + ".dsi.hmd"), hldata::kProfileFineModelFile, false, false))
+        {
+            hldata::ModelHeader header;
+            std::memcpy(&header, packing.members.back().data.data(), sizeof(header));
+            if (header.atlasWidth != 0)
+                packing.add(stage / "gst" / hldata::modelSkinFile(kPlayerModel, header.atlasWidth, header.atlasHeight),
+                            hldata::kProfileFineSkinFile, false, false);
+        }
         fs::create_directories(card / "air");
         // Who a player may be seen as, each a stream of its own: sent to those
         // without the game when someone in the match has chosen them.
@@ -1019,9 +1189,21 @@ namespace hlds
             person.report = packing.report;
             person.add(stage / "chr" / ("g_" + name + ".hmd"), "chr/" + name + ".hmd", true, false);
             person.add(stage / "chr" / ("g_" + name + ".htx"), "chr/" + name + ".htx", true, false);
+            // (... and at its finest, for a console in DSi mode.)
+            {
+                Packing fine;
+                fine.report = packing.report;
+                fine.add(stage / "chr" / (name + ".dsi.hmd"), "chr/" + name + ".hmd", true, false);
+                fine.add(stage / "chr" / (name + ".dsi.htx"), "chr/" + name + ".htx", true, false);
+                std::size_t none[static_cast<int>(hldata::GuestKind::Count) + 2] = {};
+                std::size_t fineBytes = 0;
+                if (!fine.members.empty() &&
+                    !writeGuest(fine.members, card / "air" / ("chr_" + name + ".dsi.hgs"), none, fineBytes, error))
+                    return false;
+            }
             if (person.members.empty())
                 continue;
-            std::size_t ignored[static_cast<int>(hldata::GuestKind::Count)] = {};
+            std::size_t ignored[static_cast<int>(hldata::GuestKind::Count) + 2] = {};
             std::size_t bytes = 0;
             if (!writeGuest(person.members, card / "air" / ("chr_" + name + ".hgs"), ignored, bytes, error))
                 return false;

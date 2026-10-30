@@ -139,6 +139,16 @@ namespace hlds
             }
             // What each takes of a guest's memory: its level, models and
             // sounds, and the base's (textures are in video memory).
+            for (const std::string &map : groups[g])
+            {
+                std::size_t bytes = 0, memory = 0;
+                std::string failed;
+                if (packAirFull(stageDir(), dataDir(options_.cardRoot), map, bytes, memory, failed))
+                    common_.guest.push_back("  " + map + " at full quality: " + std::to_string(bytes / 1024) + " KB sent, " +
+                                            std::to_string(memory / 1024) + " KB in memory");
+                else
+                    common_.warnings.push_back("the full-quality stream of " + map + " was not made: " + failed);
+            }
             const auto of = [](const std::size_t *raw, hldata::GuestKind kind) { return raw[static_cast<int>(kind)]; };
             const std::size_t base = of(report.baseRaw, hldata::GuestKind::Model) + of(report.baseRaw, hldata::GuestKind::Sound);
             if (!report.maps.empty())
@@ -329,6 +339,7 @@ namespace hlds
             CookedModel::IndexedSkin indexed; ///< the 256-colour skin, where a player's colours go over it
             int triangles = 0, fullTriangles = 0; ///< body 0 at its finest, in each
             int far = 0;                          ///< ... and at its coarsest
+            bool finer = false; ///< its finest and largest, for a DSi: staged beside the plain one (.dsi.hmd)
             bool lazy = false; ///< a weapon the map has not: in the common archive (kModelRefLazy)
         };
         std::vector<ModelOut> models;
@@ -837,6 +848,12 @@ namespace hlds
         for (const ModelNeed &need : needs)
         {
             ModelOut out;
+            ModelOut fine;
+            if (multiplayer && need.name == kPlayerModelName && cookOne(need, hldata::kFinePlayerSkinTexels, fine, true))
+            {
+                fine.finer = true;
+                guestModels.push_back(std::move(fine));
+            }
             if (multiplayer && need.name == kPlayerModelName && cookOne(need, 128 * 128, out, true))
                 guestModels.push_back(std::move(out));
         }
@@ -1339,7 +1356,9 @@ namespace hlds
         }
         for (const auto &model : guestModels)
         {
-            if (!writeFileAtomic(stageDir() / "gst" / (model.name + ".hmd"), model.bytes, result.error))
+            if (model.finer ? !writeFileAtomic(stageDir() / "gst" / (model.name + ".dsi.hmd"),
+                                               model.bytesDsi.empty() ? model.bytes : model.bytesDsi, result.error)
+                            : !writeFileAtomic(stageDir() / "gst" / (model.name + ".hmd"), model.bytes, result.error))
                 return result;
             if (model.indexed.width == 0)
                 continue;
@@ -1647,7 +1666,7 @@ namespace hlds
             // smaller skin); and the suit for a console sent the game to show
             // in its lobby, in a pose of its own.
             auto cookPerson = [&](const std::string &file, const std::vector<std::string> &own, int skinTexels,
-                                  const fs::path &modelOut, const fs::path &skinOut)
+                                  const fs::path &modelOut, const fs::path &skinOut, bool finest = false)
             {
                 const fs::path found = findNoCase(options_.gameDir, file);
                 MdlFile mdl;
@@ -1656,7 +1675,7 @@ namespace hlds
                 std::vector<std::uint8_t> bytes;
                 std::string failed;
                 if (found.empty() || !mdl.load(found, failed) ||
-                    !cookModel(mdl, own, cooked, modelReport, failed, skinTexels, false, kGuestLean) ||
+                    !cookModel(mdl, own, cooked, modelReport, failed, skinTexels, finest, finest ? ModelLean() : kGuestLean) ||
                     !writeModel(cooked, bytes, failed) || cooked.indexed.width == 0)
                     return;
                 CookedTexture skin;
@@ -1682,6 +1701,8 @@ namespace hlds
                 const std::string file = "models/player/" + name + "/" + name + ".mdl";
                 cookPerson(file, clips, 128 * 128, stageDir() / "chr" / (name + ".hmd"), stageDir() / "chr" / (name + ".htx"));
                 cookPerson(file, clips, 64 * 64, stageDir() / "chr" / ("g_" + name + ".hmd"), stageDir() / "chr" / ("g_" + name + ".htx"));
+                cookPerson(file, clips, hldata::kFinePlayerSkinTexels, stageDir() / "chr" / (name + ".dsi.hmd"),
+                           stageDir() / "chr" / (name + ".dsi.htx"), true);
             }
             cookPerson("models/player/gordon/gordon.mdl", {"look_idle"}, 64 * 64, stageDir() / "gst" / "lobby.hmd",
                        stageDir() / "gst" / "lobby.htx");

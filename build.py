@@ -122,7 +122,7 @@ nitrofs.add_arm9_dsl(hl)
 # The program the host sends consoles without the game by Download Play
 # (child/build.py: built after this one, whose ARM7 program it uses -- so it
 # is here from make.sh's second pass of this file on).
-CHILD_ROM = os.path.join('child', 'out', 'hl-child.nds')
+CHILD_ROM = os.path.join('child', 'out', 'hl-child-twl.nds')
 if os.path.isfile(CHILD_ROM):
     nitrofs.add_file(CHILD_ROM, 'dlplay/child.nds')
 nitrofs.generate_image()
