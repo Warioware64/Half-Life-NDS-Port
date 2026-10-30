@@ -13,15 +13,17 @@
 //  - a map's own stream: given to the "air:" drive (beginMap), whose files
 //    the map's loaders read as they come, each straight into its own block.
 //
-// Where the bytes come from is a GuestSupply: the air (later), or, for a test
-// with no host, what the build was given (MemorySupply, in pieces the size
-// of what the air brings).
+// Where the bytes come from is a GuestSupply: the air -- the host's frames,
+// HlNetAir.hpp, taken as they come while the stream is read -- or, for a
+// test with no host, what the build was given (MemorySupply, in pieces the
+// size of what the air brings).
 
 #include <cstdint>
 #include <cstdio>
 #include <string>
 
 #include "HlGuest.hpp"
+#include "HlNetAir.hpp"
 
 namespace hlrt::guest
 {
@@ -66,6 +68,33 @@ namespace hlrt::guest
     /// The map is loaded: what is left of its stream passed over, and the
     /// drive's stream let go.
     void endMap();
+
+    // ---------------------------------------------------------------- the air
+
+    /// Ask the host for `stream` (the common one, on coming), and take it
+    /// whole when it comes: receiveAir.
+    void airWant(hldata::AirStream stream);
+    /// A frame of the host's heard in the lobby that is a piece of a stream:
+    /// what it means here. `reply` (kNetReplyBytes): an answer to give in
+    /// place of the game's, `replySize` 0 if none. True if it begins a
+    /// stream this console is to take now: `head` says which (receiveAir; a
+    /// map, offerAir and load it).
+    bool airFrame(const std::uint8_t *bytes, int size, std::uint8_t *reply, int &replySize, hldata::AirHead &head);
+    /// The stream begun or asked for, taken whole (the common one, or a
+    /// group's base, which replaces the one held). `progress`, if any, is
+    /// called now and then with how far it has got (0..100). False if it
+    /// could not be (the host gone quiet).
+    bool receiveAir(void (*progress)(int percent));
+    /// The map being sent, to be loaded from the air: beginMap reads it as
+    /// it comes.
+    void offerAir(const std::string &map);
+    /// The group whose base is held ("": none).
+    const char *baseGroup();
+    /// How the stream being taken stands, in a line (for when it was not).
+    void airStatus(char *line, int room);
+    /// The map last taken whole from the air, and how hard its match is.
+    const char *airMap();
+    int airSkill();
 
     /// What the guest holds of what it was sent, by kind (the readout's,
     /// and the converter's estimate's check): the base's bytes, and what the

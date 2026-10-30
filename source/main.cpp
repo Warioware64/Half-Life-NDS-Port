@@ -59,6 +59,92 @@ namespace
 
     std::string currentMap;
 
+#ifdef HLDS_CHILD
+    /// Sent the game: what is said while there is nothing else to show.
+    void guestSay(const char *l1, const char *l2)
+    {
+        hlrt::bottomScreen.showFatal(l1, l2, nullptr);
+    }
+    void guestProgress(int percent)
+    {
+        char line[24];
+        std::snprintf(line, sizeof(line), "%d%%", percent);
+        guestSay("Receiving the game from the host...", line);
+    }
+    /// Waited for, a frame at a time with the radio heard, until the match
+    /// says this console is in the host's lobby (or `frames` pass).
+    bool guestJoined(int frames)
+    {
+        for (int n = 0; n < frames; ++n)
+        {
+            swiWaitForVBlank();
+            hlrt::netGame.frame();
+            if (hlrt::netGame.phase() == hlrt::NetGame::Phase::Lobby)
+                return true;
+            if (!hlrt::netGame.on())
+                return false;
+        }
+        return false;
+    }
+
+    /// Sent the game: the host found -- the console that sent it, as the
+    /// program's parameter says (HlNetAir.hpp); else, started some other
+    /// way (an emulator's), any game near that lets consoles without the
+    /// game in -- and, the first time, the game itself taken from it: its
+    /// letters and pictures. Until then there is nothing else to do.
+    void guestArrive(bool withGame)
+    {
+        hldata::NetDlParam param;
+        const bool sent = hldata::netDlRead(reinterpret_cast<const std::uint8_t *>(0x027FFBE0), param);
+        while (true)
+        {
+            guestSay("Waiting for the host...", sent ? "Joining the console that sent the game."
+                                                     : "Looking for a game to join.");
+            bool in = false;
+            if (sent)
+            {
+                // (Asked again every two seconds, for a while: the host
+                // opens its game a moment after it has sent this one.)
+                for (int tries = 0; tries < 8 && !in; ++tries)
+                    in = hlrt::netGame.joinStarter() && guestJoined(120);
+            }
+            else if (hlrt::netGame.scan())
+            {
+                for (int n = 0; n < 120; ++n)
+                    swiWaitForVBlank();
+                hlrt::NetGame::Found rooms[8];
+                const int count = hlrt::netGame.found(rooms, 8);
+                int best = -1;
+                for (int i = 0; i < count; ++i)
+                {
+                    const hlrt::NetGame::Found &room = rooms[i];
+                    if (room.room.version == hldata::kNetVersion && room.room.guests && room.players < room.most &&
+                        (best < 0 || room.bars > rooms[best].bars))
+                        best = i;
+                }
+                in = best >= 0 && hlrt::netGame.join(rooms[best].index) && guestJoined(600);
+            }
+            if (in && !withGame)
+                return;
+            if (in)
+            {
+                hlrt::guest::airWant(hldata::AirStream::Common);
+                guestProgress(0);
+                if (hlrt::guest::receiveAir(guestProgress))
+                {
+                    global.hasData = true;
+                    return;
+                }
+            }
+            hlrt::netGame.leave();
+            const char *why = hlrt::netGame.ended();
+            guestSay(in ? "The host has gone quiet." : "No host found.", why[0] != 0 ? why : "Trying again...");
+            for (int n = 0; n < 120; ++n)
+                swiWaitForVBlank();
+        }
+    }
+#endif
+
     /// How many frames are handed to the hardware before the curtain goes
     /// up on a map: the first has then been on the screen for one, and the
     /// map has had a few frames to put itself in order. (Seen: the first
@@ -938,6 +1024,11 @@ int main(int argc, char *argv[])
     const bool debugging = debugStart();
 
     global.InitVideo();
+#ifdef HLDS_CHILD
+    // Sent the game: nothing of it but the program, until its host is found
+    // and has sent the rest.
+    guestArrive(true);
+#endif
 
     if (status != Global::DataStatus::Ok)
     {
@@ -1012,6 +1103,85 @@ int main(int argc, char *argv[])
             hlrt::input.poll(false);
             hlrt::sound.frame();
             hlrt::netGame.frame();
+#ifdef HLDS_CHILD
+            // Sent the game: out of the host's game (left, or the host
+            // gone), a host again -- there is nothing else here.
+            if (!hlrt::netGame.on())
+            {
+                leaving();
+                guestArrive(false);
+                back();
+                hlrt::menu.openLobby();
+                continue;
+            }
+            // A match about to begin: its group's base, and its map as it
+            // comes -- then held, under the curtain, until the host starts it.
+            hldata::AirHead air;
+            if (hlrt::netGame.airAsked(air))
+            {
+                leaving();
+                if (air.stream == hldata::AirStream::Base)
+                {
+                    hlrt::bottomScreen.showMessage("RECEIVING", air.name);
+                    if (!hlrt::guest::receiveAir(nullptr))
+                    {
+                        char why[48];
+                        hlrt::guest::airStatus(why, sizeof(why));
+                        hlrt::bottomScreen.showMessage("NOT RECEIVED", why);
+                        for (int n = 0; n < 180; ++n)
+                            swiWaitForVBlank();
+                    }
+                }
+                else if (air.stream == hldata::AirStream::Map)
+                {
+                    hlrt::game.resetProgress();
+                    hlrt::game.globals.set(hldata::kGlobalSkill, air.skill);
+                    hlrt::SaveGame::newRun(Global::vblanks() * 2654435761u + 1u);
+                    leavingAbandoned = true;
+                    hlrt::guest::offerAir(air.name);
+                    if (loadLevel(air.name, nullptr, error) == LoadResult::Ok)
+                    {
+                        hlrt::screenFade.curtainDown();
+                        hlrt::bottomScreen.showMessage("WAITING", "for the others to load the map");
+                        std::string map;
+                        int skill = hldata::kSkillMedium;
+                        // (A minute at most: a host that has gone quiet, or
+                        // left this console out, is not waited for.)
+                        for (int n = 0; n < 3600 && hlrt::netGame.on() && !hlrt::netGame.startAsked(map, skill); ++n)
+                        {
+                            swiWaitForVBlank();
+                            hlrt::sound.frame();
+                            hlrt::netGame.frame();
+                        }
+                        if (map.empty())
+                            hlrt::netGame.leave();
+                        if (hlrt::netGame.on())
+                        {
+                            hlrt::netGame.mapLoaded();
+                            hlrt::bottomScreen.showPad();
+                            hlrt::screenFade.curtainUp(curtainFrames());
+                            break;
+                        }
+                    }
+                    else
+                    {
+                        // (Said, for a while: then the lobby, for the next.)
+                        hlrt::bottomScreen.showMessage("CANNOT LOAD", error.c_str());
+                        for (int n = 0; n < 180; ++n)
+                            swiWaitForVBlank();
+                    }
+                    // (Not loaded, or the host gone meanwhile.)
+                    if (hlrt::level.loaded())
+                    {
+                        dropMap();
+                        hlrt::level.unload();
+                    }
+                }
+                back();
+                hlrt::menu.openLobby();
+                continue;
+            }
+#endif
             using hlrt::Menu;
             const Menu::Action item = hlrt::menu.frame();
             if (item == Menu::Action::Continue || item == Menu::Action::Load)

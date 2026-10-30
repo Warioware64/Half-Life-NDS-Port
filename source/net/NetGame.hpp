@@ -11,9 +11,11 @@
 // tick() after its own tick instead: that is where what the player did goes
 // out and what the others did comes in.
 
+#include <cstdio>
 #include <string>
 #include <vector>
 
+#include "HlNetAir.hpp"
 #include "HlNetGame.hpp"
 #include "HlNetMaps.hpp"
 
@@ -26,6 +28,7 @@ namespace hlrt
         {
             Off,
             Hosting,  ///< a host, in its lobby
+            Serving,  ///< ... sending the match's map to the consoles it gave the game to, before it begins
             Scanning, ///< looking for hosts
             Joining,  ///< asking one to be let in
             Lobby,    ///< a client, in the host's lobby
@@ -91,8 +94,21 @@ namespace hlrt
         const char *lobbyMap() const;
 
         /// The host: begin the match on `map`. (It then loads the map
-        /// itself, as the clients do when they hear.)
+        /// itself, as the clients do when they hear.) With consoles it gave
+        /// the game to among them, it first sends them the map (Serving).
         void start(const std::string &map, int fragLimit, int minuteLimit, int skill);
+        /// The host: what it is sending the consoles it gave the game to, if
+        /// it is -- which stream ("the game": the common one; a group's
+        /// base; a map), to how many, and how far the slowest has got.
+        bool sending(const char *&what, int &consoles, int &percent) const;
+        /// How many of its clients are consoles it gave the game to.
+        int guests() const;
+#ifdef HLDS_CHILD
+        /// A console that was sent the game: a stream the host has begun
+        /// sending it, to be taken now (GuestLoad's receiveAir, or a map
+        /// loaded). True once per stream.
+        bool airAsked(hldata::AirHead &head);
+#endif
         /// Whether a match has been started and its map is to be loaded:
         /// which map, and how hard the host made it (kSkill*). True once per
         /// start, on every console.
@@ -145,6 +161,28 @@ namespace hlrt
         std::uint32_t ticks_ = 0;
         int overMs_ = 0;      ///< how long the match has been over
         bool lobbyAsked_ = false;
+#ifndef HLDS_CHILD
+        // (The host's.) What it sends the consoles it gave the game to.
+        hldata::AirSender air_;
+        unsigned guests_ = 0;        ///< bit n: client n has asked for a stream
+        std::FILE *airFile_ = nullptr;
+        std::uint16_t serves_ = 0;   ///< sendings made, for each one's number
+        int serveStage_ = 0;         ///< (Serving: 0 waiting, 1 the base, 2 the map, 3 sent: about to start)
+        std::uint32_t serveAt_ = 0;  ///< (3: when it starts)
+        int serveFrag_ = 0, serveMinutes_ = 0, serveSkill_ = 2;
+        bool airBegin(hldata::AirStream stream, const std::string &name, const std::string &path, unsigned mask,
+                      int skill = 0);
+        void airEnd();
+        int airSend(int frames);
+        void airAsk(int from, const std::uint8_t *bytes, int size);
+        void serveNext();
+        void go(const std::string &map, int fragLimit, int minuteLimit, int skill);
+#else
+        hldata::AirHead airAsked_;
+        bool airPending_ = false;
+        std::uint8_t airReply_[hldata::kNetReplyBytes];
+        int airReplySize_ = 0;
+#endif
 
         void send();
         void sayProfile();

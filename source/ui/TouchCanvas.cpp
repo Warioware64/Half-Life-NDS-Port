@@ -62,17 +62,19 @@ namespace hlrt
     {
         if (loaded_)
             return;
-        loaded_ = true;
         // The console's letters are a bit a pixel, eight bytes a letter,
         // from the space on.
         const ConsoleFont &own = consoleGetDefault()->font;
-        if (own.gfx != nullptr && own.bpp == 1 && own.numChars >= 96)
+        if (!plain_.ok() && own.gfx != nullptr && own.bpp == 1 && own.numChars >= 96)
         {
             hldata::plainFont(static_cast<const std::uint8_t *>(own.gfx), false, plainWords);
             plain_.open(reinterpret_cast<const std::uint8_t *>(plainWords), sizeof(plainWords));
         }
+        // (Not yet: a console sent the game has the game's own letters once
+        // its host has sent them.)
         if (!global.hasData)
             return;
+        loaded_ = true;
         for (int n = 0; n < hldata::kFontCount; ++n)
         {
             std::FILE *file = std::fopen(global.commonPath(hldata::kFontFiles[n]).c_str(), "rb");

@@ -106,6 +106,7 @@ namespace hlrt
             Achievements = 15, ///< a sheet: those earned and those not, a chapter at a time
             NewGame = 16,     ///< which game: Half-Life, the Hazard Course, Uplink
             Profile = 17,     ///< a sheet: the player as the others see them, shown on the top screen
+            NetSend = 18,     ///< a sheet: the host giving the game to consoles without it (Download Play)
         };
 
         // A sheet: a page of its own, drawn and touched apart from the rows
@@ -118,16 +119,30 @@ namespace hlrt
         bool sheet() const
         {
             return page_ == Page::Achievements || page_ == Page::Settings || page_ == Page::Saves ||
-                   page_ == Page::Profile || page_ == Page::NetHost || page_ == Page::NetLobby;
+                   page_ == Page::Profile || page_ == Page::NetHost || page_ == Page::NetLobby ||
+                   page_ == Page::NetSend;
         }
         /// A sheet of settings' rows: OPTIONS, PROFILE, HOST, the lobby.
         bool optionSheet() const
         {
             return page_ == Page::Settings || page_ == Page::Profile || page_ == Page::NetHost ||
-                   page_ == Page::NetLobby;
+                   page_ == Page::NetLobby || page_ == Page::NetSend;
         }
         /// How many buttons along a sheet's bottom: the last is BACK (LEAVE).
-        int sheetButtons() const { return page_ == Page::Saves ? 3 : (page_ == Page::NetLobby ? 1 : 2); }
+        int sheetButtons() const
+        {
+            return page_ == Page::Saves || (page_ == Page::NetHost && canSend()) ? 3
+                   : page_ == Page::NetLobby || page_ == Page::NetSend         ? 1
+                                                                                : 2;
+        }
+        /// HOST: whether it can give the game to consoles without it (they
+        /// are let in, and this copy carries the program to send).
+        bool canSend() const;
+        /// SEND GAME: Download Play begun (the host's game closed meanwhile),
+        /// or let go of, the host's game opened again.
+        void sendBegin();
+        void sendEnd();
+        char sendWhy_[72] = {}; ///< why the game could not be sent, read out on HOST
         /// That last button, or B: back -- the host asked first, if anyone
         /// has joined its game.
         Action sheetBack();

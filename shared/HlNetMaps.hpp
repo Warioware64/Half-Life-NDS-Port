@@ -21,6 +21,9 @@ namespace hldata
         std::string name;
         int spawns = 0;
         bool guestFits = false;
+        /// Its group (HlManifest.hpp's AirGroup): whose base a console without
+        /// the game is sent with it.
+        int airGroup = 0;
     };
 
     /// The players a map is made for: its places to come in at, no more

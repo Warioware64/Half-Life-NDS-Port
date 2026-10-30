@@ -6,6 +6,7 @@
 #include "HlMaterial.hpp"
 #include "HlSaveState.hpp"
 #include "HlMapStore.hpp"
+#include "HlRenew.hpp"
 
 #include <cstdlib>
 #include <cstring>
@@ -65,14 +66,14 @@ namespace hlrt
         std::free(actorBoxes_);
         actorStates_ = nullptr;
         actorBoxes_ = nullptr;
-        actors = ActorWorld();
+        renew(actors);
         ladders_ = nullptr;
         brushStates_ = nullptr;
         movers_ = nullptr;
         reach_ = nullptr;
         states_ = nullptr;
-        world = MoveWorld();
-        logic = LogicWorld();
+        renew(world);
+        renew(logic);
         topText.clear();
         // (The lamp comes along as it is, as in the game: alight or out,
         // with what is left in it.)

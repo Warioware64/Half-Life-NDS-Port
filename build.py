@@ -66,7 +66,10 @@ arm9 = Arm9Binary(
     # (which yas would otherwise misread as "big-endian"). The converter writes
     # the yas archives on the host and the DS reads them back, so a byte-order
     # disagreement between the two would corrupt them silently.
-    cxxflags='-Wall -O2 -std=gnu++26 -D_LITTLE_ENDIAN -include yas/detail/config/endian.hpp',
+    # stack-usage: no function may take more than 4 KB of the stack, which
+    # is 15 KB of DTCM in all (Game::destroy's 9 KB overflowed it when a map
+    # was left, 2026-10-30). The game library and the child are held to it too.
+    cxxflags='-Wall -Werror=stack-usage=4096 -O2 -std=gnu++26 -D_LITTLE_ENDIAN -include yas/detail/config/endian.hpp',
     # Every malloc, free and the rest goes through the guarded heap
     # (source/Guard.hpp), which finds a write past a block or into one given
     # back, and says whose block it was.
@@ -110,12 +113,18 @@ hl = Arm9DynamicLibrary(
         '${BLOCKSDSEXT}/dswifi_dl',
         '${BLOCKSDSEXT}/nitro-engine-advanced',
     ],
-    cxxflags='-Wall -O2 -std=gnu++26 -D_LITTLE_ENDIAN -include yas/detail/config/endian.hpp',
+    cxxflags='-Wall -Werror=stack-usage=4096 -O2 -std=gnu++26 -D_LITTLE_ENDIAN -include yas/detail/config/endian.hpp',
 )
 hl.generate_dsl()
 
 nitrofs = NitroFS()
 nitrofs.add_arm9_dsl(hl)
+# The program the host sends consoles without the game by Download Play
+# (child/build.py: built after this one, whose ARM7 program it uses -- so it
+# is here from make.sh's second pass of this file on).
+CHILD_ROM = os.path.join('child', 'out', 'hl-child.nds')
+if os.path.isfile(CHILD_ROM):
+    nitrofs.add_file(CHILD_ROM, 'dlplay/child.nds')
 nitrofs.generate_image()
 
 nds = NdsRom(

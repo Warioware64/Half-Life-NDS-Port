@@ -4,11 +4,14 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <deque>
 #include <memory>
 #include <vector>
 
+#include "HlGuest.hpp"
 #include "HlNet.hpp"
+#include "HlNetAir.hpp"
 #include "HlNetGame.hpp"
 #include "HlView.hpp"
 #include "TestGame.hpp"
@@ -327,6 +330,258 @@ namespace
         sender.asked(2, frame, receiver.ask(frame));
         receiver.piece(2, frame, sender.piece(0, 0, nullptr, 0, frame), nullptr, 0);
         check(receiver.done() && !receiver.missing && receiver.total == 0, "a file of no bytes is there, and done");
+    }
+
+    /// One stream sent to guests at once (HlNetAir.hpp), each hearing the
+    /// host through air of its own and each taking the pieces on as a
+    /// loader would, a few a frame or none. `late`: guest 1 comes when the
+    /// others are half way. `quiet`: guest 2 stops answering a third of the
+    /// way. Returns the host's frames.
+    struct AirGuest
+    {
+        AirReceiver receiver;
+        std::vector<std::uint8_t> ring = std::vector<std::uint8_t>(kAirWindow * kAirPiece);
+        std::vector<std::uint8_t> got;
+        Air down, up;
+        bool here = true;
+    };
+    int sendAir(const std::vector<std::uint8_t> &stream, int guests, int loss, int delay, bool late, bool quiet,
+                std::vector<AirGuest> &out, AirSender &sender)
+    {
+        out.assign(static_cast<std::size_t>(guests), AirGuest());
+        unsigned mask = 0;
+        for (int g = 0; g < guests; ++g)
+        {
+            AirGuest &guest = out[static_cast<std::size_t>(g)];
+            guest.receiver.want(AirStream::Map, "", guest.ring.data());
+            guest.down.lossPercent = guest.up.lossPercent = loss;
+            guest.down.mostDelay = guest.up.mostDelay = delay;
+            if (!(late && g == 0))
+                mask |= 1u << (g + 1);
+        }
+        sender.begin(AirStream::Map, "stalkyard", static_cast<std::uint32_t>(stream.size()), 7, mask, 2);
+        if (late)
+            out[0].here = false;
+        std::uint8_t frame[kNetCmdBytes];
+        int ticks = 0;
+        for (; ticks < 200000; ++ticks)
+        {
+            bool all = true;
+            for (int g = 0; g < guests; ++g)
+                all = all && (out[static_cast<std::size_t>(g)].receiver.done() || !out[static_cast<std::size_t>(g)].here);
+            if (all && sender.done() && (!late || out[0].here))
+                break;
+            if (late && !out[0].here && sender.percent() >= 50)
+            {
+                out[0].here = true;
+                sender.add(1);
+            }
+            for (int g = 0; g < guests; ++g)
+            {
+                AirGuest &guest = out[static_cast<std::size_t>(g)];
+                guest.down.now = guest.up.now = ticks;
+                if (!guest.here)
+                    continue;
+                if (quiet && g == 1 && guest.got.size() > stream.size() / 3)
+                    continue; // (gone silent: it hears, it says nothing, it takes nothing)
+                const int ask = guest.receiver.ask(frame);
+                if (ask > 0)
+                    guest.up.send(frame, ask);
+                for (const auto &bytes : guest.up.land())
+                    sender.asked(g + 1, bytes.data(), static_cast<int>(bytes.size()));
+            }
+            sender.frame();
+            // Two frames of the host's a frame, every guest hearing each.
+            std::uint32_t index;
+            for (int n = 0; n < 2 && sender.next(index); ++n)
+            {
+                const int size = sender.piece(index, stream.data() + index * kAirPiece, sender.pieceBytes(index), frame);
+                for (AirGuest &guest : out)
+                    guest.down.send(frame, size);
+            }
+            for (int g = 0; g < guests; ++g)
+            {
+                AirGuest &guest = out[static_cast<std::size_t>(g)];
+                for (const auto &bytes : guest.down.land())
+                {
+                    AirHead head;
+                    if (guest.here && airRead(bytes.data(), static_cast<int>(bytes.size()), head))
+                        guest.receiver.frame(head);
+                }
+                if (!guest.here || (quiet && g == 1 && guest.got.size() > stream.size() / 3))
+                    continue;
+                // The loader: up to six pieces a frame, sometimes none (it
+                // is busy with what it read).
+                const int take = static_cast<int>(rnd() % 8) - 1;
+                const std::uint8_t *data;
+                std::size_t size;
+                for (int n = 0; n < take && guest.receiver.next(data, size); ++n)
+                    guest.got.insert(guest.got.end(), data, data + size);
+            }
+        }
+        // (What is left: the last piece handed on is let go.)
+        for (AirGuest &guest : out)
+        {
+            const std::uint8_t *data;
+            std::size_t size;
+            while (guest.here && !(quiet && &guest == &out[1]) && guest.receiver.next(data, size))
+                guest.got.insert(guest.got.end(), data, data + size);
+        }
+        return ticks;
+    }
+
+    /// A guest's supply, for a GuestCursor: a stream through the air with
+    /// one guest, the host sending as it is asked.
+    struct AirTestSupply : GuestSupply
+    {
+        const std::vector<std::uint8_t> *stream = nullptr;
+        AirSender sender;
+        AirGuest guest;
+        int ticks = 0;
+        bool more(const std::uint8_t *&data, std::size_t &size) override
+        {
+            std::uint8_t frame[kNetCmdBytes];
+            for (int spins = 0; spins < 100000; ++spins)
+            {
+                if (guest.receiver.next(data, size))
+                    return true;
+                if (guest.receiver.done())
+                    return false;
+                guest.down.now = guest.up.now = ++ticks;
+                const int ask = guest.receiver.ask(frame);
+                if (ask > 0)
+                    guest.up.send(frame, ask);
+                for (const auto &bytes : guest.up.land())
+                    sender.asked(1, bytes.data(), static_cast<int>(bytes.size()));
+                std::uint32_t index;
+                for (int n = 0; n < 2 && sender.next(index); ++n)
+                    guest.down.send(frame, sender.piece(index, stream->data() + index * kAirPiece,
+                                                        sender.pieceBytes(index), frame));
+                for (const auto &bytes : guest.down.land())
+                {
+                    AirHead head;
+                    if (airRead(bytes.data(), static_cast<int>(bytes.size()), head))
+                        guest.receiver.frame(head);
+                }
+            }
+            return false;
+        }
+    };
+
+    std::vector<std::uint8_t> readAll(const std::string &path)
+    {
+        std::vector<std::uint8_t> bytes;
+        if (std::FILE *file = std::fopen(path.c_str(), "rb"))
+        {
+            std::fseek(file, 0, SEEK_END);
+            bytes.resize(static_cast<std::size_t>(std::ftell(file)));
+            std::fseek(file, 0, SEEK_SET);
+            if (std::fread(bytes.data(), 1, bytes.size(), file) != bytes.size())
+                bytes.clear();
+            std::fclose(file);
+        }
+        return bytes;
+    }
+
+    void testAir()
+    {
+        // The Download Play parameter.
+        std::uint8_t param[kNetDlParamBytes];
+        NetDlParam dl;
+        dl.channel = 6;
+        for (int i = 0; i < 6; ++i)
+            dl.host[i] = static_cast<std::uint8_t>(0x10 + i);
+        netDlWrite(dl, param);
+        NetDlParam back;
+        check(netDlRead(param, back) && back.channel == 6 && back.host[5] == 0x15,
+              "the program's parameter says where its host is");
+        std::uint8_t junk[kNetDlParamBytes] = {};
+        check(!netDlRead(junk, back), "... and a console started another way finds none");
+        param[4] = static_cast<std::uint8_t>(kNetVersion + 1);
+        check(!netDlRead(param, back), "... nor one from another version of the game");
+
+        std::vector<std::uint8_t> stream(400 * 1024 + 77);
+        for (std::size_t i = 0; i < stream.size(); ++i)
+            stream[i] = static_cast<std::uint8_t>(rnd());
+        AirSender sender;
+        std::vector<AirGuest> guests;
+        const int perfect = static_cast<int>(airPieces(static_cast<std::uint32_t>(stream.size()))) / 2;
+        int frames[3] = {};
+        const int losses[3] = {0, 5, 20};
+        for (int l = 0; l < 3; ++l)
+        {
+            frames[l] = sendAir(stream, 7, losses[l], losses[l] == 0 ? 0 : 4, false, false, guests, sender);
+            bool whole = sender.done();
+            for (const AirGuest &guest : guests)
+                whole = whole && guest.receiver.done() && guest.got == stream;
+            check(whole, losses[l] == 0 ? "a stream of 400 KB reaches seven guests at once, byte for byte"
+                         : losses[l] == 5 ? "... through air that loses one frame in twenty to each"
+                                          : "... and one in five");
+        }
+        check(guests[0].receiver.skill == 2 && std::strcmp(guests[0].receiver.name, "stalkyard") == 0,
+              "... each told which map, and how hard");
+        check(frames[0] < perfect * 12 / 10 && frames[1] < perfect * 2,
+              "seven hear what is sent once: the frames are those of one guest, and little more");
+        std::printf("  (400 KB to seven at two pieces a frame: %d frames at best, %d with nothing lost, %d, %d with 5%%, "
+                    "20%%)\n",
+                    perfect, frames[0], frames[1], frames[2]);
+
+        sendAir(stream, 4, 5, 3, true, false, guests, sender);
+        bool lateWhole = true;
+        for (const AirGuest &guest : guests)
+            lateWhole = lateWhole && guest.got == stream;
+        check(lateWhole && sender.done(), "a guest that comes half way is sent it from the start, and all have it");
+
+        sendAir(stream, 4, 5, 3, false, true, guests, sender);
+        check(!sender.wants[2].on && guests[0].got == stream && guests[2].got == stream && guests[3].got == stream &&
+                  sender.done(),
+              "a guest that goes silent is left out, and the others finish");
+
+        // A guest that has it already (a base it was sent for another map).
+        sender.begin(AirStream::Base, "match", 137519, 9, 1u << 1);
+        std::uint8_t frame[kNetReplyBytes];
+        const int have = airHave(AirStream::Base, 9, 137519, frame);
+        check(have > 0 && sender.asked(1, frame, have) && sender.done(), "... and one that has it says so at once");
+        check(!sender.asked(1, frame, airHave(AirStream::Base, 8, 137519, frame)),
+              "an answer about another sending is not taken");
+
+        // The real streams, as a guest's loaders read them.
+        const char *card = std::getenv("HLDS_AIR_DIR");
+        if (card == nullptr)
+        {
+            std::printf("  (HLDS_AIR_DIR not set: the card's streams were not sent)\n");
+            return;
+        }
+        for (const char *name : {"common.hgs", "match.base.hgs", "stalkyard.hgs"})
+        {
+            const std::vector<std::uint8_t> bytes = readAll(std::string(card) + "/" + name);
+            if (bytes.empty())
+            {
+                std::printf("  (%s is not in %s)\n", name, card);
+                continue;
+            }
+            AirTestSupply supply;
+            supply.stream = &bytes;
+            supply.guest.down.lossPercent = supply.guest.up.lossPercent = 10;
+            supply.guest.receiver.want(AirStream::Map, "", supply.guest.ring.data());
+            supply.sender.begin(AirStream::Map, name, static_cast<std::uint32_t>(bytes.size()), 1, 1u << 1);
+            auto cursor = std::make_unique<GuestCursor>(supply);
+            bool ok = cursor->start();
+            std::uint32_t members = 0;
+            std::vector<std::uint8_t> member;
+            while (ok && cursor->next())
+            {
+                member.resize(cursor->member().rawSize);
+                ok = cursor->read(member.data(), cursor->member().rawSize) == cursor->member().rawSize;
+                ++members;
+            }
+            char what[96];
+            std::snprintf(what, sizeof(what), "%s (%u KB) through the air: every member read as a loader reads it",
+                          name, static_cast<unsigned>(bytes.size() / 1024));
+            check(ok && cursor->ended() && members == cursor->header().members, what);
+            std::printf("  (%s: %d frames at two pieces a frame through 10%% loss, %.1f s at 60)\n", name,
+                        supply.ticks, supply.ticks / 60.0);
+        }
     }
 
     void testGlide()
@@ -1237,6 +1492,7 @@ int main()
     testPacking();
     testEvents();
     testFile();
+    testAir();
     testGlide();
     testLobby();
     testWire();

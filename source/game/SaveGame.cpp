@@ -2,6 +2,36 @@
 
 #include "game/SaveGame.hpp"
 
+#ifdef HLDS_CHILD
+// A console that was sent the game has no card to save on, and keeps no map
+// it left: every match begins its map afresh. Nothing is written or read.
+namespace hlrt::SaveGame
+{
+    const hldata::SaveIndex &index()
+    {
+        static const hldata::SaveIndex none;
+        return none;
+    }
+    bool read(hldata::SaveData &, int) { return false; }
+    bool write(const hldata::SaveData &, int, const hldata::SaveHeading &) { return false; }
+    bool remove(int) { return false; }
+    bool begin(const hldata::SaveData &, int, const hldata::SaveHeading &) { return false; }
+    hldata::SaveWriter::Result step() { return hldata::SaveWriter::Result::Done; }
+    bool busy() { return false; }
+    bool finish() { return true; }
+    bool leaveMap(const std::string &, std::uint32_t) { return false; }
+    int arriveMap(const std::string &, std::uint32_t) { return 0; }
+    void landed(const std::string &, std::uint8_t) {}
+    void newRun(std::uint32_t) {}
+    void fromSave(int, const hldata::SaveData &, std::uint32_t) {}
+    const hldata::RunIndex &runIndex()
+    {
+        static const hldata::RunIndex none;
+        return none;
+    }
+} // namespace hlrt::SaveGame
+#else
+
 #include <dirent.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -366,3 +396,4 @@ namespace hlrt::SaveGame
         return done;
     }
 } // namespace hlrt::SaveGame
+#endif

@@ -26,6 +26,7 @@
 
 #include "HlMonsters.hpp"
 #include "HlNet.hpp"
+#include "HlRenew.hpp"
 
 namespace hldata
 {
@@ -681,7 +682,7 @@ namespace hldata
     /// but 0, and not what another client is likely to choose).
     inline void netBegin(NetMatch &match, NetMatch::Role role, std::uint16_t token, const char *name)
     {
-        match = NetMatch();
+        renew(match);
         match.role = role;
         match.me = 0;
         match.client.token = token != 0 ? token : 1;

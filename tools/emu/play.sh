@@ -46,9 +46,17 @@ SCRIPT="${2:-sleep 5}"
 if [ "${EMU_INSTANCES:-1}" != 2 ]; then
     SCRIPT="sleep 1.5; place 0 0 25; $SCRIPT"
 fi
+# EMU_PICK2: what the second instance is started on, as a touch of the
+# recent list's menu (default its first entry, the ROM the first was started
+# on); EMU_ROM2=child picks the Download Play child (the list's second entry
+# in build/emu's configs) -- a console sent the game, as it would be if it
+# had been, but started without Download Play (which needs a bootable DS
+# firmware the emulator here has not got).
 if [ "${EMU_INSTANCES:-1}" = 2 ]; then
     EMU_SCREEN="${EMU_SCREEN:-640x480}"
-    SCRIPT="sleep 6; place 0 0 0; sleep 0.5; tap 75 15; sleep 0.8; tap 120 387; sleep 0.8; tap 300 387; sleep 3; place 1 320 0; sleep 1; tap 340 15; sleep 1; tap 420 47; sleep 1; tap 200 47; sleep 12; $SCRIPT"
+    PICK2="${EMU_PICK2:-tap 200 47}"
+    [ "${EMU_ROM2:-}" = child ] && PICK2="${EMU_PICK2:-tap 200 75}"
+    SCRIPT="sleep 6; place 0 0 0; sleep 0.5; tap 75 15; sleep 0.8; tap 120 387; sleep 0.8; tap 300 387; sleep 3; place 1 320 0; sleep 1; tap 340 15; sleep 1; tap 420 47; sleep 1; $PICK2; sleep 12; $SCRIPT"
 fi
 # (The wait: the emulator writes the card back to sdroot/ as it quits --
 # the files the ROM wrote, perf.txt -- and X must not go before it has.

@@ -14,10 +14,14 @@
 #include "game/Player.hpp"
 #include "render/Camera.hpp"
 #include "net/NetLink.hpp"
+#include "HlManifest.hpp"
 #include "HlUi.hpp"
 #include "audio/Sound.hpp"
 #include "data/ModelCache.hpp"
 #include "render/EffectDraw.hpp"
+#ifdef HLDS_CHILD
+#include "net/GuestLoad.hpp"
+#endif
 
 namespace hlrt
 {
@@ -166,6 +170,10 @@ namespace hlrt
         if (!netlink::host(name, kNetPlayers))
             return false;
         netBegin(match_, NetMatch::Role::Host, 0, name);
+#ifndef HLDS_CHILD
+        airEnd();
+        guests_ = 0;
+#endif
         sayRules();
         sayProfile();
         profilesSeen_ = 0;
@@ -180,7 +188,7 @@ namespace hlrt
     {
         if (!netlink::scan())
             return false;
-        match_ = NetMatch();
+        hldata::renew(match_);
         phase_ = Phase::Scanning;
         ended_ = "";
         startPending_ = false;
@@ -291,7 +299,8 @@ namespace hlrt
             return;
         // A goodbye, said a few times over: there is no waiting to hear
         // that it arrived.
-        if (netPlaced(match_) && (phase_ == Phase::Hosting || phase_ == Phase::Lobby || phase_ == Phase::Playing))
+        if (netPlaced(match_) && (phase_ == Phase::Hosting || phase_ == Phase::Serving || phase_ == Phase::Lobby ||
+                                  phase_ == Phase::Playing))
         {
             netSay(match_, netEvent(NetEventType::Bye));
             for (int n = 0; n < 8; ++n)
@@ -302,25 +311,185 @@ namespace hlrt
         }
         netlink::powerDown();
         effectDraw.dropSprays();
-        match_ = NetMatch();
+        hldata::renew(match_);
         phase_ = Phase::Off;
         startPending_ = false;
+#ifndef HLDS_CHILD
+        airEnd();
+        guests_ = 0;
+#endif
     }
 
     void NetGame::lost(const char *why)
     {
+#ifndef HLDS_CHILD
+        airEnd();
+        guests_ = 0;
+#endif
         netlink::powerDown();
         effectDraw.dropSprays();
-        match_ = NetMatch();
+        hldata::renew(match_);
         phase_ = Phase::Off;
         startPending_ = false;
         ended_ = why;
     }
 
+#ifndef HLDS_CHILD
     void NetGame::start(const std::string &map, int fragLimit, int minuteLimit, int skill)
     {
         if (phase_ != Phase::Hosting)
             return;
+        // Consoles it gave the game to: sent the map first, as they load it.
+        // (Nobody new meanwhile.)
+        if ((guests_ & netlink::clients()) != 0)
+        {
+            netlink::admit(false);
+            pendingMap_ = map;
+            serveFrag_ = fragLimit;
+            serveMinutes_ = minuteLimit;
+            serveSkill_ = skill;
+            serveStage_ = 0;
+            phase_ = Phase::Serving;
+            // (A console still being sent the game itself: that first.)
+            if (!air_.sending())
+                serveNext();
+            return;
+        }
+        go(map, fragLimit, minuteLimit, skill);
+    }
+
+    void NetGame::serveNext()
+    {
+        const unsigned mask = guests_ & netlink::clients();
+        const NetMapInfo *info = nullptr;
+        for (const NetMapInfo &one : mapInfo_)
+        {
+            if (one.name == pendingMap_)
+                info = &one;
+        }
+        // The group's base (those who have it say so at once), then the map.
+        if (serveStage_ == 0 && mask != 0)
+        {
+            serveStage_ = 1;
+            const int group = info != nullptr ? info->airGroup : 0;
+            if (group > 0 && group < static_cast<int>(sizeof(kAirGroupNames) / sizeof(kAirGroupNames[0])) &&
+                airBegin(AirStream::Base, kAirGroupNames[group], std::string("air/") + kAirGroupNames[group] + ".base.hgs",
+                         mask))
+                return;
+        }
+        if (serveStage_ <= 1 && mask != 0)
+        {
+            serveStage_ = 2;
+            if (airBegin(AirStream::Map, pendingMap_, "air/" + pendingMap_ + ".hgs", mask, serveSkill_))
+                return;
+            // (Not on this card to be sent: they cannot play it.)
+            for (int c = 1; c < kNetPlayers; ++c)
+            {
+                if ((mask >> c) & 1)
+                    netlink::kick(c);
+            }
+        }
+        // Sent: a second for them to finish saying so and listen again, and
+        // then the start (frame()).
+        if (serveStage_ == 2)
+        {
+            serveStage_ = 3;
+            serveAt_ = Global::vblanks() + 60;
+            return;
+        }
+        phase_ = Phase::Hosting;
+        go(pendingMap_, serveFrag_, serveMinutes_, serveSkill_);
+    }
+
+    bool NetGame::airBegin(AirStream stream, const std::string &name, const std::string &path, unsigned mask, int skill)
+    {
+        airEnd();
+        airFile_ = std::fopen(global.dataPath(path).c_str(), "rb");
+        if (airFile_ == nullptr)
+            return false;
+        std::fseek(airFile_, 0, SEEK_END);
+        const long length = std::ftell(airFile_);
+        if (length <= 0)
+        {
+            airEnd();
+            return false;
+        }
+        serves_ = static_cast<std::uint16_t>(serves_ + 1 == 0 ? 1 : serves_ + 1);
+        air_.begin(stream, name.c_str(), static_cast<std::uint32_t>(length), serves_, mask,
+                   static_cast<std::uint8_t>(skill));
+        return true;
+    }
+
+    void NetGame::airEnd()
+    {
+        if (airFile_ != nullptr)
+            std::fclose(airFile_);
+        airFile_ = nullptr;
+        air_.stop();
+    }
+
+    int NetGame::airSend(int frames)
+    {
+        std::uint8_t piece[kAirPiece];
+        std::uint8_t bytes[kNetCmdBytes];
+        std::uint32_t index;
+        int n = 0;
+        for (; n < frames && airFile_ != nullptr && air_.next(index); ++n)
+        {
+            const int count = air_.pieceBytes(index);
+            if (std::fseek(airFile_, static_cast<long>(index) * kAirPiece, SEEK_SET) != 0 ||
+                std::fread(piece, 1, static_cast<std::size_t>(count), airFile_) != static_cast<std::size_t>(count))
+                break;
+            const int size = air_.piece(index, piece, count, bytes);
+            if (size > 0)
+            {
+                netlink::send(bytes, size);
+                ++sent_;
+            }
+        }
+        return n;
+    }
+
+    void NetGame::airAsk(int from, const std::uint8_t *bytes, int size)
+    {
+        AirStream stream;
+        std::uint16_t serve;
+        if (!airAskOf(bytes, size, stream, serve) || from < 1 || from >= kNetPlayers)
+            return;
+        guests_ |= 1u << from;
+        if (air_.asked(from, bytes, size))
+            return;
+        // A console that has just come asks for the game itself.
+        if (stream == AirStream::Common && serve == 0)
+        {
+            if (air_.sending() && air_.stream == AirStream::Common)
+                air_.add(from);
+            else if (!air_.sending())
+                airBegin(AirStream::Common, "common", "air/common.hgs", 1u << from);
+            // (Else it waits: what is being sent is sent first. It asks again.)
+        }
+    }
+
+    bool NetGame::sending(const char *&what, int &consoles, int &percent) const
+    {
+        if (!air_.sending())
+            return false;
+        what = air_.stream == AirStream::Common ? "the game" : air_.name;
+        consoles = air_.waiting();
+        percent = air_.percent();
+        return true;
+    }
+
+    int NetGame::guests() const
+    {
+        int n = 0;
+        for (int c = 1; c < kNetPlayers; ++c)
+            n += ((guests_ & netlink::clients()) >> c) & 1;
+        return n;
+    }
+
+    void NetGame::go(const std::string &map, int fragLimit, int minuteLimit, int skill)
+    {
         // (The rules as they are now, before the start: in that order on
         // every console.)
         sayRules();
@@ -341,6 +510,21 @@ namespace hlrt
             swiWaitForVBlank();
         }
     }
+#else
+    // (A console that was sent the game is never a host.)
+    void NetGame::start(const std::string &, int, int, int) {}
+    bool NetGame::sending(const char *&, int &, int &) const { return false; }
+    int NetGame::guests() const { return 0; }
+
+    bool NetGame::airAsked(AirHead &head)
+    {
+        if (!airPending_)
+            return false;
+        airPending_ = false;
+        head = airAsked_;
+        return true;
+    }
+#endif
 
     bool NetGame::startAsked(std::string &map, int &skill)
     {
@@ -458,6 +642,10 @@ namespace hlrt
                     netHostJoin(match_.host, c);
                 else if (!(now & bit) && (clientsWere_ & bit))
                 {
+#ifndef HLDS_CHILD
+                    air_.drop(c);
+                    guests_ &= ~bit;
+#endif
                     netHostLeave(match_.host, c);
                     match_.names[c][0] = 0;
                     NetEvent gone;
@@ -484,14 +672,64 @@ namespace hlrt
         else
             lostFrames_ = 0;
 
-        // What has come.
+        // What has come: the game's, and what is said of the streams sent
+        // to consoles that were given the game (HlNetAir.hpp).
         std::uint8_t bytes[kNetCmdBytes];
         int from = 0;
         for (int size; (size = netlink::take(bytes, from)) > 0;)
         {
-            gameApi.netRead(match_, bytes, size, from);
             ++heard_;
+#ifndef HLDS_CHILD
+            if (size > 3 && bytes[3] == kNetFrameAirAsk)
+            {
+                if (isHost())
+                    airAsk(from, bytes, size);
+                continue;
+            }
+#else
+            if (size > 3 && bytes[3] == kNetFrameAirData)
+            {
+                AirHead head;
+                int reply = 0;
+                if (guest::airFrame(bytes, size, airReply_, reply, head))
+                {
+                    airAsked_ = head;
+                    airPending_ = true;
+                }
+                if (reply > 0)
+                    airReplySize_ = reply;
+                continue;
+            }
+#endif
+            gameApi.netRead(match_, bytes, size, from);
         }
+#ifndef HLDS_CHILD
+        // Who is left out of a stream for saying nothing is let go; a
+        // stream that all have is done with, and the next sent.
+        if (air_.sending())
+        {
+            const unsigned out = air_.frame();
+            for (int c = 1; c < kNetPlayers; ++c)
+            {
+                if ((out >> c) & 1)
+                {
+                    netlink::kick(c);
+                    guests_ &= ~(1u << c);
+                }
+            }
+            if (air_.done())
+            {
+                airEnd();
+                if (phase_ == Phase::Serving)
+                    serveNext();
+            }
+        }
+        else if (phase_ == Phase::Serving && serveStage_ == 3 && static_cast<std::int32_t>(Global::vblanks() - serveAt_) >= 0)
+        {
+            phase_ = Phase::Hosting;
+            go(pendingMap_, serveFrag_, serveMinutes_, serveSkill_);
+        }
+#endif
 
         // The lobby's part of it; with a map loaded, the game's tick does
         // the rest.
@@ -500,7 +738,33 @@ namespace hlrt
             static LogicWorld none;
             static PlayerState nobody;
             gameApi.netLobby(match_, none, nobody);
-            send();
+#ifndef HLDS_CHILD
+            // A stream being sent: as fast as the air takes it while a
+            // match waits for it (the game's frames now and then, for those
+            // who have the game), every other frame in the lobby.
+            // (A frame of some kind every frame, whatever: a client answers
+            // only a frame of the host's -- one that has nothing to say for
+            // itself would wait for nothing.)
+            if (phase_ == Phase::Serving && air_.sending())
+            {
+                if ((++ticks_ & 7) == 0)
+                    send();
+                if (airSend((ticks_ & 7) == 0 ? 1 : 2) == 0 && (ticks_ & 7) != 0)
+                    send();
+            }
+            else if (!(air_.sending() && (++ticks_ & 1) && airSend(1) > 0))
+                send();
+#else
+            // (What a stream's frame asked to be answered, in place of the
+            // game's.)
+            if (airReplySize_ > 0)
+            {
+                netlink::send(airReply_, airReplySize_);
+                airReplySize_ = 0;
+            }
+            else
+                send();
+#endif
         }
 
         // Everyone in their own colours, as their profiles say.
@@ -530,11 +794,17 @@ namespace hlrt
                 const std::uint32_t hash = static_cast<std::uint16_t>(event.v[0]) |
                                            (static_cast<std::uint32_t>(static_cast<std::uint16_t>(event.v[1])) << 16);
                 pendingMap_.clear();
+#ifdef HLDS_CHILD
+                // (Sent the game: the map is the one it was sent.)
+                if (nameHash(guest::airMap()) == hash)
+                    pendingMap_ = guest::airMap();
+#else
                 for (const std::string &map : maps_)
                 {
                     if (nameHash(map.c_str()) == hash)
                         pendingMap_ = map;
                 }
+#endif
                 match_.fragLimit = event.v[2];
                 match_.minuteLimit = event.v[3];
                 // (A host from before there was a choice says 0: MEDIUM.)

@@ -239,6 +239,12 @@ namespace hlrt::netlink
             Wifi_MultiplayerAllowNewClients(allow);
     }
 
+    void kick(int c)
+    {
+        if (hosting && c >= 1 && c < kNetPlayers)
+            Wifi_MultiplayerKickClientByAID(c);
+    }
+
     bool scan()
     {
         if (!start())
@@ -400,11 +406,18 @@ namespace hlrt::netlink
             return false;
         // (After the start, which sets both back.) Nobody is started until
         // all are: the host cannot offer the program and run the game's own
-        // radio at once.
+        // radio at once. And nobody is sent it until all who are coming
+        // have come (dlGather).
         Wifi_DlPlaySetBootMode(WIFI_DLPLAY_BOOT_MANUAL);
-        Wifi_DlPlaySetGather(false);
+        Wifi_DlPlaySetGather(true);
         offering = true;
         return true;
+    }
+
+    void dlGather(bool hold)
+    {
+        if (offering)
+            Wifi_DlPlaySetGather(hold);
     }
 
     void dlUpdate()
@@ -442,12 +455,29 @@ namespace hlrt::netlink
         return total <= 0 ? 0 : (current >= total ? 99 : (current * 100) / total);
     }
 
+    bool dlChecking(int n)
+    {
+        return (dlGuests() & (1u << n)) && Wifi_DlPlayGetClientState(n) == WIFI_DLPLAY_VERIFYING;
+    }
+
+    bool dlFailed(int n)
+    {
+        return (dlGuests() & (1u << n)) && Wifi_DlPlayGetClientState(n) == WIFI_DLPLAY_ERROR;
+    }
+
+    const char *dlName(int n)
+    {
+        const char *name = (dlGuests() & (1u << n)) ? Wifi_DlPlayGetClientNameByAID(n) : nullptr;
+        return name != nullptr ? name : "";
+    }
+
     bool dlAllReady()
     {
         int guests = 0;
         for (int n = 1; n < 16; ++n)
         {
-            if (!(dlGuests() & (1u << n)))
+            // (One that failed is not waited for.)
+            if (!(dlGuests() & (1u << n)) || Wifi_DlPlayGetClientState(n) == WIFI_DLPLAY_ERROR)
                 continue;
             if (Wifi_DlPlayGetClientState(n) != WIFI_DLPLAY_BOOTING)
                 return false;

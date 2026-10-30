@@ -288,7 +288,9 @@ Global::DataStatus Global::ReadManifest(std::string &startMap, std::vector<hldat
         if (multiplayer != nullptr)
             multiplayer->push_back(hldata::NetMapInfo{map, 0, true});
     }
-    return startMap.empty() ? DataStatus::NoData : DataStatus::Ok;
+    // (A console sent the game by a host has none until the host sends it
+    // one: that is not a card without the game.)
+    return DataStatus::Ok;
 #endif
     if (!hasFat)
         return DataStatus::NoCard;
@@ -333,7 +335,7 @@ Global::DataStatus Global::ReadManifest(std::string &startMap, std::vector<hldat
     for (const hldata::ManifestMap &map : manifest.maps)
     {
         if (multiplayer != nullptr && map.spawns != 0)
-            multiplayer->push_back(hldata::NetMapInfo{map.name, map.spawns, map.guestFits});
+            multiplayer->push_back(hldata::NetMapInfo{map.name, map.spawns, map.guestFits, map.airGroup});
     }
     return DataStatus::Ok;
 }

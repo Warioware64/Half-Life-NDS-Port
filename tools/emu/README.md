@@ -70,4 +70,16 @@ its recent list before the script begins.
   host there when a match starts and the client 160 units in front of it,
   facing it. Remove it afterwards.
 - The two instances share the card folder, and both are called "melonDS".
+- `EMU_ROM2=child` starts the second on the Download Play child
+  (`child/out/hl-child.nds`, the second entry of the recent list in
+  build/emu's configs) instead: a console sent the game, started directly.
+  The emulator cannot send it by Download Play itself -- that needs a
+  bootable 256 KB DS firmware, and the dumps here are a DSi's 128 KB one --
+  so the child, finding no parameter from a host, looks for any game that
+  lets consoles without the game in, and joins it. `EMU_PICK2="tap x y"`
+  picks another entry of that list.
+- Keys are not to be relied on to change a setting with two consoles running
+  (a press is seen twice, or not at all): a touch is, or a settings file made
+  beforehand -- `tools/emu/mksettings.cpp` writes one with consoles without
+  the game let in. Put the card's own back afterwards.
 

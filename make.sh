@@ -42,6 +42,8 @@ python build.py "$@"
 # console that has no card. After the parent, whose ARM7 program it uses.
 (cd child && python build.py "$@")
 python tools/child_size.py
+# ... and the parent again, now carrying the child to send (dlplay/child.nds).
+python build.py "$@"
 # The ELFs of every build, by its name, for looking up a crash screen's
 # addresses afterwards (arm-none-eabi-addr2line -e build/elf/<name>/arm9.elf);
 # the last twelve kept.

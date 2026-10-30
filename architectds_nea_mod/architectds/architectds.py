@@ -2145,6 +2145,22 @@ class GenericFilesystem(GenericBinary):
 
         self.target_files.append(out_dsl)
 
+    def add_file(self, in_path, out_path):
+        '''
+        Adds one file to the filesystem as it is, at `out_path` (relative to
+        the filesystem's root), waited for by the image like the rest.
+        '''
+        full_out_path = os.path.join(self.out_assets_path, out_path)
+        full_out_dir = get_parent_dir(full_out_path)
+        self.add_dir_target(full_out_dir)
+
+        self.print(
+            f'build {full_out_path}: copy {in_path} || {full_out_dir}\n'
+            '\n'
+        )
+
+        self.target_files.append(full_out_path)
+
     def add_files_unchanged(self, in_dirs, out_dir='files'):
         '''
         This function takes a list of directories and injects them right away to

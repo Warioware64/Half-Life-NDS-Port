@@ -49,6 +49,8 @@ namespace hlrt::netlink
     int strength();
     /// Let more consoles in, or not (a match under way lets nobody in).
     void admit(bool allow);
+    /// Send client `c` away (one that stopped answering).
+    void kick(int c);
 
     // ----------------------------------------------------------- a client
     /// Look for hosts.
@@ -84,8 +86,11 @@ namespace hlrt::netlink
     // ------------------------------------------------------- Download Play
     /// Offer `rom` (a whole program, which must stay where it is until
     /// dlStop) to consoles looking at their Download Play menu. `param` is
-    /// 32 bytes handed to the program when it starts.
+    /// 32 bytes handed to the program when it starts. The consoles that
+    /// come are held (gathered) until dlGather(false): then all of them are
+    /// sent it at once -- a console will not join a host already sending.
     bool dlStart(const void *rom, std::size_t size, const char *description, const void *param);
+    void dlGather(bool hold);
     void dlUpdate();      ///< once a frame while offering
     void dlStop();
     bool dlActive();
@@ -93,7 +98,14 @@ namespace hlrt::netlink
     /// How far guest `n` has got with the program: 0..100; -1 if it is not
     /// there.
     int dlProgress(int n);
-    /// Whether every guest there has the whole program and is waiting.
+    /// Whether guest `n` is checking the program it was sent (it is the
+    /// console's own Download Play that does), or has failed.
+    bool dlChecking(int n);
+    bool dlFailed(int n);
+    /// The name guest `n`'s owner gave it ("" until it has said).
+    const char *dlName(int n);
+    /// Whether every guest there has the whole program and is waiting (one
+    /// that failed aside), and there is one.
     bool dlAllReady();
     void dlLock(bool locked); ///< no more guests
     bool dlBootAll();         ///< start the program on all of them
