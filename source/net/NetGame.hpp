@@ -203,6 +203,9 @@ namespace hlrt
         std::uint32_t backSoonAt_ = 0;
         std::uint32_t kickAt_[hldata::kNetPlayers] = {};
         int joinFrames_ = 0;
+        int silentFrames_ = 0;
+        std::uint32_t heardWas_ = 0;
+        int serveCharacter_ = 1, serveCharacters_ = 0;
         unsigned answered_ = 0; ///< (a client's) heard_ when it last answered
         std::string pendingMap_;
         int pendingSkill_ = 2; ///< (kSkillMedium)

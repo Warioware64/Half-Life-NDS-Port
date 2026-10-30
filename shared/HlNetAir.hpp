@@ -72,6 +72,7 @@ namespace hldata
         Base,   ///< a group's (HlManifest.hpp's AirGroup), by its name: "match"
         Map,    ///< a map's own, by its name
         Preview, ///< the picture of the host's map (HlPreview.hpp), by the map's name: to any console without one
+        Character, ///< who a player chose to be (HlCharacters.hpp), by its name: after the map, to those with room
     };
     /// A stream's name on the wire.
     inline constexpr int kAirNameBytes = 24;

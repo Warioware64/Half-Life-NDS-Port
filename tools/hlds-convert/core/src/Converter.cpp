@@ -1643,19 +1643,22 @@ namespace hlds
                 if (!one.empty())
                     clips = one[0].clips;
             }
-            for (int c = 1; c < hldata::kCharacterCount; ++c)
+            // ... each for a console with the game, and for one sent it (a
+            // smaller skin); and the suit for a console sent the game to show
+            // in its lobby, in a pose of its own.
+            auto cookPerson = [&](const std::string &file, const std::vector<std::string> &own, int skinTexels,
+                                  const fs::path &modelOut, const fs::path &skinOut)
             {
-                const std::string name = hldata::kCharacterFiles[c];
-                const fs::path file = findNoCase(options_.gameDir, "models/player/" + name + "/" + name + ".mdl");
+                const fs::path found = findNoCase(options_.gameDir, file);
                 MdlFile mdl;
                 CookedModel cooked;
                 ModelCookReport modelReport;
                 std::vector<std::uint8_t> bytes;
                 std::string failed;
-                if (file.empty() || !mdl.load(file, failed) ||
-                    !cookModel(mdl, clips, cooked, modelReport, failed, 128 * 128, false, kGuestLean) ||
+                if (found.empty() || !mdl.load(found, failed) ||
+                    !cookModel(mdl, own, cooked, modelReport, failed, skinTexels, false, kGuestLean) ||
                     !writeModel(cooked, bytes, failed) || cooked.indexed.width == 0)
-                    continue;
+                    return;
                 CookedTexture skin;
                 skin.width = cooked.indexed.width;
                 skin.height = cooked.indexed.height;
@@ -1669,11 +1672,19 @@ namespace hlds
                     skin.palette.push_back(static_cast<std::uint8_t>(colour >> 8));
                 }
                 std::error_code made;
-                fs::create_directories(stageDir() / "chr", made);
-                writeFileAtomic(stageDir() / "chr" / (name + ".hmd"), bytes, failed);
-                writeFileAtomic(stageDir() / "chr" / (name + ".htx"),
-                                packTexture(skin, hldata::kTexturePal256 | hldata::kTextureRemapRuns, 0), failed);
+                fs::create_directories(modelOut.parent_path(), made);
+                writeFileAtomic(modelOut, bytes, failed);
+                writeFileAtomic(skinOut, packTexture(skin, hldata::kTexturePal256 | hldata::kTextureRemapRuns, 0), failed);
+            };
+            for (int c = 1; c < hldata::kCharacterCount; ++c)
+            {
+                const std::string name = hldata::kCharacterFiles[c];
+                const std::string file = "models/player/" + name + "/" + name + ".mdl";
+                cookPerson(file, clips, 128 * 128, stageDir() / "chr" / (name + ".hmd"), stageDir() / "chr" / (name + ".htx"));
+                cookPerson(file, clips, 64 * 64, stageDir() / "chr" / ("g_" + name + ".hmd"), stageDir() / "chr" / ("g_" + name + ".htx"));
             }
+            cookPerson("models/player/gordon/gordon.mdl", {"look_idle"}, 64 * 64, stageDir() / "gst" / "lobby.hmd",
+                       stageDir() / "gst" / "lobby.htx");
             if (menuBackground(find, background, why) &&
                 texture(background, TextureFormat::Tex4x4, 1024, 0, hldata::kMenuFile))
                 result.menu = true;

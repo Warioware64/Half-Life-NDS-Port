@@ -54,6 +54,7 @@ namespace hlrt::guest
         /// The map last taken whole (to say so, if the host is still
         /// sending it to others), and its sending.
         char takenMap[hldata::kAirNameBytes] = {};
+        std::uint16_t takenCharacter = 0;
         std::uint16_t takenServe = 0;
         std::uint32_t takenLength = 0;
         std::uint8_t takenSkill = 2;
@@ -455,8 +456,19 @@ namespace hlrt::guest
             replySize = hldata::airHave(head.stream, head.serve, head.length, reply);
             return false;
         }
+        // Who another chose to be: taken only if there is room for it, twice
+        // over for the moment it is read -- else said to be held, and they
+        // stay the suit here. (Taken already: the same.)
+        if (head.stream == hldata::AirStream::Character)
+        {
+            if (head.serve == takenCharacter || global.heapHeadroom() < head.length * 2 + hldata::kGuestPlayBytes)
+            {
+                replySize = hldata::airHave(head.stream, head.serve, head.length, reply);
+                return false;
+            }
+        }
         // (The common stream, to a console that came later: this one has it.)
-        if (head.stream != hldata::AirStream::Base && head.stream != hldata::AirStream::Map)
+        else if (head.stream != hldata::AirStream::Base && head.stream != hldata::AirStream::Map)
             return false;
         if (!ringOn(head.stream, head.name))
             return false;
@@ -477,6 +489,15 @@ namespace hlrt::guest
         bool ok = false;
         if (receiver.stream == hldata::AirStream::Common)
             ok = receiveCommon(airSupply);
+        else if (receiver.stream == hldata::AirStream::Character)
+        {
+            takenCharacter = receiver.serve;
+            ok = receiveWhole(airSupply, [](const char *name, std::uint8_t *block, std::uint32_t size)
+                              {
+                                  if (!air::putMapFile(name, block, size))
+                                      std::free(block);
+                              });
+        }
         else if (receiver.stream == hldata::AirStream::Base)
         {
             // (One base at a time: the last group's goes.)
@@ -520,7 +541,11 @@ namespace hlrt::guest
 
     void onMapProgress(void (*progress)(int percent)) { mapProgress = progress; }
 
-    void forgetTaken() { takenMap[0] = 0; }
+    void forgetTaken()
+    {
+        takenMap[0] = 0;
+        takenCharacter = 0;
+    }
 
     void hear()
     {

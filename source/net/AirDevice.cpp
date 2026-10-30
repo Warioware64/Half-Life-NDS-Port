@@ -334,7 +334,8 @@ namespace hlrt::air
         /// here -- FrameFreeze -- and it would be garbled.)
         bool keptCommon(const char *name)
         {
-            return std::strcmp(name, hldata::kMenuFile) == 0 || std::strcmp(name, hldata::kLogosFile) == 0;
+            return std::strcmp(name, hldata::kMenuFile) == 0 || std::strcmp(name, hldata::kLogosFile) == 0 ||
+                   std::strcmp(name, hldata::kProfileModelFile) == 0 || std::strcmp(name, hldata::kProfileSkinFile) == 0;
         }
 
         void drop(bool ofMap)
@@ -356,6 +357,26 @@ namespace hlrt::air
     bool put(const char *name, const std::uint8_t *data, std::uint32_t size)
     {
         return putFile(name, data, size, 0, false, false);
+    }
+
+    bool putMapFile(const char *name, std::uint8_t *data, std::uint32_t size)
+    {
+        return putFile(name, data, size, 0, true, true);
+    }
+
+    void dropCharacters()
+    {
+        int kept = 0;
+        for (int i = 0; i < fileCount; ++i)
+        {
+            if (files[i].owned && std::strncmp(files[i].name, "chr/", 4) == 0)
+                std::free(const_cast<std::uint8_t *>(files[i].data));
+            else
+                files[kept++] = files[i];
+        }
+        for (int i = kept; i < fileCount; ++i)
+            files[i] = File();
+        fileCount = kept;
     }
 
     bool putOwned(const char *name, std::uint8_t *data, std::uint32_t size)

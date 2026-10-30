@@ -300,6 +300,62 @@ namespace hldata
     /// `blend` is where between a blending clip's two poses it is (0 the
     /// first, 255 the second: the game's pev->blending[0], clipBlend); a
     /// clip with one pose has no use for it.
+#ifndef HL_DSL
+    HL_HOT void poseModel(const ModelView &model, int clip, std::uint32_t frame, BoneMatrix *out,
+                          const std::int32_t *controls, int blend);
+    /// `bones` from the spine up as they are in clip `aim`'s first frame (its
+    /// blend `blend`): the upper body of someone holding something, the rest
+    /// going on walking under it. `held`: room for a pose, to work in.
+    inline void overlayAimPose(const ModelView &model, BoneMatrix *bones, int aim, int blend, BoneMatrix *held)
+    {
+        const int spine = model.header->spineBone, count = model.header->boneCount;
+        const int under = spine >= 0 ? model.parents[spine] : -1;
+        if (under < 0)
+            return;
+        poseModel(model, aim, 0, held, nullptr, blend);
+        // What takes the aim's "under the spine" to this pose's.
+        const BoneMatrix &to = bones[under];
+        const BoneMatrix &from = held[under];
+        std::int32_t turn[9];
+        for (int r = 0; r < 3; ++r)
+        {
+            for (int c = 0; c < 3; ++c)
+                turn[r * 3 + c] = static_cast<std::int32_t>(
+                    (static_cast<std::int64_t>(to.r[r * 3]) * from.r[c * 3] +
+                     static_cast<std::int64_t>(to.r[r * 3 + 1]) * from.r[c * 3 + 1] +
+                     static_cast<std::int64_t>(to.r[r * 3 + 2]) * from.r[c * 3 + 2]) >>
+                    kBoneRotShift);
+        }
+        // (Copied back after: `to` stays what it was, being under the spine.)
+        std::uint8_t up[kModelMaxBones];
+        const fx toAt[3] = {to.t[0], to.t[1], to.t[2]};
+        for (int b = 0; b < count; ++b)
+        {
+            const int parent = model.parents[b];
+            up[b] = b == spine || (parent >= 0 && up[parent]) ? 1 : 0;
+            if (!up[b])
+                continue;
+            const BoneMatrix &m = held[b];
+            BoneMatrix &o = bones[b];
+            fx away[3];
+            for (int a = 0; a < 3; ++a)
+                away[a] = m.t[a] - from.t[a];
+            for (int r = 0; r < 3; ++r)
+            {
+                for (int c = 0; c < 3; ++c)
+                    o.r[r * 3 + c] = static_cast<std::int32_t>(
+                        (static_cast<std::int64_t>(turn[r * 3]) * m.r[c] +
+                         static_cast<std::int64_t>(turn[r * 3 + 1]) * m.r[3 + c] +
+                         static_cast<std::int64_t>(turn[r * 3 + 2]) * m.r[6 + c]) >>
+                        kBoneRotShift);
+                o.t[r] = toAt[r] + static_cast<fx>((static_cast<std::int64_t>(turn[r * 3]) * away[0] +
+                                                    static_cast<std::int64_t>(turn[r * 3 + 1]) * away[1] +
+                                                    static_cast<std::int64_t>(turn[r * 3 + 2]) * away[2]) >>
+                                                   kBoneRotShift);
+            }
+        }
+    }
+#endif
 #ifdef HL_DSL
     // (In the game library, the engine's own, in ITCM: game/GameApi.hpp.)
     void poseModel(const ModelView &model, int clip, std::uint32_t frame, BoneMatrix *out,

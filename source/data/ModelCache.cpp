@@ -134,11 +134,18 @@ namespace hlrt
 
     void ModelCache::loadCharacters()
     {
-#ifndef HLDS_CHILD
         const hldata::NetMatch &match = netGame.match();
-        if (!netGame.on() || views_ == nullptr || !global.hasFat)
+        if (!netGame.on() || views_ == nullptr)
             return;
+#ifdef HLDS_CHILD
+        constexpr std::size_t kSpare = hldata::kGuestPlayBytes / 2;
+#else
+        constexpr std::size_t kSpare = 200 * 1024;
+#endif
+        // (Those read already stay: more may come.)
         int slot = 0;
+        while (slot < hldata::kCharacterSlots && characterIds_[slot] != 0)
+            ++slot;
         for (int p = 0; p < hldata::kNetPlayers && slot < hldata::kCharacterSlots; ++p)
         {
             const int id = match.profiles[p].model;
@@ -151,7 +158,7 @@ namespace hlrt
                 return;
             const std::string name = hldata::kCharacterFiles[id];
             std::uint32_t size = 0;
-            std::uint8_t *block = readModel(global.commonPath("chr/" + name + ".hmd"), size, 200 * 1024);
+            std::uint8_t *block = readModel(global.commonPath("chr/" + name + ".hmd"), size, kSpare);
             const int at = count_ + slot;
             if (block == nullptr || !views_[at].open(block, size))
             {
@@ -178,7 +185,6 @@ namespace hlrt
             blocks_[at] = block;
             characterIds_[slot++] = id;
         }
-#endif
     }
 
     void ModelCache::release(bool engineGone)

@@ -32,6 +32,10 @@ namespace hlrt::air
     void drain();
     /// The map's files (drain()'s) let go of: a new map is coming.
     void dropMapFiles();
+    /// A file of the map's, as drain()'s (who another player chose to be),
+    /// and those let go of once read.
+    bool putMapFile(const char *name, std::uint8_t *data, std::uint32_t size);
+    void dropCharacters();
     /// `name`'s whole bytes, owned by the drive (freed by dropOwned()).
     bool putOwned(const char *name, std::uint8_t *data, std::uint32_t size);
 

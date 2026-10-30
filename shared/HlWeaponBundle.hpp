@@ -48,12 +48,12 @@ namespace hldata
         {{"v_hgun", "hornet", nullptr}},
     };
 
-    /// What another player is seen holding, by kWeapon* (null: nothing: the
-    /// game's p_egon is not on the hand). Cooked as one piece, relative to the
-    /// hand it is in.
+    /// What another player is seen holding, by kWeapon*. Cooked as one piece,
+    /// relative to the hand it is in (the game's p_egon, its pack and all: the
+    /// spine it is strapped to).
     inline constexpr const char *kHeldModels[kWeaponCount] = {
         nullptr,    "p_crowbar", "p_9mmhandgun", "p_shotgun", "p_grenade", "p_9mmar", "p_357", "p_crossbow",
-        "p_satchel", "p_tripmine", "p_squeak", "p_rpg",      "p_gauss",   nullptr,   "p_hgun"};
+        "p_satchel", "p_tripmine", "p_squeak", "p_rpg",      "p_gauss",   "p_egon",  "p_hgun"};
     /// How they stand holding it, by kWeapon*: the upper body of one of these
     /// clips (each cooked one frame, its two ends for how far up they look).
     inline constexpr const char *kAimClips[] = {"ref_aim_crowbar", "ref_aim_onehanded", "ref_aim_shotgun",

@@ -259,6 +259,10 @@ namespace
         check(bundlesOf("v_rpg") == 1u << kWeaponRpg && bundlesOf("rpgrocket") == 1u << kWeaponRpg, "a rocket with the RPG");
         check(bundlesOf("v_satchel_radio") == 1u << kWeaponSatchel, "the radio with the satchels");
         check(bundlesOf("hgrunt") == 0, "what is no weapon's, with none");
+        check(heldWeaponOf("p_rpg") == kWeaponRpg && heldWeaponOf("p_egon") == kWeaponEgon && heldWeaponOf("v_rpg") == -1,
+              "what is held knows whose it is");
+        for (const std::uint8_t aim : kAimOf)
+            check(aim < sizeof(kAimClips) / sizeof(kAimClips[0]), "every weapon has a pose to hold it in");
         for (const WeaponBundle &bundle : kWeaponBundles)
         {
             int count = 0;

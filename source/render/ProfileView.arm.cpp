@@ -22,14 +22,6 @@ namespace hlrt
 {
     ProfileView profileView;
 
-#ifdef HLDS_CHILD
-    // (A console sent the game has no model of its own to show: none of it.)
-    bool ProfileView::open(int, int, int) { return false; }
-    void ProfileView::setColours(int, int) {}
-    void ProfileView::close() {}
-    void ProfileView::draw() {}
-#else
-
     namespace
     {
         using namespace hldata;
@@ -48,11 +40,20 @@ namespace hlrt
         constexpr int kTurnPerBlank = 156;
 
         BoneMatrix pose[kModelMaxBones];
+#ifndef HLDS_CHILD
+        BoneMatrix aimPose[kModelMaxBones];
+        /// What they hold (a console with the game: the pistol).
+        constexpr const char *kLobbyGun = "p_9mmhandgun";
+#endif
     } // namespace
 
     bool ProfileView::open(int top, int bottom, int character)
     {
         close();
+#ifdef HLDS_CHILD
+        // (A console sent the game has the one it was given.)
+        character = 0;
+#endif
         const bool other = character > 0 && character < kCharacterCount;
         const std::string own = std::string("chr/") + kCharacterFiles[other ? character : 0];
         const std::string modelFile = other ? own + ".hmd" : std::string(kProfileModelFile);
@@ -104,6 +105,37 @@ namespace hlrt
         yaw_ = 0;
         since_ = Global::vblanks();
         setColours(top, bottom);
+#ifndef HLDS_CHILD
+        // In their hand, if there is one to have.
+        aim_ = view->findClip(nameHash("ref_aim_onehanded"));
+        if (std::FILE *gun = std::fopen(global.commonPath(std::string("wpn/") + kLobbyGun + ".hmd").c_str(), "rb"))
+        {
+            std::fseek(gun, 0, SEEK_END);
+            const long bytes = std::ftell(gun);
+            std::fseek(gun, 0, SEEK_SET);
+            auto *gunBlock = bytes > 0 && bytes <= kMostBytes ? static_cast<std::uint8_t *>(std::malloc(static_cast<std::size_t>(bytes))) : nullptr;
+            const bool whole = gunBlock != nullptr && cardRead(gunBlock, static_cast<std::size_t>(bytes), gun) == static_cast<std::size_t>(bytes);
+            std::fclose(gun);
+            auto *gunView = new ModelView();
+            NEA_Material *gunSkin = nullptr;
+            NEA_Palette *gunColours = nullptr;
+            if (whole && gunView->open(gunBlock, static_cast<std::uint32_t>(bytes)) && gunView->header->atlasWidth != 0 &&
+                view->header->handBone >= 0 &&
+                TextureCache::loadFile(global.commonPath("wpn/" + modelSkinFile(kLobbyGun, gunView->header->atlasWidth, gunView->header->atlasHeight)).c_str(),
+                                       false, gunView->header->atlasWidth, gunView->header->atlasHeight, 0, gunSkin, gunColours))
+            {
+                gunData_ = gunBlock;
+                gunView_ = gunView;
+                gunMaterial_ = gunSkin;
+                gunPalette_ = gunColours;
+            }
+            else
+            {
+                std::free(gunBlock);
+                delete gunView;
+            }
+        }
+#endif
         return true;
     }
 
@@ -131,6 +163,16 @@ namespace hlrt
 
     void ProfileView::close()
     {
+#ifndef HLDS_CHILD
+        if (gunMaterial_ != nullptr)
+            NEA_MaterialDelete(static_cast<NEA_Material *>(gunMaterial_));
+        if (gunPalette_ != nullptr)
+            NEA_PaletteDelete(static_cast<NEA_Palette *>(gunPalette_));
+        delete static_cast<ModelView *>(gunView_);
+        std::free(gunData_);
+        gunData_ = nullptr;
+        gunView_ = gunMaterial_ = gunPalette_ = nullptr;
+#endif
         if (colours_ != nullptr)
             NEA_PaletteDelete(static_cast<NEA_Palette *>(colours_));
         if (material_ != nullptr)
@@ -160,6 +202,10 @@ namespace hlrt
             frame_ = 0;
         yaw_ = static_cast<std::uint16_t>(yaw_ + blanks * kTurnPerBlank);
         poseModel(model, clip_, frame_, pose);
+#ifndef HLDS_CHILD
+        if (aim_ >= 0)
+            overlayAimPose(model, pose, aim_, 128, aimPose);
+#endif
 
         // Where each of the model's axes goes in view space (Q12): its
         // forward (x) turned about its up out of the screen at first, its
@@ -167,7 +213,6 @@ namespace hlrt
         fx sine, cosine;
         fxSinCos(yaw_, sine, cosine);
         const int turned[9] = {sine, 0, cosine, cosine, 0, -sine, 0, kFxOne, 0};
-        const int coarser = model.header->vertexShift;
 
         NEA_MaterialUse(static_cast<const NEA_Material *>(material_));
         if (colours_ != nullptr)
@@ -184,6 +229,10 @@ namespace hlrt
         GFX_DIFFUSE_AMBIENT = RGB15(20, 20, 20) | (RGB15(13, 13, 13) << 16);
         GFX_SPECULAR_EMISSION = 0;
 
+        auto batches = [&](const ModelView &what, const BoneMatrix *poses)
+        {
+        const ModelView &model = what;
+        const int coarser = model.header->vertexShift;
         for (int n = 0; n < model.header->batchCount; ++n)
         {
             const ModelBatch &batch = model.batches[n];
@@ -191,7 +240,7 @@ namespace hlrt
                 continue;
             for (int k = 0; k < batch.boneCount; ++k)
             {
-                const BoneMatrix &bone = pose[batch.bones[k]];
+                const BoneMatrix &bone = poses[batch.bones[k]];
                 // As ModelDraw does, row i where the bone's axis i goes in
                 // view space. A vertex is 1/128 unit (coarser by vertexShift)
                 // and the hardware reads it as Q12; a unit of the view is 128
@@ -233,6 +282,15 @@ namespace hlrt
             for (int count = batch.gxWords; count > 0; --count)
                 GFX_FIFO = *word++;
         }
-    }
+        };
+        batches(model, pose);
+#ifndef HLDS_CHILD
+        if (gunView_ != nullptr)
+        {
+            NEA_MaterialUse(static_cast<const NEA_Material *>(gunMaterial_));
+            BoneMatrix hand = pose[model.header->handBone];
+            batches(*static_cast<const ModelView *>(gunView_), &hand);
+        }
 #endif
+    }
 } // namespace hlrt

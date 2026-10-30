@@ -416,6 +416,7 @@ namespace hlrt
 
     void NetGame::leave()
     {
+        silentFrames_ = 0;
         if (phase_ == Phase::Off)
             return;
         // A goodbye, said a few times over: there is no waiting to hear
@@ -527,6 +528,7 @@ namespace hlrt
         startPending_ = false;
         starting_ = goAsked_ = cancelled_ = false;
         forgetGuest();
+        silentFrames_ = 0;
         ended_ = why;
     }
 
@@ -553,6 +555,8 @@ namespace hlrt
         pendingMap_ = map;
         serveSkill_ = skill;
         serveStage_ = 0;
+        serveCharacter_ = 1;
+        serveCharacters_ = 0;
         starting_ = true;
         ready_ = 0;
         goAsked_ = false;
@@ -613,6 +617,21 @@ namespace hlrt
             {
                 if ((mask >> c) & 1)
                     netlink::kick(c);
+            }
+        }
+        // Who they chose to be, for those sent the game (a guest takes what it
+        // has room for: HlCharacters.hpp).
+        for (; mask != 0 && serveCharacter_ < kCharacterCount && serveCharacters_ < kCharacterSlots; ++serveCharacter_)
+        {
+            bool wanted = false;
+            for (int p = 0; p < kNetPlayers; ++p)
+                wanted = wanted || (netHere(match_, p) && match_.profiles[p].known && match_.profiles[p].model == serveCharacter_);
+            const std::string name = kCharacterFiles[serveCharacter_];
+            if (wanted && airBegin(AirStream::Character, name, "air/chr_" + name + ".hgs", mask))
+            {
+                ++serveCharacter_;
+                ++serveCharacters_;
+                return;
             }
         }
         // Sent (or nobody to send it to): this console's own map now.
@@ -1012,7 +1031,22 @@ namespace hlrt
             }
         }
         else
+        {
             lostFrames_ = 0;
+            // (The radio can go on saying it is joined to a console switched
+            // off. Nothing heard: ten seconds in a match; while the host may
+            // be loading, a minute.)
+            if (heard_ != heardWas_)
+            {
+                heardWas_ = heard_;
+                silentFrames_ = 0;
+            }
+            else if (++silentFrames_ >= (phase_ == Phase::Playing ? 600 : 3600))
+            {
+                lost("The host has gone quiet.");
+                return;
+            }
+        }
 
         // What has come: the game's, and what is said of the streams sent
         // to consoles that were given the game (HlNetAir.hpp).

@@ -1006,7 +1006,26 @@ namespace hlds
         for (const char *name : hldata::kUiSoundFiles)
             packing.add(stage / "snd" / (std::string(name) + ".hsn"), std::string("snd/") + name + ".hsn", false,
                         false);
+        // The suit, for its lobby (AirDevice's keptCommon).
+        packing.add(stage / "gst" / "lobby.hmd", hldata::kProfileModelFile, false, false);
+        packing.add(stage / "gst" / "lobby.htx", hldata::kProfileSkinFile, false, false);
         fs::create_directories(card / "air");
+        // Who a player may be seen as, each a stream of its own: sent to those
+        // without the game when someone in the match has chosen them.
+        for (int c = 1; c < hldata::kCharacterCount; ++c)
+        {
+            const std::string name = hldata::kCharacterFiles[c];
+            Packing person;
+            person.report = packing.report;
+            person.add(stage / "chr" / ("g_" + name + ".hmd"), "chr/" + name + ".hmd", true, false);
+            person.add(stage / "chr" / ("g_" + name + ".htx"), "chr/" + name + ".htx", true, false);
+            if (person.members.empty())
+                continue;
+            std::size_t ignored[static_cast<int>(hldata::GuestKind::Count)] = {};
+            std::size_t bytes = 0;
+            if (!writeGuest(person.members, card / "air" / ("chr_" + name + ".hgs"), ignored, bytes, error))
+                return false;
+        }
         std::size_t raw[static_cast<int>(hldata::GuestKind::Count)] = {};
         for (const NpacMember &member : packing.members)
             report.rawBytes += member.data.size();

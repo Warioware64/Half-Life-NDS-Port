@@ -5,8 +5,9 @@
 //
 //   g++ -std=gnu++23 -D_LITTLE_ENDIAN -include yas/detail/config/endian.hpp \
 //       -Ishared -Ithirdparty -o build/emu/mksettings tools/emu/mksettings.cpp
-//   build/emu/mksettings sdroot/_nds/hl_nds/data/settings.dat stalkyard
+//   build/emu/mksettings sdroot/_nds/hl_nds/data/settings.dat stalkyard [character]
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include "HlSettings.hpp"
 int main(int argc, char **argv)
@@ -15,6 +16,8 @@ int main(int argc, char **argv)
     data.allowGuests = 1;
     if (argc > 2)
         std::strncpy(data.hostMap, argv[2], sizeof(data.hostMap) - 1);
+    if (argc > 3)
+        data.playerModel = static_cast<std::uint8_t>(std::atoi(argv[3]));
     const std::vector<std::uint8_t> bytes = hldata::writeSettings(data);
     std::FILE *f = std::fopen(argv[1], "wb");
     std::fwrite(bytes.data(), 1, bytes.size(), f);

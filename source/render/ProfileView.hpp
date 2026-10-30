@@ -45,6 +45,13 @@ namespace hlrt
         std::uint16_t yaw_ = 0;
         std::uint32_t since_ = 0;
         int atX_ = 0;
+#ifndef HLDS_CHILD
+        int aim_ = -1;             ///< the pose of holding what they hold
+        std::uint8_t *gunData_ = nullptr;
+        void *gunView_ = nullptr;
+        void *gunMaterial_ = nullptr;
+        void *gunPalette_ = nullptr;
+#endif
     };
 
     extern ProfileView profileView;

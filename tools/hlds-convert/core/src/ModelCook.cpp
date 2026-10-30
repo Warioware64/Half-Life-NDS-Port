@@ -577,12 +577,17 @@ namespace hlds
 
     bool bakeHeldModel(MdlFile &mdl, std::string &error)
     {
-        int hand = -1;
+        int hand = -1, spine = -1;
         for (std::size_t b = 0; b < mdl.bones.size(); ++b)
         {
             if (lower(mdl.bones[b].name) == "bip01 r hand")
                 hand = static_cast<int>(b);
+            if (lower(mdl.bones[b].name) == "bip01 spine")
+                spine = static_cast<int>(b);
         }
+        const bool onSpine = hand < 0;
+        if (onSpine)
+            hand = spine;
         if (hand < 0 || mdl.sequences.empty())
         {
             error = mdl.name + " has no right hand to be held in";
@@ -621,7 +626,7 @@ namespace hlds
             }
         }
         MdlBone one;
-        one.name = "hand";
+        one.name = onSpine ? "Bip01 Spine" : "Bip01 R Hand";
         mdl.bones.assign(1, one);
         mdl.sequences.clear();
         mdl.controllers.clear();

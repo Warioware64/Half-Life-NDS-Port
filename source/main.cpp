@@ -15,6 +15,9 @@
 #include "HlCommands.hpp"
 #include "HlPreview.hpp"
 #include "net/GuestLoad.hpp"
+#ifdef HLDS_CHILD
+#include "net/AirDevice.hpp"
+#endif
 #include "Settings.hpp"
 #include "data/LevelFile.hpp"
 #include "data/ModelCache.hpp"
@@ -643,6 +646,20 @@ namespace
             hlrt::netGame.frame();
             if (!hlrt::netGame.on() || hlrt::netGame.cancelled())
                 return false;
+#ifdef HLDS_CHILD
+            // Who another chose to be, on its way: taken, read, let go of.
+            {
+                hldata::AirHead air;
+                if (hlrt::netGame.airAsked(air) && air.stream == hldata::AirStream::Character)
+                {
+                    hlrt::bottomScreen.showProgress("JOINING THE MATCH", "Ready", "Hearing who the others are", 100, 100, false, true);
+                    if (hlrt::guest::receiveAir(nullptr))
+                        hlrt::modelCache.loadCharacters();
+                    hlrt::air::dropCharacters();
+                    hlrt::bottomScreen.showProgress("JOINING THE MATCH", "Ready", "Waiting for the host to begin", 100, 100, false, true);
+                }
+            }
+#endif
             // (The host may give it up from here too: B.)
             scanKeys();
             if (hlrt::netGame.isHost() && (keysDown() & KEY_B))

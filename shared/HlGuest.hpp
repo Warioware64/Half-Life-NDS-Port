@@ -85,15 +85,15 @@ namespace hldata
     // with the host's and the lobby's pages (0x0217154C): about 96 KB under.
     // Lowered when the child stopped carrying the saves (0x02168D24, 30 Oct
     // 2026: phase 6's second round).
-    inline constexpr std::uint32_t kGuestImageBytes = 0x165B6C + 40 * 1024;
+    inline constexpr std::uint32_t kGuestImageBytes = 0x165B6C + 60 * 1024;
     /// The heap's end: the end of main RAM less what the start-up code keeps.
     inline constexpr std::uint32_t kGuestRamBytes = 0x3F4000;
     /// What the engine holds beside a map's data -- its tables, the world's
     /// drawing lists, the game's state, the weapons' skins kept in memory:
     /// measured 231 KB (frenzy) and 274 KB (datacore); and the common
     /// stream's files kept all along (AirDevice's keptCommon: the title's
-    /// background and the logos -- 41 KB).
-    inline constexpr std::uint32_t kGuestReserveBytes = (288 + 41) * 1024;
+    /// background and the logos -- 41 KB -- and the suit for the lobby, 45).
+    inline constexpr std::uint32_t kGuestReserveBytes = (288 + 41 + 45) * 1024;
     /// What must still be free once the map is in, for what is made while it
     /// is played.
     inline constexpr std::uint32_t kGuestPlayBytes = 128 * 1024;

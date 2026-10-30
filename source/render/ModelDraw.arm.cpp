@@ -111,59 +111,21 @@ namespace hlrt
             if (clip < 0)
                 return -1;
             int blend = 128 - player.pitch * 3;
+            // (Having just fired: the arms thrown up a little, for a moment.)
+            static std::uint32_t firedAt[kNetPlayers];
+            if ((player.flags & kNetFiring) != 0)
+                firedAt[p] = Global::vblanks();
+            const std::uint32_t since = Global::vblanks() - firedAt[p];
+            if (since < 10)
+                blend -= static_cast<int>(10 - since) * 5;
             blend = blend < 0 ? 0 : (blend > 255 ? 255 : blend);
             return clip * 256 + blend;
         }
 
-        /// `bones` from the spine up, as they are in the aim's pose: the rest
-        /// of the body goes on walking under them.
         void overlayAim(const ModelView &model, BoneMatrix *bones, int aim)
         {
             static BoneMatrix held[kModelMaxBones];
-            poseModel(model, aim / 256, 0, held, nullptr, aim & 255);
-            const int spine = model.header->spineBone, count = model.header->boneCount;
-            const int under = model.parents[spine];
-            if (under < 0)
-                return;
-            // What takes the aim's "under the spine" to this pose's.
-            const BoneMatrix &to = bones[under];
-            const BoneMatrix &from = held[under];
-            std::int32_t turn[9];
-            for (int r = 0; r < 3; ++r)
-            {
-                for (int c = 0; c < 3; ++c)
-                    turn[r * 3 + c] = static_cast<std::int32_t>(
-                        (static_cast<std::int64_t>(to.r[r * 3]) * from.r[c * 3] +
-                         static_cast<std::int64_t>(to.r[r * 3 + 1]) * from.r[c * 3 + 1] +
-                         static_cast<std::int64_t>(to.r[r * 3 + 2]) * from.r[c * 3 + 2]) >>
-                        kBoneRotShift);
-            }
-            static std::uint8_t up[kModelMaxBones];
-            for (int b = 0; b < count; ++b)
-            {
-                const int parent = model.parents[b];
-                up[b] = b == spine || (parent >= 0 && up[parent]) ? 1 : 0;
-                if (!up[b])
-                    continue;
-                const BoneMatrix &m = held[b];
-                BoneMatrix &o = bones[b];
-                fx away[3];
-                for (int a = 0; a < 3; ++a)
-                    away[a] = m.t[a] - from.t[a];
-                for (int r = 0; r < 3; ++r)
-                {
-                    for (int c = 0; c < 3; ++c)
-                        o.r[r * 3 + c] = static_cast<std::int32_t>(
-                            (static_cast<std::int64_t>(turn[r * 3]) * m.r[c] +
-                             static_cast<std::int64_t>(turn[r * 3 + 1]) * m.r[3 + c] +
-                             static_cast<std::int64_t>(turn[r * 3 + 2]) * m.r[6 + c]) >>
-                            kBoneRotShift);
-                    o.t[r] = to.t[r] + static_cast<fx>((static_cast<std::int64_t>(turn[r * 3]) * away[0] +
-                                                        static_cast<std::int64_t>(turn[r * 3 + 1]) * away[1] +
-                                                        static_cast<std::int64_t>(turn[r * 3 + 2]) * away[2]) >>
-                                                       kBoneRotShift);
-                }
-            }
+            overlayAimPose(model, bones, aim / 256, aim & 255, held);
         }
     } // namespace
 
@@ -244,15 +206,19 @@ namespace hlrt
         const NetMatch &match = netGame.match();
         const int p = id - match.firstActor;
         if (actor.kind != static_cast<std::uint8_t>(ActorKind::Player) || p < 0 || p >= kNetPlayers ||
-            model.header->handBone < 0 || worldDraw.pressure() >= 2 || strained_)
+            worldDraw.pressure() >= 2 || strained_)
             return;
         const NetPlayer &player = netPlayer(match, p);
         const int m = modelCache.heldModel(player.weapon);
         if ((player.flags & kNetAlive) == 0 || m < 0 || m >= game.actors.modelCount ||
             game.actors.models[m].header == nullptr)
             return;
-        // (Copied: the next pose asked for may take this one's place.)
-        const BoneMatrix hand = posed(actor, model, actor.model, id)[model.header->handBone];
+        // What it is held by (a pack on the back: the spine). (Copied: the
+        // next pose asked for may take this one's place.)
+        const int by = game.actors.models[m].header->spineBone == 0 ? model.header->spineBone : model.header->handBone;
+        if (by < 0)
+            return;
+        const BoneMatrix hand = posed(actor, model, actor.model, id)[by];
         ActorState gun;
         gun.active = true;
         gun.kind = static_cast<std::uint8_t>(ActorKind::Generic);
