@@ -130,6 +130,7 @@ if(HLDS_BUILD_TESTS)
             test_avi
             test_net
             test_netmaps
+            test_airfetch
             test_people
             test_boxes
             test_families

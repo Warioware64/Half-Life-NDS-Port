@@ -50,10 +50,6 @@ namespace hlrt
     bool ProfileView::open(int top, int bottom, int character)
     {
         close();
-#ifdef HLDS_CHILD
-        // (A console sent the game has the one it was given.)
-        character = 0;
-#endif
         const bool other = character > 0 && character < kCharacterCount;
         const std::string own = std::string("chr/") + kCharacterFiles[other ? character : 0];
         // (At its finest on a DSi, where it is there.)

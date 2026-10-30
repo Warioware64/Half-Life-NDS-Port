@@ -1,5 +1,6 @@
 #pragma once
 
+#include "HlAirBank.hpp"
 #include "EngineObject.hpp"
 
 // A game between consoles, on this one: the radio (NetLink) joined to the
@@ -161,6 +162,12 @@ namespace hlrt
         /// the others are).
         bool fullGuests() const { return fullGuests_; }
         void setFullGuests(bool on) { fullGuests_ = on; }
+        /// Who a player chose to be, here to be shown (a console sent the game
+        /// asks the host when it is wanted).
+        bool personHere(int id) const;
+        void wantPerson(int id);
+        /// A map's load is about to begin: what the lobby asked for goes.
+        void forMapLoad();
         void kick(int p);
         /// The host, its map loaded and not begun: its lobby again.
         void toLobbyFromLoad();
@@ -230,21 +237,32 @@ namespace hlrt
         // A client's: the picture of the host's map, asked for in the lobby
         // by a console that has none of it (a stream of its own, whole in
         // one window), and the map it is of.
-        hldata::AirReceiver preview_;
-        std::uint8_t *previewRing_ = nullptr;
-        std::uint32_t previewHash_ = 0, previewHad_ = 0, previewSince_ = 0;
-        std::string previewName_;
-        void previewTick();
-        void previewFrame(const hldata::AirHead &head);
+        // What it has asked for (HlAirBank.hpp).
+        hldata::FetchTaking taking_;
+        std::uint8_t *takingRoom_ = nullptr;
+        bool takingOn_ = false;
+        std::uint32_t takingAskedAt_ = 0, takingSaidAt_ = 0;
+        int takingTries_ = 0;
+        int pictureNext_ = 0;   ///< the next of the host's pictures to ask for; -1: no more
+        int personWanted_ = 0;  ///< who is to be read next (0: none)
+        int personStage_ = 0;   ///< (0: its model, 1: its skin)
+        int personsHad_[2] = {0, 0};
+        void fetchAsk(hldata::FetchFrom from, std::uint32_t what);
+        void fetchSayHave();
+        void fetchDrop();
+        void fetchGaveUp();
+        void fetchFrame(const hldata::FetchHead &head);
+        void fetchDeliver();
+        void fetchTick();
+        void dropPeople();
 #ifndef HLDS_CHILD
-        void previewPush();
-        hldata::AirSender previewOut_;
-        std::FILE *previewFile_ = nullptr;
-        std::string previewSent_;
-        std::uint32_t previewAt_ = 0;
-        unsigned previewTicks_ = 0;
+        hldata::FetchHost fetch_;
+        std::uint8_t *fetchData_[hldata::FetchHost::kSending] = {};
+        bool fetchFind(const hldata::FetchHost::Asked &asked, std::uint8_t *&data, std::uint32_t &packed, std::uint32_t &raw,
+                       std::uint32_t &name);
+        void fetchHostFrame();
+        void fetchHostStop();
 #endif
-        void previewEnd();
         unsigned ready_ = 0;
         std::uint32_t rooms_[hldata::kNetPlayers] = {}; ///< (the host's: KB, by client; 0 not said)
         std::uint32_t frees_[hldata::kNetPlayers] = {};

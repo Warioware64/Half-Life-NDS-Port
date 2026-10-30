@@ -6,6 +6,7 @@
 #include <map>
 #include <set>
 
+#include "HlAirBank.hpp"
 #include "HlGuest.hpp"
 #include "HlLevelReader.hpp"
 #include "HlModel.hpp"
@@ -1143,6 +1144,41 @@ namespace hlds
         return finish(packing, card / "common.npac", compress, error);
     }
 
+    /// A bank (HlAirBank.hpp) of `members`: each packed if that makes it
+    /// smaller, the table sorted by what they are called.
+    static bool writeBank(std::vector<NpacMember> &members, const fs::path &out, std::string &error)
+    {
+        std::sort(members.begin(), members.end(), [](const NpacMember &a, const NpacMember &b)
+                  { return hldata::nameHash(a.path.c_str()) < hldata::nameHash(b.path.c_str()); });
+        hldata::AirBankHeader header{};
+        std::memcpy(header.magic, hldata::kAirBankMagic, 4);
+        header.version = hldata::kAirBankVersion;
+        header.count = static_cast<std::uint16_t>(members.size());
+        std::vector<hldata::AirBankEntry> table;
+        std::vector<std::uint8_t> body;
+        const std::uint32_t start = static_cast<std::uint32_t>(sizeof(header) + members.size() * sizeof(hldata::AirBankEntry));
+        for (const NpacMember &member : members)
+        {
+            std::vector<std::uint8_t> packed = lz77Compress(member.data.data(), member.data.size());
+            const bool smaller = packed.size() < member.data.size();
+            const std::vector<std::uint8_t> &sent = smaller ? packed : member.data;
+            hldata::AirBankEntry entry{};
+            entry.name = hldata::nameHash(member.path.c_str());
+            entry.offset = start + static_cast<std::uint32_t>(body.size());
+            entry.packed = static_cast<std::uint32_t>(sent.size());
+            entry.raw = static_cast<std::uint32_t>(member.data.size());
+            entry.crc = hldata::crc32(sent.data(), entry.packed);
+            table.push_back(entry);
+            body.insert(body.end(), sent.begin(), sent.end());
+        }
+        std::vector<std::uint8_t> file(sizeof(header) + table.size() * sizeof(hldata::AirBankEntry));
+        std::memcpy(file.data(), &header, sizeof(header));
+        if (!table.empty())
+            std::memcpy(file.data() + sizeof(header), table.data(), table.size() * sizeof(hldata::AirBankEntry));
+        file.insert(file.end(), body.begin(), body.end());
+        return writeFileAtomic(out, file, error);
+    }
+
     bool packAirCommon(const fs::path &stage, const fs::path &card, PackReport &report, std::string &error)
     {
         report = PackReport();
@@ -1206,6 +1242,23 @@ namespace hlds
             std::size_t ignored[static_cast<int>(hldata::GuestKind::Count) + 2] = {};
             std::size_t bytes = 0;
             if (!writeGuest(person.members, card / "air" / ("chr_" + name + ".hgs"), ignored, bytes, error))
+                return false;
+        }
+        // ... and the same again as banks, to be asked for one at a time in a
+        // lobby: who is looked at there.
+        {
+            Packing lean, fine;
+            lean.report = fine.report = packing.report;
+            for (int c = 1; c < hldata::kCharacterCount; ++c)
+            {
+                const std::string name = hldata::kCharacterFiles[c];
+                lean.add(stage / "chr" / ("g_" + name + ".hmd"), "chr/" + name + ".hmd", false, false);
+                lean.add(stage / "chr" / ("g_" + name + ".htx"), "chr/" + name + ".htx", false, false);
+                fine.add(stage / "chr" / (name + ".dsi.hmd"), "chr/" + name + ".hmd", false, false);
+                fine.add(stage / "chr" / (name + ".dsi.htx"), "chr/" + name + ".htx", false, false);
+            }
+            if (!writeBank(lean.members, card / "air" / "chr.bank", error) ||
+                !writeBank(fine.members, card / "air" / "chr.dsi.bank", error))
                 return false;
         }
         std::size_t raw[static_cast<int>(hldata::GuestKind::Count)] = {};

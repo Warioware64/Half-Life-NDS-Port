@@ -1327,6 +1327,7 @@ int main(int argc, char *argv[])
             if (hlrt::netGame.airAsked(air))
             {
                 leaving();
+                hlrt::netGame.forMapLoad();
                 if (air.stream == hldata::AirStream::Base)
                 {
                     guestBaseProgress(0);
@@ -1348,8 +1349,6 @@ int main(int argc, char *argv[])
                     hlrt::guest::offerAir(air.name);
                     guestMapName = air.name;
                     hlrt::guest::onMapProgress(guestMapProgress);
-                    // (The host's picture of it goes: its memory is the map's.)
-                    hlrt::mapCard.dropPicture();
                     holdLoad = true;
                     const LoadResult loaded = loadLevel(air.name, nullptr, error);
                     holdLoad = false;

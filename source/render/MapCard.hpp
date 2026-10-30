@@ -13,6 +13,7 @@
 #include <string>
 
 #include "HlNetMaps.hpp"
+#include "HlPreview.hpp"
 
 namespace hlrt
 {
@@ -24,12 +25,17 @@ namespace hlrt
         /// Nothing is made again for the card already shown.
         void show(const hldata::NetMapInfo *map, const char *elsewhere = nullptr);
         void hide() { show(nullptr); }
-        /// A picture of `name` the host sent (a whole .hpv: HlPreview.hpp),
-        /// kept to show in place of the card's -- a console that was sent
-        /// the game has no card. Shown now if that map's card is.
-        void givePicture(const char *name, const std::uint8_t *file);
-        /// ... and let go (a match begins: its memory is the map's).
+        /// A picture of `name` the host sent (a .hpv of either size:
+        /// HlPreview.hpp), kept to show in place of the card's -- a console
+        /// that was sent the game has no card. This takes `file` over. All of
+        /// the host's are kept, so that its map changing shows at once.
+        /// Shown now if that map's card is.
+        void givePicture(const char *name, std::uint8_t *file, std::size_t size);
+        /// ... and all let go (a match begins: its memory is the map's).
         void dropPicture();
+        /// The name of the map of the host's with this hash, if a picture of
+        /// it came; else null.
+        const char *pictureName(std::uint32_t hash) const;
         /// What a console sent the game that is here has room for (KB, the
         /// least of them; 0: none, or not said): what the card says fits.
         void setRoom(std::uint32_t kb)
@@ -57,11 +63,18 @@ namespace hlrt
 
     private:
         std::string shownName_;
-        std::string givenName_;
         std::uint32_t room_ = 0;
         bool showRules_ = false;
         unsigned rulesStamp_ = 0;
-        std::uint8_t *given_ = nullptr; ///< (a .hpv, kPreviewBytes)
+        struct Given
+        {
+            std::uint8_t *data = nullptr; ///< a .hpv
+            std::uint32_t size = 0;
+            char name[24] = {};
+        };
+        static constexpr int kGiven = 24;
+        Given given_[kGiven];
+        int pictureW_ = hldata::kPreviewWidth, pictureH_ = hldata::kPreviewHeight;
         void *picture_ = nullptr; ///< (NEA_Material), when there is a picture
         void *text_ = nullptr;    ///< (NEA_Material)
         void *textPalette_ = nullptr;

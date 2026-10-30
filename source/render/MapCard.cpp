@@ -51,18 +51,35 @@ namespace hlrt
         picture_ = text_ = textPalette_ = nullptr;
     }
 
-    void MapCard::givePicture(const char *name, const std::uint8_t *file)
+    void MapCard::givePicture(const char *name, std::uint8_t *file, std::size_t size)
     {
-        if (!previewValid(file, kPreviewBytes))
+        if (previewWidthOf(file, size) == 0)
+        {
+            std::free(file);
             return;
-        if (given_ == nullptr)
-            given_ = static_cast<std::uint8_t *>(std::malloc(kPreviewBytes));
-        if (given_ == nullptr)
+        }
+        Given *place = nullptr;
+        for (Given &one : given_)
+        {
+            if (one.data != nullptr && std::strcmp(one.name, name) == 0)
+                place = &one;
+        }
+        for (Given &one : given_)
+        {
+            if (place == nullptr && one.data == nullptr)
+                place = &one;
+        }
+        if (place == nullptr)
+        {
+            std::free(file);
             return;
-        std::memcpy(given_, file, kPreviewBytes);
-        givenName_ = name;
+        }
+        std::free(place->data);
+        place->data = file;
+        place->size = static_cast<std::uint32_t>(size);
+        std::snprintf(place->name, sizeof(place->name), "%s", name);
         // (Its card again, with it.)
-        if (shownName_ == givenName_)
+        if (shownName_ == name)
         {
             release();
             shownName_.clear();
@@ -71,9 +88,21 @@ namespace hlrt
 
     void MapCard::dropPicture()
     {
-        std::free(given_);
-        given_ = nullptr;
-        givenName_.clear();
+        for (Given &one : given_)
+        {
+            std::free(one.data);
+            one = Given();
+        }
+    }
+
+    const char *MapCard::pictureName(std::uint32_t hash) const
+    {
+        for (const Given &one : given_)
+        {
+            if (one.data != nullptr && nameHash(one.name) == hash)
+                return one.name;
+        }
+        return nullptr;
     }
 
     void MapCard::show(const NetMapInfo *map, const char *elsewhere)
@@ -88,23 +117,35 @@ namespace hlrt
 
         // The picture: the one the host sent, or the one this console took.
         bool pictured = false;
-        const bool given = given_ != nullptr && givenName_ == name;
+        const Given *given = nullptr;
+        for (const Given &one : given_)
+        {
+            if (one.data != nullptr && name == one.name)
+                given = &one;
+        }
         std::FILE *file = !given && map != nullptr && global.hasFat
                               ? std::fopen((global.savesDir() + kPreviewFolder + map->name + ".hpv").c_str(), "rb")
                               : nullptr;
-        if (given || file != nullptr)
+        if (given != nullptr || file != nullptr)
         {
-            auto *bytes = static_cast<std::uint8_t *>(std::malloc(kPreviewBytes));
+            const std::size_t length = given != nullptr ? given->size : kPreviewBytes;
+            auto *bytes = static_cast<std::uint8_t *>(std::malloc(length));
             // (A texture is 128 square: the picture in its top 96 rows.)
             auto *texels = static_cast<std::uint16_t *>(std::calloc(128 * 128, 2));
             bool got = bytes != nullptr;
-            if (got && given)
-                std::memcpy(bytes, given_, kPreviewBytes);
+            if (got && given != nullptr)
+                std::memcpy(bytes, given->data, length);
             else if (got)
                 got = std::fread(bytes, 1, kPreviewBytes, file) == kPreviewBytes;
-            if (texels != nullptr && got && previewValid(bytes, kPreviewBytes))
+            const int width = got ? previewWidthOf(bytes, length) : 0;
+            if (texels != nullptr && width != 0)
             {
-                std::memcpy(texels, bytes + sizeof(PreviewHeader), kPreviewBytes - sizeof(PreviewHeader));
+                // (A small one: row by row into a texture as wide as ever.)
+                pictureW_ = width;
+                pictureH_ = width == kPreviewWidth ? kPreviewHeight : kPreviewSmallHeight;
+                for (int y = 0; y < pictureH_; ++y)
+                    std::memcpy(texels + y * 128, bytes + sizeof(PreviewHeader) + static_cast<std::size_t>(y) * pictureW_ * 2,
+                                static_cast<std::size_t>(pictureW_) * 2);
                 NEA_Material *material = NEA_MaterialCreate();
                 if (material != nullptr &&
                     NEA_MaterialTexLoad(material, NEA_A1RGB5, 128, 128, NEA_TEXGEN_TEXCOORD, texels) == 1)
@@ -240,9 +281,9 @@ namespace hlrt
         }
         GFX_BEGIN = GL_QUADS;
         corner(kPictureX, kTop, 0, 0);
-        corner(kPictureX, kTop + kPictureH, 0, kPreviewHeight);
-        corner(kPictureX + kPictureW, kTop + kPictureH, kPreviewWidth, kPreviewHeight);
-        corner(kPictureX + kPictureW, kTop, kPreviewWidth, 0);
+        corner(kPictureX, kTop + kPictureH, 0, pictureH_);
+        corner(kPictureX + kPictureW, kTop + kPictureH, pictureW_, pictureH_);
+        corner(kPictureX + kPictureW, kTop, pictureW_, 0);
         GFX_COLOR = 0x7FFF;
         NEA_PolyFormat(31, 3, static_cast<NEA_LightEnum>(0), NEA_CULL_NONE, NEA_DEPTH_TEST_EQUAL);
         NEA_MaterialUse(static_cast<const NEA_Material *>(text_));

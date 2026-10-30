@@ -1,8 +1,10 @@
 #include "net/NetGame.hpp"
+#include "net/AirDevice.hpp"
 
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <new>
 
 #include <nds.h>
 
@@ -21,6 +23,8 @@
 #include "render/EffectDraw.hpp"
 #include "render/MapCard.hpp"
 #include "HlPreview.hpp"
+#include "HlAirBank.hpp"
+#include "HlLz77Stream.hpp"
 #include <sys/stat.h>
 #ifdef HLDS_CHILD
 #include "net/GuestLoad.hpp"
@@ -251,115 +255,455 @@ namespace hlrt
             if (match_.rules.mapHash != 0 && nameHash(map.c_str()) == match_.rules.mapHash)
                 return map.c_str();
         }
-        if (!previewName_.empty() && nameHash(previewName_.c_str()) == match_.rules.mapHash)
-            return previewName_.c_str();
+        if (const char *pictured = mapCard.pictureName(match_.rules.mapHash))
+            return pictured;
         return lobbyMap_.c_str();
     }
 
-    void NetGame::previewEnd()
+    // ---------------------------------------------- what is asked for (HlAirBank.hpp)
+
+    void NetGame::fetchDrop()
     {
-        std::free(previewRing_);
-        previewRing_ = nullptr;
-        preview_.ring = nullptr;
+        std::free(takingRoom_);
+        takingRoom_ = nullptr;
+        takingOn_ = false;
     }
 
-    void NetGame::previewTick()
+    void NetGame::fetchAsk(FetchFrom from, std::uint32_t what)
     {
-        // (A client in its lobby: nothing is asked for while a match begins.)
-        const std::uint32_t hash = match_.rules.mapHash;
-        if (isHost() || phase_ != Phase::Lobby || starting_ || hash == 0 || hash == previewHad_)
+        fetchDrop();
+        taking_.want(from, what);
+        takingOn_ = true;
+        takingAskedAt_ = takingSaidAt_ = Global::vblanks();
+        takingTries_ = 0;
+        netSay(match_, netEvent(NetEventType::Fetch, static_cast<int>(from), static_cast<std::int16_t>(what & 0xFFFF),
+                                static_cast<std::int16_t>(what >> 16)));
+    }
+
+    void NetGame::fetchSayHave()
+    {
+        takingSaidAt_ = Global::vblanks();
+        const std::uint64_t bits = taking_.have;
+        netSay(match_, netEvent(NetEventType::FetchHave, taking_.id, static_cast<std::int16_t>(taking_.base),
+                                static_cast<std::int16_t>(bits & 0xFFFF), static_cast<std::int16_t>((bits >> 16) & 0xFFFF),
+                                static_cast<std::int16_t>((bits >> 32) & 0xFFFF), static_cast<std::int16_t>(bits >> 48)));
+    }
+
+    /// Nothing of it to be had, or it would not come: on with the next.
+    void NetGame::fetchGaveUp()
+    {
+        const FetchFrom from = taking_.from;
+        fetchDrop();
+        if (from == FetchFrom::Picture || from == FetchFrom::PictureFull)
+            pictureNext_ = -1;
+        else
+            personWanted_ = 0;
+    }
+
+    void NetGame::fetchFrame(const FetchHead &head)
+    {
+        if (!takingOn_ || !taking_.isFor(head))
             return;
-        if (previewRing_ != nullptr && previewHash_ == hash)
+        takingAskedAt_ = Global::vblanks();
+        if (taking_.needsRoom(head))
         {
-            // (Ten seconds and nothing: the host has no picture of it.)
-            if (Global::vblanks() - previewSince_ > 10 * 60)
+            std::free(takingRoom_);
+            takingRoom_ = static_cast<std::uint8_t *>(std::malloc(head.packed > 0 ? head.packed : 1));
+            if (takingRoom_ == nullptr)
             {
-                previewHad_ = hash;
-                previewEnd();
-            }
-            return;
-        }
-        // Another map: a picture of it here already, or not the card's?
-#ifndef HLDS_CHILD
-        const char *map = lobbyMap();
-        if (map[0] == 0 || mapPictured(map))
-        {
-            previewHad_ = hash;
-            return;
-        }
-#endif
-        previewEnd();
-        previewRing_ = static_cast<std::uint8_t *>(std::malloc(airPieces(kPreviewBytes) * kAirPiece));
-        if (previewRing_ == nullptr)
-            return;
-        preview_.want(AirStream::Preview, "", previewRing_);
-        previewHash_ = hash;
-        previewSince_ = Global::vblanks();
-    }
-
-    void NetGame::previewFrame(const AirHead &head)
-    {
-        if (previewRing_ == nullptr || nameHash(head.name) != previewHash_ || !preview_.frame(head))
-            return;
-        if (!preview_.known || preview_.base < preview_.pieces() || preview_.length != kPreviewBytes)
-            return;
-        // All of it: in the window's slots in order, the whole file. Kept --
-        // on the card, beside this console's own; a console without one
-        // keeps it for its map card -- and the host told, for a while.
-        if (previewValid(previewRing_, kPreviewBytes))
-        {
-            previewName_ = head.name;
-#ifdef HLDS_CHILD
-            mapCard.givePicture(head.name, previewRing_);
-#else
-            const std::string folder = global.savesDir() + kPreviewFolder;
-            mkdir(folder.c_str(), 0777);
-            if (std::FILE *file = std::fopen((folder + head.name + ".hpv").c_str(), "wb"))
-            {
-                std::fwrite(previewRing_, 1, kPreviewBytes, file);
-                std::fclose(file);
-            }
-            mapCard.hide();
-#endif
-        }
-        previewHad_ = previewHash_;
-        previewEnd();
-    }
-
-#ifndef HLDS_CHILD
-    void NetGame::previewPush()
-    {
-        // Round and round, a piece every other frame, to whoever listens: no
-        // one asks and no one answers, so a console that comes late simply
-        // hears the next round. (No file, no picture: nothing is sent.)
-        const std::string *map = phase_ == Phase::Hosting && netlink::clients() != 0 ? hostedMap(maps_) : nullptr;
-        if (map == nullptr || *map != previewSent_)
-        {
-            if (previewFile_ != nullptr)
-                std::fclose(previewFile_);
-            previewFile_ = nullptr;
-            previewSent_.clear();
-            previewAt_ = 0;
-            if (map == nullptr)
+                fetchGaveUp();
                 return;
-            previewSent_ = *map;
-            if (mapPictured(*map))
-                previewFile_ = std::fopen((global.savesDir() + kPreviewFolder + *map + ".hpv").c_str(), "rb");
-            previewOut_.begin(AirStream::Preview, map->c_str(), kPreviewBytes, 1, 0);
+            }
+            taking_.begin(head);
+#ifndef HLDS_CHILD
+            // (A console with a card keeps its own: only what it has not.)
+            if (head.from == FetchFrom::PictureFull)
+            {
+                for (const std::string &map : maps_)
+                {
+                    if (nameHash(map.c_str()) == head.name && mapPictured(map))
+                    {
+                        taking_.base = static_cast<std::uint32_t>(taking_.pieces);
+                        fetchSayHave();
+                        fetchDrop();
+                        ++pictureNext_;
+                        return;
+                    }
+                }
+            }
+#endif
         }
-        if (previewFile_ == nullptr || (++previewTicks_ & 1) != 0)
+        taking_.piece(head, takingRoom_);
+        if (!taking_.whole())
             return;
-        std::uint8_t piece[kAirPiece];
-        std::uint8_t bytes[kNetCmdBytes];
-        const int count = previewOut_.pieceBytes(previewAt_);
-        if (std::fseek(previewFile_, static_cast<long>(previewAt_) * kAirPiece, SEEK_SET) == 0 &&
-            std::fread(piece, 1, static_cast<std::size_t>(count), previewFile_) == static_cast<std::size_t>(count))
+        if (crc32(takingRoom_, taking_.packed) != taking_.crc)
         {
-            const int size = previewOut_.piece(previewAt_, piece, count, bytes);
-            if (size > 0)
-                netlink::send(bytes, size);
+            taking_.base = 0;
+            taking_.have = 0;
+            netSay(match_, netEvent(NetEventType::FetchAgain, taking_.id));
+            return;
         }
-        previewAt_ = previewAt_ + 1 >= previewOut_.pieces() ? 0 : previewAt_ + 1;
+        fetchSayHave();
+        fetchDeliver();
+    }
+
+    void NetGame::fetchDeliver()
+    {
+        // What it comes to, undone. (It was sent as it is if that is no longer.)
+        std::uint8_t *data = takingRoom_;
+        takingRoom_ = nullptr;
+        const std::uint32_t raw = taking_.raw;
+        if (raw != taking_.packed)
+        {
+            auto *undone = static_cast<std::uint8_t *>(std::malloc(raw > 0 ? raw : 1));
+            // (Its history is 4 KB: not on the stack, and only for now.)
+            void *room = std::malloc(sizeof(Lz77Stream));
+            bool good = undone != nullptr && room != nullptr;
+            if (good)
+            {
+                auto *lz = new (room) Lz77Stream();
+                lz->begin(raw);
+                const std::uint8_t *in = data;
+                std::size_t left = taking_.packed;
+                good = lz->pump(in, left, undone, raw) == raw && !lz->failed();
+            }
+            std::free(room);
+            std::free(data);
+            if (!good)
+            {
+                std::free(undone);
+                fetchGaveUp();
+                return;
+            }
+            data = undone;
+        }
+        const FetchFrom from = taking_.from;
+        takingOn_ = false;
+        if (from == FetchFrom::Picture || from == FetchFrom::PictureFull)
+        {
+            ++pictureNext_;
+            // A picture, then the name of its map (kAirNameBytes).
+            const std::size_t bytes = raw > kAirNameBytes ? raw - kAirNameBytes : 0;
+            char name[kAirNameBytes] = {};
+            if (raw > kAirNameBytes)
+                std::memcpy(name, data + bytes, kAirNameBytes - 1);
+#ifdef HLDS_CHILD
+            mapCard.givePicture(name, data, bytes);
+#else
+            if (previewWidthOf(data, bytes) == kPreviewWidth && name[0] != 0)
+            {
+                const std::string folder = global.savesDir() + kPreviewFolder;
+                mkdir(folder.c_str(), 0777);
+                if (std::FILE *file = std::fopen((folder + name + ".hpv").c_str(), "wb"))
+                {
+                    std::fwrite(data, 1, bytes, file);
+                    std::fclose(file);
+                }
+                mapCard.hide();
+            }
+            std::free(data);
+#endif
+            return;
+        }
+#ifdef HLDS_CHILD
+        // Who a player chose to be: a file now, as a console with a card has it.
+        const std::string base = std::string("chr/") + kCharacterFiles[personWanted_];
+        const bool model = personStage_ == 0;
+        if (!air::putMapFile((base + (model ? ".hmd" : ".htx")).c_str(), data, raw))
+            std::free(data);
+        if (model)
+        {
+            personStage_ = 1;
+            fetchAsk(taking_.from, nameHash((base + ".htx").c_str()));
+            return;
+        }
+        for (int &have : personsHad_)
+        {
+            if (have == 0)
+            {
+                have = personWanted_;
+                break;
+            }
+        }
+        personWanted_ = 0;
+        personStage_ = 0;
+#else
+        std::free(data);
+#endif
+    }
+
+    void NetGame::fetchTick()
+    {
+        if (phase_ != Phase::Lobby || starting_)
+        {
+            fetchDrop();
+            return;
+        }
+        const std::uint32_t now = Global::vblanks();
+        if (takingOn_)
+        {
+            if (taking_.known && now - takingSaidAt_ >= 12)
+                fetchSayHave();
+            // (Nothing for a while: asked again; then not.)
+            if (now - takingAskedAt_ > 180)
+            {
+                if (++takingTries_ > 3)
+                {
+                    fetchGaveUp();
+                    return;
+                }
+                takingAskedAt_ = now;
+                netSay(match_, netEvent(NetEventType::Fetch, static_cast<int>(taking_.from),
+                                        static_cast<std::int16_t>(taking_.what & 0xFFFF),
+                                        static_cast<std::int16_t>(taking_.what >> 16)));
+            }
+            return;
+        }
+#ifdef HLDS_CHILD
+        const bool full = global.twlChild;
+        // Who is looked at, first: it is on the screen.
+        if (personWanted_ > 0)
+        {
+            const std::string file = std::string("chr/") + kCharacterFiles[personWanted_] + ".hmd";
+            personStage_ = 0;
+            fetchAsk(full ? FetchFrom::PeopleFull : FetchFrom::People, nameHash(file.c_str()));
+            return;
+        }
+        // Then every picture of the host's maps, while there is room.
+        if (pictureNext_ >= 0 && global.heapHeadroom() > (full ? 2048u : 512u) * 1024u)
+            fetchAsk(full ? FetchFrom::PictureFull : FetchFrom::Picture, static_cast<std::uint32_t>(pictureNext_));
+#else
+        if (pictureNext_ >= 0)
+            fetchAsk(FetchFrom::PictureFull, static_cast<std::uint32_t>(pictureNext_));
+#endif
+    }
+
+    bool NetGame::personHere(int id) const
+    {
+#ifdef HLDS_CHILD
+        for (const int have : personsHad_)
+        {
+            if (have == id)
+                return true;
+        }
+#else
+        (void)id;
+#endif
+        return false;
+    }
+
+    void NetGame::wantPerson(int id)
+    {
+#ifdef HLDS_CHILD
+        if (personWanted_ == id)
+            return;
+        // (Room for the last two: then they go. Their memory is little, but it
+        // is not the lobby's alone.)
+        if (personsHad_[0] != 0 && personsHad_[1] != 0)
+            dropPeople();
+        personWanted_ = id;
+        // What it is doing makes way for who is looked at, if it is a picture.
+        if (takingOn_ && (taking_.from == FetchFrom::Picture || taking_.from == FetchFrom::PictureFull))
+            fetchDrop();
+#else
+        (void)id;
+#endif
+    }
+
+    void NetGame::dropPeople()
+    {
+#ifdef HLDS_CHILD
+        air::dropCharacters();
+        personsHad_[0] = personsHad_[1] = 0;
+#endif
+    }
+
+    void NetGame::forMapLoad()
+    {
+        fetchDrop();
+        dropPeople();
+        personWanted_ = 0;
+        mapCard.dropPicture();
+    }
+
+#ifndef HLDS_CHILD
+    /// The bytes of what is asked for, from wherever it is: false if there is
+    /// no such thing.
+    bool NetGame::fetchFind(const FetchHost::Asked &asked, std::uint8_t *&data, std::uint32_t &packed, std::uint32_t &raw,
+                            std::uint32_t &name)
+    {
+        if (asked.from == FetchFrom::Picture || asked.from == FetchFrom::PictureFull)
+        {
+            // The `what`-th map that has one.
+            std::uint32_t n = 0;
+            for (const std::string &map : maps_)
+            {
+                if (!mapPictured(map) || n++ != asked.what)
+                    continue;
+                std::FILE *file = std::fopen((global.savesDir() + kPreviewFolder + map + ".hpv").c_str(), "rb");
+                if (file == nullptr)
+                    return false;
+                const bool small = asked.from == FetchFrom::Picture;
+                const std::size_t pictureBytes = small ? kPreviewSmallBytes : kPreviewBytes;
+                data = static_cast<std::uint8_t *>(std::malloc(pictureBytes + kAirNameBytes));
+                auto *whole = data != nullptr ? static_cast<std::uint8_t *>(small ? std::malloc(kPreviewBytes) : data) : nullptr;
+                const bool got = whole != nullptr && std::fread(whole, 1, kPreviewBytes, file) == kPreviewBytes &&
+                                 previewValid(whole, kPreviewBytes);
+                std::fclose(file);
+                if (!got)
+                {
+                    if (small)
+                        std::free(whole);
+                    std::free(data);
+                    data = nullptr;
+                    return false;
+                }
+                if (small)
+                {
+                    PreviewHeader header;
+                    previewHeader(header);
+                    header.width = kPreviewSmallWidth;
+                    header.height = kPreviewSmallHeight;
+                    std::memcpy(data, &header, sizeof(header));
+                    const auto *from = reinterpret_cast<const std::uint16_t *>(whole + sizeof(PreviewHeader));
+                    auto *to = reinterpret_cast<std::uint16_t *>(data + sizeof(PreviewHeader));
+                    for (int y = 0; y < kPreviewSmallHeight; ++y)
+                    {
+                        for (int x = 0; x < kPreviewSmallWidth; ++x)
+                        {
+                            const std::uint32_t a = from[y * 2 * kPreviewWidth + x * 2], b = from[y * 2 * kPreviewWidth + x * 2 + 1],
+                                                c = from[(y * 2 + 1) * kPreviewWidth + x * 2],
+                                                d = from[(y * 2 + 1) * kPreviewWidth + x * 2 + 1];
+                            to[y * kPreviewSmallWidth + x] = static_cast<std::uint16_t>(
+                                0x8000 | ((((a & 31) + (b & 31) + (c & 31) + (d & 31)) / 4)) |
+                                ((((a >> 5 & 31) + (b >> 5 & 31) + (c >> 5 & 31) + (d >> 5 & 31)) / 4) << 5) |
+                                ((((a >> 10 & 31) + (b >> 10 & 31) + (c >> 10 & 31) + (d >> 10 & 31)) / 4) << 10));
+                        }
+                    }
+                    std::free(whole);
+                }
+                std::memset(data + pictureBytes, 0, kAirNameBytes);
+                std::memcpy(data + pictureBytes, map.c_str(), map.size() < kAirNameBytes - 1 ? map.size() : kAirNameBytes - 1);
+                packed = raw = static_cast<std::uint32_t>(pictureBytes + kAirNameBytes);
+                name = nameHash(map.c_str());
+                return true;
+            }
+            return false;
+        }
+        // A member of a bank.
+        const char *bank = asked.from == FetchFrom::People ? "air/chr.bank" : asked.from == FetchFrom::PeopleFull ? "air/chr.dsi.bank" : nullptr;
+        if (bank == nullptr)
+            return false;
+        std::FILE *file = std::fopen(global.dataPath(bank).c_str(), "rb");
+        if (file == nullptr)
+            return false;
+        AirBankHeader header;
+        bool found = false;
+        AirBankEntry entry{};
+        if (std::fread(&header, sizeof(header), 1, file) == 1 && std::memcmp(header.magic, kAirBankMagic, 4) == 0 &&
+            header.version == kAirBankVersion)
+        {
+            for (int i = 0; i < header.count && !found; ++i)
+            {
+                if (std::fread(&entry, sizeof(entry), 1, file) != 1)
+                    break;
+                found = entry.name == asked.what;
+            }
+        }
+        data = found ? static_cast<std::uint8_t *>(std::malloc(entry.packed > 0 ? entry.packed : 1)) : nullptr;
+        found = data != nullptr && std::fseek(file, static_cast<long>(entry.offset), SEEK_SET) == 0 &&
+                std::fread(data, 1, entry.packed, file) == entry.packed;
+        std::fclose(file);
+        if (!found)
+        {
+            std::free(data);
+            data = nullptr;
+            return false;
+        }
+        packed = entry.packed;
+        raw = entry.raw;
+        name = entry.name;
+        return true;
+    }
+
+    void NetGame::fetchHostFrame()
+    {
+        fetch_.frame();
+        // Let go of what nobody wants any more.
+        for (int k = 0; k < FetchHost::kSending; ++k)
+        {
+            if (!fetch_.sending[k].on && fetchData_[k] != nullptr)
+            {
+                std::free(fetchData_[k]);
+                fetchData_[k] = nullptr;
+            }
+        }
+        // In the lobby only, for now, and not while a stream is sent.
+        if (phase_ != Phase::Hosting)
+            return;
+        int who = 0;
+        FetchHost::Asked asked;
+        while (fetch_.nextAsked(who, asked))
+        {
+            std::uint8_t *data = nullptr;
+            std::uint32_t packed = 0, raw = 0, name = 0;
+            if (!fetchFind(asked, data, packed, raw, name))
+            {
+                netSay(match_, netEvent(NetEventType::FetchNone, static_cast<int>(asked.from),
+                                        static_cast<std::int16_t>(asked.what & 0xFFFF),
+                                        static_cast<std::int16_t>(asked.what >> 16)));
+                continue;
+            }
+            const std::uint32_t crc = crc32(data, packed);
+            fetch_.begin(who, asked, name, packed, raw, crc, 0);
+            for (int k = 0; k < FetchHost::kSending; ++k)
+            {
+                if (fetch_.sending[k].on && fetch_.sending[k].head.what == asked.what &&
+                    fetch_.sending[k].head.from == asked.from && fetchData_[k] == nullptr)
+                {
+                    fetchData_[k] = data;
+                    data = nullptr;
+                }
+            }
+            std::free(data);
+        }
+        // As the air has room for, after the game's own frame.
+        const unsigned present = netlink::clients();
+        int clients = 0;
+        for (unsigned bits = present; bits != 0; bits &= bits - 1)
+            ++clients;
+        const int pieces = clients <= 1 ? 3 : (clients <= 3 ? 2 : 1);
+        for (int n = 0; n < pieces; ++n)
+        {
+            FetchHost::Sending *s = nullptr;
+            std::uint32_t index = 0;
+            if (!fetch_.next(s, index))
+                break;
+            const std::uint8_t *data = fetchData_[s - fetch_.sending];
+            if (data == nullptr)
+                break;
+            const std::uint32_t at = index * kFetchPiece;
+            FetchHead head = s->head;
+            head.index = static_cast<std::uint16_t>(index);
+            head.count = s->head.packed - at < kFetchPiece ? static_cast<int>(s->head.packed - at) : kFetchPiece;
+            std::uint8_t bytes[kNetCmdBytes];
+            const int size = fetchWrite(head, data + at, bytes);
+            if (size > 0)
+            {
+                netlink::send(bytes, size);
+                ++sent_;
+            }
+        }
+    }
+
+    void NetGame::fetchHostStop()
+    {
+        fetch_.stop();
+        for (std::uint8_t *&data : fetchData_)
+        {
+            std::free(data);
+            data = nullptr;
+        }
     }
 #endif
 
@@ -453,8 +797,11 @@ namespace hlrt
 
     void NetGame::forgetGuest()
     {
-        previewHad_ = 0;
-        previewEnd();
+        forMapLoad();
+        pictureNext_ = 0;
+#ifndef HLDS_CHILD
+        fetchHostStop();
+#endif
         for (std::uint32_t &at : kickAt_)
             at = 0;
 #ifdef HLDS_CHILD
@@ -564,6 +911,7 @@ namespace hlrt
         serveStage_ = 0;
         serveCharacter_ = 1;
         fullTried_ = false;
+        fetchHostStop();
         serveCharacters_ = 0;
         starting_ = true;
         ready_ = 0;
@@ -1041,6 +1389,7 @@ namespace hlrt
                 {
 #ifndef HLDS_CHILD
                     air_.drop(c);
+                    fetch_.forget(c);
                     guests_ &= ~bit;
 #endif
                     rooms_[c] = 0;
@@ -1101,14 +1450,16 @@ namespace hlrt
                 continue;
             }
 #endif
+            if (size > 3 && bytes[3] == kNetFrameFetchData)
+            {
+                FetchHead head;
+                if (!isHost() && fetchRead(bytes, size, head))
+                    fetchFrame(head);
+                continue;
+            }
             if (size > 3 && bytes[3] == kNetFrameAirData)
             {
                 AirHead head;
-                if (!isHost() && airRead(bytes, size, head) && head.stream == AirStream::Preview)
-                {
-                    previewFrame(head);
-                    continue;
-                }
 #ifndef HLDS_CHILD
                 continue;
 #else
@@ -1166,7 +1517,8 @@ namespace hlrt
                 // (A frame of some kind every frame, whatever: a client
                 // answers only a frame of the host's -- one that has nothing
                 // to say for itself would wait for nothing.)
-                if (phase_ == Phase::Serving && air_.sending())
+                // (A console just come, waiting for the game itself: the same.)
+                if ((phase_ == Phase::Serving || air_.stream == AirStream::Common) && air_.sending())
                 {
                     // (Four a frame: queued, they go back to back -- the radio
                     // starts the next as each exchange ends.)
@@ -1177,15 +1529,14 @@ namespace hlrt
                 }
                 else if (!(air_.sending() && (++ticks_ & 1) && airSend(1) > 0))
                     send();
-                previewPush();
+                fetchHostFrame();
 #endif
             }
             else
             {
                 // A client: what a stream's frame asked to be answered, in
-                // place of the game's. (The host's picture of its map comes
-                // by itself: previewPush.)
-                previewTick();
+                // place of the game's; and on with what it asks for.
+                fetchTick();
                 std::uint8_t reply[kNetReplyBytes];
                 int size = 0;
 #ifdef HLDS_CHILD
@@ -1251,6 +1602,34 @@ namespace hlrt
             if (event.type == NetEventType::End && !isHost() && event.v[0] == 1)
             {
                 lobbyAsked_ = true;
+                continue;
+            }
+#ifndef HLDS_CHILD
+            if (event.type == NetEventType::Fetch && isHost())
+            {
+                fetch_.ask(event.from, static_cast<FetchFrom>(event.a),
+                           static_cast<std::uint16_t>(event.v[0]) | static_cast<std::uint32_t>(static_cast<std::uint16_t>(event.v[1])) << 16);
+                continue;
+            }
+            if (event.type == NetEventType::FetchHave && isHost())
+            {
+                std::uint64_t bits = 0;
+                for (int k = 0; k < 4; ++k)
+                    bits |= static_cast<std::uint64_t>(static_cast<std::uint16_t>(event.v[1 + k])) << (16 * k);
+                fetch_.have(event.from, event.a, static_cast<std::uint16_t>(event.v[0]), bits);
+                continue;
+            }
+            if (event.type == NetEventType::FetchAgain && isHost())
+            {
+                fetch_.again(event.from, event.a);
+                continue;
+            }
+#endif
+            if (event.type == NetEventType::FetchNone && !isHost())
+            {
+                if (takingOn_ && static_cast<FetchFrom>(event.a) == taking_.from &&
+                    (static_cast<std::uint16_t>(event.v[0]) | static_cast<std::uint32_t>(static_cast<std::uint16_t>(event.v[1])) << 16) == taking_.what)
+                    fetchGaveUp();
                 continue;
             }
             if (event.type == NetEventType::Go && !isHost())
@@ -1353,9 +1732,9 @@ namespace hlrt
         match_.firstActor = -1;
         match_.passedCount = 0;
         phase_ = isHost() ? Phase::Hosting : Phase::Lobby;
-        // (Its map's picture asked for again: a console sent the game let go
-        // of it for the match.)
-        previewHad_ = 0;
+        // (The pictures asked for again: a console sent the game let go of
+        // them for the match.)
+        pictureNext_ = 0;
         // (The host takes newcomers again, between matches.)
         if (isHost())
             netlink::admit(true);

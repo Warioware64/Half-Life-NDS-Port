@@ -1260,10 +1260,10 @@ namespace hlrt
                 return true;
             case kProfSprayColour: cycle(settings.sprayColour, kSprayColours); return true;
             case kProfModel:
-                if (childConsole && !global.twlChild)
-                    return false;
                 cycle(settings.playerModel, kCharacterCount);
+#ifndef HLDS_CHILD
                 profileView.open(settings.topColour, settings.bottomColour, settings.playerModel);
+#endif
                 netGame.sayProfile();
                 return true;
             case kNetMode:
@@ -1589,7 +1589,7 @@ namespace hlrt
                 constexpr bool nameLocked = false;
 #endif
                 const bool dead = nameLocked || (item.id == kFirmPress && !Input::pressureSeen()) ||
-                                  (item.id == kQuality && !isDSiMode()) || (item.id == kProfModel && childConsole && !global.twlChild) ||
+                                  (item.id == kQuality && !isDSiMode()) || 
                                   (item.id == kProfSpray && logos.count() == 0) || hostDead(item.id) != nullptr;
                 drawText(band, small, x + 8, textY, item.label, inkFor(small, dead ? kUiGrey : kUiWhite));
                 if (item.kind == Kind::Slider)
@@ -3262,7 +3262,15 @@ namespace hlrt
                 const int top = profile.known ? profile.top : settings.topColour;
                 const int bottom = profile.known ? profile.bottom : settings.bottomColour;
                 profileView.setPlace(42);
-                const int who = profile.known ? profile.model : settings.playerModel;
+                int who = profile.known ? profile.model : settings.playerModel;
+#ifdef HLDS_CHILD
+                // (Asked for: the suit, until it comes.)
+                if (who > 0 && !netGame.personHere(who))
+                {
+                    netGame.wantPerson(who);
+                    who = 0;
+                }
+#endif
                 if (who != lobbyCharacter && profileView.shown())
                     profileView.close();
                 lobbyCharacter = who;

@@ -111,6 +111,10 @@ namespace hldata
         Cancel,   ///< host: the match about to begin is not to; back to the lobby
         Room,     ///< a console sent the game: v[0..1] how far up its memory its heap reaches, v[2..3] what of it
                   ///< is free in its lobby (KB)
+        Fetch,    ///< client: I want this (HlAirBank.hpp): `a` FetchFrom, v[0..1] what
+        FetchHave,///< client: of sending `a`, v[0] the first piece I lack, v[1..4] the bits of those past it
+        FetchAgain,///< client: sending `a` came wrong: all of it, again
+        FetchNone,///< host: there is no such thing: `a` FetchFrom, v[0..1] what
     };
 
     /// The rules' flags (Rules' v[1]): the game's mp_weaponstay,

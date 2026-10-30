@@ -43,6 +43,28 @@ namespace hldata
         header.pad = 0;
     }
 
+    /// A small one (half each way), for a console short of memory: sent it,
+    /// in place of the whole.
+    inline constexpr int kPreviewSmallWidth = kPreviewWidth / 2;
+    inline constexpr int kPreviewSmallHeight = kPreviewHeight / 2;
+    inline constexpr std::size_t kPreviewSmallBytes =
+        sizeof(PreviewHeader) + static_cast<std::size_t>(kPreviewSmallWidth) * kPreviewSmallHeight * 2;
+    /// Whether `bytes` is a picture of either size (and which is its width).
+    inline int previewWidthOf(const std::uint8_t *bytes, std::size_t size)
+    {
+        if (bytes == nullptr || size < sizeof(PreviewHeader))
+            return 0;
+        PreviewHeader header;
+        std::memcpy(&header, bytes, sizeof(header));
+        if (std::memcmp(header.magic, kPreviewMagic, 4) != 0 || header.version != kPreviewVersion)
+            return 0;
+        if (header.width == kPreviewWidth && header.height == kPreviewHeight && size >= kPreviewBytes)
+            return kPreviewWidth;
+        if (header.width == kPreviewSmallWidth && header.height == kPreviewSmallHeight && size >= kPreviewSmallBytes)
+            return kPreviewSmallWidth;
+        return 0;
+    }
+
     /// Whether `bytes` is a picture of this version and size.
     inline bool previewValid(const std::uint8_t *bytes, std::size_t size)
     {
