@@ -10,6 +10,9 @@
 #include "Global.hpp"
 #include "net/GuestLoad.hpp"
 #include "net/NetGame.hpp"
+#ifdef HLDS_CHILD
+#include "net/AirDevice.hpp"
+#endif
 #include "Settings.hpp"
 #include "HlRoomPresets.hpp"
 #include "HlStereoMusic.hpp"
@@ -559,27 +562,55 @@ namespace hlrt
     /// is not in memory (a frame's wait, once), and said to be played.
     bool Sound::fetchAhead()
     {
+#ifdef HLDS_CHILD
         for (; lazy_ != nullptr && aheadNext_ < count_; ++aheadNext_)
         {
             if (lazy_[aheadNext_] == 0)
                 continue;
             const std::string path = std::string("snd/") + level.view.sounds[aheadNext_].name + ".hsn";
-            std::FILE *file = std::fopen(global.commonPath(path).c_str(), "rb");
-            if (file != nullptr)
-            {
-                std::fclose(file);
+            if (air::has(path.c_str()))
                 continue;
-            }
             if (netGame.fetchFile(path.c_str()))
                 return true;
         }
+#endif
         return false;
+    }
+
+    void Sound::askGun(const char *viewModel)
+    {
+#ifdef HLDS_CHILD
+        if (!global.twlChild || lazy_ == nullptr || viewModel == nullptr)
+            return;
+        for (const GunSounds &gun : kGunSounds)
+        {
+            if (std::strcmp(gun.viewModel, viewModel) != 0)
+                continue;
+            for (int i = static_cast<int>(gun.first); i <= static_cast<int>(gun.last) && i < count_; ++i)
+            {
+                if (lazy_[i] == 0 || clips_[i].data != nullptr)
+                    continue;
+                const std::string path = std::string("snd/") + level.view.sounds[i].name + ".hsn";
+                if (!air::has(path.c_str()))
+                    netGame.fetchFile(path.c_str(), true);
+            }
+        }
+#else
+        (void)viewModel;
+#endif
     }
 
     void Sound::lazyTouch(int sound)
     {
         if (lazy_ == nullptr || sound < 0 || sound >= count_ || lazy_[sound] == 0)
             return;
+        // In DSi mode there is room: what has come stays, for the map.
+        if (global.twlChild)
+        {
+            if (clips_[sound].data == nullptr && !readClip(level.view.sounds[sound].name, clips_[sound]))
+                netGame.fetchFile((std::string("snd/") + level.view.sounds[sound].name + ".hsn").c_str(), true);
+            return;
+        }
         const std::uint32_t now = Global::vblanks();
         for (int k = 0; k < kLazyClips; ++k)
         {
@@ -621,10 +652,6 @@ namespace hlrt
         }
         if (global.heapHeadroom() < 200 * 1024 || !readClip(level.view.sounds[sound].name, clips_[sound]))
         {
-#ifdef HLDS_CHILD
-            // (Silent this once; there the next.)
-            netGame.fetchFile((std::string("snd/") + level.view.sounds[sound].name + ".hsn").c_str());
-#endif
             return;
         }
         lazyClip_[place] = sound;

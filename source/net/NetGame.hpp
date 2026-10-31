@@ -264,7 +264,7 @@ namespace hlrt
         char fileAsks_[kFileAsks][kFilePath] = {};
         int fileCount_ = 0;
         char filePath_[kFilePath] = {}; ///< the one on its way ('\0': none, or a texture)
-        std::uint32_t fileNone_[32] = {};
+        std::uint32_t fileNone_[64] = {};
         int fileNoneCount_ = 0;
         void fetchGaveUp(bool none = false);
         void fetchFrame(const hldata::FetchHead &head);

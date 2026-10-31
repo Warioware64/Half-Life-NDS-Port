@@ -302,12 +302,14 @@ namespace hlrt
                 bestScore = score;
             }
         }
-        // (All here: on with what is not wanted yet, while it is quiet.)
-        if (best < 0)
+        // (All here: on with what is not wanted yet, while it is quiet. And
+        // nothing wanted just now: in turn with the rest of the textures.)
+        static bool heardTurn = false;
+        heardTurn = !heardTurn;
+        if (best < 0 || (bestScore < 1000 && heardTurn && prerolled()))
         {
-            if (!modelCache.fetchAhead())
-                sound.fetchAhead();
-            return;
+            if ((sound.fetchAhead() || modelCache.fetchAhead()) || best < 0)
+                return;
         }
         const TextureRef &ref = level.view.textures[best];
         char name[48] = "tex/";

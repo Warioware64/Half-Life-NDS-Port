@@ -206,7 +206,7 @@ namespace hlrt
         const NetMatch &match = netGame.match();
         const int p = id - match.firstActor;
         if (actor.kind != static_cast<std::uint8_t>(ActorKind::Player) || p < 0 || p >= kNetPlayers ||
-            worldDraw.pressure() >= 2 || strained_)
+            worldDraw.pressure() >= 2 || handsCut_)
             return;
         const NetPlayer &player = netPlayer(match, p);
         const int m = modelCache.heldModel(player.weapon);
@@ -633,6 +633,33 @@ namespace hlrt
                 one.polygons[l] = static_cast<std::uint16_t>(p);
                 one.vertices[l] = static_cast<std::uint16_t>(v);
             }
+            // (A player's: and the gun in their hand, drawn at its coarsest.)
+            {
+                const NetMatch &match = netGame.match();
+                const int player = seen[n] - match.firstActor;
+                if (actor.kind == static_cast<std::uint8_t>(ActorKind::Player) && player >= 0 && player < kNetPlayers)
+                {
+                    const int m = modelCache.heldModel(netPlayer(match, player).weapon);
+                    if (m >= 0 && m < actors.modelCount && actors.models[m].header != nullptr)
+                    {
+                        const ModelView &gun = actors.models[m];
+                        const int coarse = gun.levelCount() - 1;
+                        int p = 0, v = 0;
+                        for (int b = 0; b < gun.header->batchCount; ++b)
+                        {
+                            if (!gun.batchInBody(gun.batches[b], 0, 0, coarse))
+                                continue;
+                            p += gun.batches[b].polygons;
+                            v += gun.batches[b].vertices;
+                        }
+                        for (int l = 0; l < levels; ++l)
+                        {
+                            one.polygons[l] = static_cast<std::uint16_t>(one.polygons[l] + p);
+                            one.vertices[l] = static_cast<std::uint16_t>(one.vertices[l] + v);
+                        }
+                    }
+                }
+            }
         }
         // The models' share of this pass: as much of it as it always was,
         // but no more than seven tenths of what the pass now has (when the
@@ -652,6 +679,8 @@ namespace hlrt
         vertices = chosen.vertices;
         grown_ = chosen.grown;
         strained_ = chosen.strained;
+        // (What is in someone's hand goes only when people have gone too.)
+        handsCut_ = chosen.cut[kDrawPerson] > 0 || chosen.cut[kDrawEnemy] > 0;
         int kept = 0;
         for (int n = 0; n < looked; ++n)
         {

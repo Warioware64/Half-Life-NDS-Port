@@ -136,6 +136,7 @@ namespace hlrt
         std::uint16_t planFrame_ = 0;
         int hidden_ = 0;
         bool strained_ = false;
+        bool handsCut_ = false;
         bool heldDrawn_ = false;
     };
 

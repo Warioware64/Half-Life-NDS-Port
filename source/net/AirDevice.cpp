@@ -4,6 +4,7 @@
 #include "Global.hpp"
 
 #include "HlUi.hpp"
+#include "HlLevel.hpp"
 
 #include <nds.h>
 #include <nds/arm9/device_io.h>
@@ -22,17 +23,24 @@ namespace hlrt::air
         constexpr int kNameBytes = 32;
 
         constexpr int kOwnedFiles = 64;
+        /// In DSi mode what a match asks for comes here too: all of a map's
+        /// bank that is not a texture has a place. (From the heap, there being
+        /// plenty: a DS keeps its 64 in the program.)
+        constexpr int kOwnedFilesMore = 192;
 
         struct File
         {
-            char name[kNameBytes] = {};
+            char name[kNameBytes] = {}; ///< (a longer name: as much as fits ...)
+            std::uint32_t whole = 0;    ///< (... and the whole of it, hashed)
             const std::uint8_t *data = nullptr;
             std::uint32_t size = 0; ///< as it is read: undone, if it is packed
             std::uint32_t packedSize = 0; ///< what it is kept as, if it is packed (0: it is not)
             bool owned = false;
             bool ofMap = false; ///< the map's (a weapon lying about): let go with it
         };
-        File files[kOwnedFiles];
+        File filesHere[kOwnedFiles];
+        File *files = filesHere;
+        int fileRoom = kOwnedFiles;
         int fileCount = 0;
         bool installed = false;
         hldata::GuestCursor *cursor = nullptr;
@@ -129,7 +137,8 @@ namespace hlrt::air
             const char *want = bare(path);
             for (int i = 0; i < fileCount; ++i)
             {
-                if (std::strcmp(files[i].name, want) == 0)
+                if (std::strncmp(files[i].name, want, kNameBytes - 1) == 0 &&
+                    (std::strlen(want) < kNameBytes || files[i].whole == hldata::nameHash(want)))
                     return &files[i];
             }
             return nullptr;
@@ -311,10 +320,22 @@ namespace hlrt::air
             File *slot = const_cast<File *>(find(name));
             if (slot == nullptr)
             {
-                if (fileCount == kOwnedFiles || std::strlen(name) >= kNameBytes)
+                if (fileCount == fileRoom && global.twlChild && files == filesHere)
+                {
+                    auto *more = static_cast<File *>(std::calloc(kOwnedFilesMore, sizeof(File)));
+                    if (more != nullptr)
+                    {
+                        std::memcpy(more, filesHere, sizeof(filesHere));
+                        files = more;
+                        fileRoom = kOwnedFilesMore;
+                    }
+                }
+                if (fileCount == fileRoom)
                     return false;
                 slot = &files[fileCount++];
-                std::strcpy(slot->name, name);
+                std::strncpy(slot->name, name, kNameBytes - 1);
+                slot->name[kNameBytes - 1] = '\0';
+                slot->whole = hldata::nameHash(name);
             }
             else if (slot->owned)
             {

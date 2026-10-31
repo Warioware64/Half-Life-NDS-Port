@@ -8,6 +8,7 @@
 #include <string>
 
 #include "Global.hpp"
+#include "audio/Sound.hpp"
 #include "data/CardRead.hpp"
 #include "data/LevelFile.hpp"
 #include "data/TextureCache.hpp"
@@ -432,6 +433,8 @@ namespace hlrt
     void ModelCache::wield(int index)
     {
         wanted_ = index;
+        if (index >= 0 && index < count_)
+            sound.askGun(level.view.modelRefs[index].name);
         if (!lazy(index))
             return;
         // (Now, not a frame on: the game looks into a weapon's clips as it
@@ -656,6 +659,23 @@ namespace hlrt
             lazyMask_ = static_cast<std::uint16_t>(lazyMask_ | (have & ~haveSeen_));
         haveSeen_ = have;
         haveKnown_ = true;
+        // What is heard with a gun, once it is anyone's: asked for ahead.
+        {
+            std::uint16_t guns = have;
+            const hldata::NetMatch &match = netGame.match();
+            for (int p = 0; match.playing && p < hldata::kNetPlayers; ++p)
+            {
+                const int weapon = hldata::netPlayer(match, p).weapon;
+                if (p != match.me && hldata::netHere(match, p) && weapon > 0 && weapon < hldata::kWeaponCount)
+                    guns = static_cast<std::uint16_t>(guns | 1u << weapon);
+            }
+            for (int weapon = hldata::kWeaponCrowbar; weapon < hldata::kWeaponCount; ++weapon)
+            {
+                if (((guns & ~gunsAsked_) >> weapon) & 1)
+                    sound.askGun(hldata::kWeaponBundles[weapon].models[0]);
+            }
+            gunsAsked_ = guns | gunsAsked_;
+        }
         const std::uint16_t inHand = wanted_ >= 0 && lazy(wanted_) ? lazy_[wanted_].bundles : 0;
         for (int i = 0; i < count_; ++i)
         {
@@ -764,6 +784,7 @@ namespace hlrt
         }
         count_ = count;
         aheadNext_ = 0;
+        gunsAsked_ = 0;
         heldRefs_ = static_cast<std::int16_t *>(std::malloc(hldata::kWeaponCount * sizeof(std::int16_t)));
         for (int w = 0; heldRefs_ != nullptr && w < hldata::kWeaponCount; ++w)
         {

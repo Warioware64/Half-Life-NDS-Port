@@ -441,7 +441,12 @@ namespace hlrt
 #ifdef HLDS_CHILD
                 if (!air::putMapFile(filePath_, data, raw))
 #endif
+                {
+                    // (No place for it: not asked for again and again.)
                     std::free(data);
+                    if (fileNoneCount_ < static_cast<int>(sizeof(fileNone_) / sizeof(fileNone_[0])))
+                        fileNone_[fileNoneCount_++] = nameHash(filePath_);
+                }
                 filePath_[0] = '\0';
             }
             else

@@ -519,8 +519,18 @@ namespace hldata
                 break;
             case NetEventType::Shot:
                 if (from != match.me && from < kNetPlayers && match.playing && w.heard != nullptr &&
-                    event.a > kWeaponCrowbar && event.a < kWeaponCount && event.a != kWeaponGrenade)
-                    w.heard->add(gunKind(event.a).fire[0], match.glide[from].pos, 110, kRadiusLarge);
+                    event.a > kWeaponCrowbar && event.a < kWeaponCount && event.a != kWeaponGrenade &&
+                    event.a != kWeaponEgon && event.a != kWeaponSatchel && event.a != kWeaponTripmine)
+                {
+                    // (Its own. Not the egon's, which fires a dozen times a
+                    // second, nor what is only put down.)
+                    const CommonSound shot = event.a == kWeaponGauss       ? CommonSound::GaussFire
+                                             : event.a == kWeaponRpg       ? CommonSound::RocketFire
+                                             : event.a == kWeaponHornetgun ? CommonSound::HornetFire1
+                                             : event.a == kWeaponSnark     ? CommonSound::SnarkDeploy
+                                                                           : gunKind(event.a).fire[0];
+                    w.heard->add(shot, match.glide[from].pos, 110, kRadiusLarge);
+                }
                 break;
             case NetEventType::Hit:
                 if (event.a == match.me && from != match.me && match.playing && player.health > 0 &&

@@ -215,6 +215,9 @@ namespace hlrt
         public:
         /// A console in DSi mode, nothing else to ask for: the next it has not.
         bool fetchAhead();
+        /// ... and now what goes with a gun (its view model's name): one
+        /// picked up, or in someone's hand.
+        void askGun(const char *viewModel);
         private:
         int aheadNext_ = 0;
         int loaded_ = 0;

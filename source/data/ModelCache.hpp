@@ -172,6 +172,7 @@ namespace hlrt
         int playerCharacter_[kPlayerColours] = {-1, -1, -1, -1, -1, -1, -1, -1};
         LazyState *lazy_ = nullptr;
         int aheadNext_ = 0;
+        std::uint16_t gunsAsked_ = 0; ///< whose sounds have been asked for
         std::uint16_t lazyMask_ = 0;     ///< the weapons (bits) picked up just now, to load ahead
         std::uint16_t haveSeen_ = 0;     ///< what the player had when last looked
         bool haveKnown_ = false;

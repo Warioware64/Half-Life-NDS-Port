@@ -381,8 +381,30 @@ namespace
     }
 } // namespace
 
+namespace
+{
+    /// The starting pistol, finest, with an opponent or three near: nobody
+    /// is left out (a gun in someone's hand goes only then), and it fits.
+    void testPistolAndPlayers()
+    {
+        for (int people = 1; people <= 3; ++people)
+        {
+            DrawCandidate all[3];
+            for (int i = 0; i < people; ++i)
+            {
+                all[i] = model(kDrawPerson, 362 + 60, 3);
+                all[i].close = true;
+            }
+            const DrawPlan plan = planModels(all, people, 8, weapon(908, 348), 0, 1190, 3400, kWhole, 16, 400, 800);
+            check(plan.cut[kDrawPerson] == 0, "players and their guns are kept beside the pistol");
+            check(plan.polygons <= 1190 + plan.grown, "and what is drawn is what was reckoned");
+        }
+    }
+} // namespace
+
 int main()
 {
+    testPistolAndPlayers();
     testClasses();
     testPoints();
     testWho();
