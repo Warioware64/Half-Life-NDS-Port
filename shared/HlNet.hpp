@@ -162,6 +162,7 @@ namespace hldata
         NetEvent() { std::memset(text, 0, sizeof(text)); }
     };
     inline constexpr int kNetEventBytes = 15;
+    inline constexpr int kNetClientEvents = 6; ///< in a frame of a client's, at most
     /// A host's frame before its events (a header, each player's place and
     /// stream, the events' count): with eight, still room for thirty.
     inline constexpr int kNetHostFixedBytes = 8 + kNetPlayers * (kNetPlayerBytes + 6) + 3;
@@ -618,8 +619,11 @@ namespace hldata
         detail::put(out, mine);
         out.u16(client.in.expected);
         out.u8(client.in.synced ? 1 : 0);
+        // (No more than the radio carries: a frame near kNetReplyBytes is lost
+        // whole, and sent again, and lost: the rest wait for the next.)
         const int room = static_cast<int>((out.end - out.at - 3) / kNetEventBytes);
-        const int count = client.out.count < room ? client.out.count : room;
+        const int most = room < kNetClientEvents ? room : kNetClientEvents;
+        const int count = client.out.count < most ? client.out.count : most;
         out.u16(client.out.first);
         out.u8(static_cast<std::uint8_t>(count));
         for (int n = 0; n < count; ++n)

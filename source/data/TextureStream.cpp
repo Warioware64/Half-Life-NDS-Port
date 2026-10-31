@@ -1,5 +1,6 @@
 #include "data/TextureStream.hpp"
 #include "net/NetGame.hpp"
+#include "audio/Sound.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -301,8 +302,13 @@ namespace hlrt
                 bestScore = score;
             }
         }
+        // (All here: on with what is not wanted yet, while it is quiet.)
         if (best < 0)
+        {
+            if (!modelCache.fetchAhead())
+                sound.fetchAhead();
             return;
+        }
         const TextureRef &ref = level.view.textures[best];
         char name[48] = "tex/";
         hldata::textureFileName(ref.name, ref.width, ref.height, false, name + 4);
@@ -388,7 +394,8 @@ namespace hlrt
             // (Less what the models a weapon fires take when it is taken up:
             // they are in video memory, beside it.)
             const int want = std::min(static_cast<int>(texelNeed + 2 * skinBytes),
-                                      NEA_TextureFree4x4() - modelCache.lazyTexelBytes());
+                                      NEA_TextureFree4x4() - modelCache.lazyTexelBytes() -
+                                          static_cast<int>(modelCache.charactersAwaited()));
             while (regionCount < kMostRegions && regionTotal < want)
             {
                 NEA_TextureRegion &r = regions[regionCount];

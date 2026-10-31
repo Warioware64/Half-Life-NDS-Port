@@ -193,6 +193,26 @@ namespace hlrt
         }
     }
 
+    std::uint32_t ModelCache::charactersAwaited() const
+    {
+        const hldata::NetMatch &match = netGame.match();
+        if (!netGame.on())
+            return 0;
+        int slot = 0;
+        while (slot < hldata::kCharacterSlots && characterIds_[slot] != 0)
+            ++slot;
+        std::uint32_t bytes = 0;
+        for (int p = 0; p < hldata::kNetPlayers && slot < hldata::kCharacterSlots; ++p)
+        {
+            const int id = match.profiles[p].model;
+            if (!hldata::netHere(match, p) || !match.profiles[p].known || id <= 0 || id >= hldata::kCharacterCount || characterSlot(id) >= 0)
+                continue;
+            bytes += global.twlChild ? hldata::kFinePlayerSkinTexels : 128 * 128;
+            ++slot;
+        }
+        return bytes;
+    }
+
     void ModelCache::release(bool engineGone)
     {
         for (int i = 0; i < count_ + hldata::kCharacterSlots && views_ != nullptr; ++i)
@@ -348,6 +368,9 @@ namespace hlrt
         }
         if (writing_ >= 0 || resident_ == wanted_)
             return;
+        // (Its skin on its way: not given up on.)
+        if (wanted_ >= 0 && wanted_ < count_ && lazy_ != nullptr && lazy_[wanted_].skinWait && materials_[wanted_] == nullptr)
+            return;
         if (wanted_ < 0)
         {
             putAway(now);
@@ -495,6 +518,9 @@ namespace hlrt
             length = std::ftell(file);
             std::fclose(file);
         }
+        // (Sent the game in DSi mode: not here is not yet. Asked for; tried again.)
+        if (length == 0)
+            netGame.fetchFile((std::string("wpn/") + name + ".hmd").c_str(), index == wanted_);
         int resident = 0;
         for (int i = 0; i < count_; ++i)
             resident += lazy(i) && views_[i].header != nullptr ? 1 : 0;
@@ -528,20 +554,91 @@ namespace hlrt
         blocks_[index] = block;
         if (views_[index].header->atlasWidth == 0)
             return true;
+        loadLazySkin(index);
+        return true;
+    }
+
+    bool ModelCache::loadLazySkin(int index)
+    {
+        const char *name = level.view.modelRefs[index].name;
+        LazyState &state = lazy_[index];
+        const std::string path = skinPath(index);
         // Its skin kept in main memory, as a weapon's is, while there are
         // slots to write it to; else (the tripmine's: it is on walls too --
         // and what is not held) straight into video memory, where there is
         // room.
         const bool kept = slotCount_ > 0 && std::strncmp(name, "v_", 2) == 0 && std::strcmp(name, "v_tripmine") != 0;
         kept_[index] = kept ? 1 : 0;
-        if (!TextureCache::loadFile(skinPath(index).c_str(), false, views_[index].header->atlasWidth,
-                                    views_[index].header->atlasHeight, 0, materials_[index], palettes_[index],
-                                    nullptr, kept))
+        if (TextureCache::loadFile(path.c_str(), false, views_[index].header->atlasWidth,
+                                   views_[index].header->atlasHeight, 0, materials_[index], palettes_[index],
+                                   nullptr, kept))
         {
-            ++bare_;
-            kept_[index] = 0;
+            if (state.skinWait && state.failed)
+                state.failed = false;
+            state.skinWait = false;
+            return true;
         }
-        return true;
+        state.triedAt = textureStream.blanks();
+        std::FILE *file = std::fopen(path.c_str(), "rb");
+        if (file != nullptr)
+        {
+            // Here, and no room: what is not in use makes way, and it is
+            // drawn bare until there is.
+            std::fclose(file);
+            if (!state.skinWait)
+                ++bare_;
+            state.skinWait = true;
+            kept_[index] = 0;
+            const int gone = lazyToDrop();
+            if (gone >= 0 && gone != index)
+                dropLazy(gone);
+            return false;
+        }
+        // Not here: asked for (and not drawn without it, for the moment it takes).
+        const std::string asked = "wpn/" + hldata::modelSkinFile(name, views_[index].header->atlasWidth, views_[index].header->atlasHeight);
+        if (netGame.fetchFile(asked.c_str(), index == wanted_))
+        {
+            state.skinWait = true;
+            kept_[index] = 1;
+            return false;
+        }
+        ++bare_;
+        kept_[index] = 0;
+        state.skinWait = false;
+        return false;
+    }
+
+    bool ModelCache::fetchAhead()
+    {
+        for (; lazy_ != nullptr && aheadNext_ < count_; ++aheadNext_)
+        {
+            if (!lazy(aheadNext_))
+                continue;
+            const char *name = level.view.modelRefs[aheadNext_].name;
+            const std::string model = std::string("wpn/") + name + ".hmd";
+            std::FILE *file = std::fopen(global.commonPath(model).c_str(), "rb");
+            if (file == nullptr)
+            {
+                if (netGame.fetchFile(model.c_str()))
+                    return true;
+                continue;
+            }
+            hldata::ModelHeader header;
+            const bool read = std::fread(&header, sizeof(header), 1, file) == 1;
+            std::fclose(file);
+            if (!read || header.atlasWidth == 0)
+                continue;
+            const std::string skin = "wpn/" + hldata::modelSkinFile(name, header.atlasWidth, header.atlasHeight);
+            file = std::fopen(global.commonPath(skin).c_str(), "rb");
+            if (file != nullptr)
+            {
+                std::fclose(file);
+                continue;
+            }
+            if (netGame.fetchFile(skin.c_str()))
+                return true;
+        }
+        return false;
     }
 
     void ModelCache::lazyTick()
@@ -568,6 +665,13 @@ namespace hlrt
             const bool needed = (state.bundles & inHand) != 0;
             if (needed)
                 state.usedAt = now;
+            // A skin that was not here, or had no room: again, while it is in use.
+            if (views_[i].header != nullptr && state.skinWait && materials_[i] == nullptr &&
+                now - state.triedAt >= 30 && (needed || lazyInUse(i)))
+            {
+                loadLazySkin(i);
+                return;
+            }
             if (views_[i].header != nullptr || (state.failed && now - state.triedAt < 60))
                 continue;
             bool flying = false;
@@ -602,6 +706,7 @@ namespace hlrt
         materials_[index] = nullptr;
         palettes_[index] = nullptr;
         kept_[index] = 0;
+        lazy_[index].skinWait = false;
         views_[index] = hldata::ModelView();
         std::free(blocks_[index]);
         blocks_[index] = nullptr;
@@ -658,6 +763,7 @@ namespace hlrt
             return false;
         }
         count_ = count;
+        aheadNext_ = 0;
         heldRefs_ = static_cast<std::int16_t *>(std::malloc(hldata::kWeaponCount * sizeof(std::int16_t)));
         for (int w = 0; heldRefs_ != nullptr && w < hldata::kWeaponCount; ++w)
         {

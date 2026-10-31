@@ -171,7 +171,12 @@ namespace hlrt
         /// Something of the match's map, by the hash of its name; delivered
         /// to TextureStream. fetchBusy: one at a time.
         void fetchMap(std::uint32_t name);
-        bool fetchBusy() const { return takingOn_; }
+        bool fetchBusy() const { return takingOn_ || fileCount_ > 0; }
+        /// A file of the match's map the console in DSi mode has not (its
+        /// bank's, by path): put with the others when it comes (air::). False
+        /// if it is not to be had, or there is no room to ask; `first`: ahead
+        /// of the rest. Those of a texture wait until these are done.
+        bool fetchFile(const char *path, bool first = false);
         void kick(int p);
         /// The host, its map loaded and not begun: its lobby again.
         void toLobbyFromLoad();
@@ -254,6 +259,13 @@ namespace hlrt
         void fetchAsk(hldata::FetchFrom from, std::uint32_t what);
         void fetchSayHave();
         void fetchDrop();
+        static constexpr int kFileAsks = 12;
+        static constexpr int kFilePath = 56;
+        char fileAsks_[kFileAsks][kFilePath] = {};
+        int fileCount_ = 0;
+        char filePath_[kFilePath] = {}; ///< the one on its way ('\0': none, or a texture)
+        std::uint32_t fileNone_[32] = {};
+        int fileNoneCount_ = 0;
         void fetchGaveUp(bool none = false);
         void fetchFrame(const hldata::FetchHead &head);
         void fetchDeliver();

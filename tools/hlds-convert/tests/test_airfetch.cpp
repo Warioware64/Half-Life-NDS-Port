@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "HlAirBank.hpp"
+#include "HlNetGame.hpp"
 #include "HlLevel.hpp"
 #include "HlLevelReader.hpp"
 #include "TestGame.hpp"
@@ -205,6 +206,20 @@ int main()
               "and reads back");
         bytes[3] = 1;
         check(!fetchRead(bytes, size, back), "a frame of another kind is not one");
+    }
+    {
+        // A client with much to say: a frame the radio carries (a larger one
+        // is lost whole, and the next the same, for ever), the rest after.
+        NetClient client;
+        NetPlayer mine;
+        for (int n = 0; n < 40; ++n)
+            client.out.add(netEvent(NetEventType::Room));
+        std::uint8_t reply[kNetReplyBytes];
+        const int size = netClientWrite(client, mine, reply);
+        check(size > 0 && size <= 193, "what a client says goes in frames the radio carries");
+        NetHost host;
+        netHostJoin(host, 1);
+        check(netHostRead(host, 1, reply, size) && host.clients[1].in.count == kNetClientEvents, "and all of it is heard");
     }
     if (g_failures == 0)
         std::printf("test_airfetch: ok\n");

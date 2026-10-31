@@ -735,6 +735,7 @@ namespace hlds
         packing.report = &report;
         if (!collectMap(stage, map, false, packing, error))
             return false;
+        std::vector<NpacMember> asked; // (what is left out of the stream, for the bank)
         std::vector<std::uint8_t> level;
         hldata::LevelView view;
         if (!readFile(stage / "maps" / (map + ".hlm"), level, error) ||
@@ -756,13 +757,10 @@ namespace hlds
                 hldata::textureFileName(ref.name, ref.width, ref.height, false, name);
                 streamed.insert(std::string("tex/") + name);
             }
-            std::vector<NpacMember> kept, asked;
+            std::vector<NpacMember> kept;
             for (NpacMember &member : packing.members)
                 (streamed.count(member.path) != 0 ? asked : kept).push_back(std::move(member));
             packing.members = std::move(kept);
-            fs::create_directories(card / "air");
-            if (!writeBank(asked, card / "air" / (map + ".dsi.bank"), error))
-                return false;
         }
         // The finer model where there is one, in the plain one's place: the
         // console asks for that first, and for the plain only if it is not next.
@@ -812,7 +810,9 @@ namespace hlds
                 if (header.atlasWidth != 0)
                     wanted.push_back("mdl/" + hldata::modelSkinFile(name.c_str(), header.atlasWidth, header.atlasHeight));
             }
-            for (std::size_t m = 0; m < rest.size(); ++m)
+            // (After the last model, which may be the last of all: the textures
+            // that stream have gone to the bank.)
+            for (std::size_t m = 0; m <= rest.size(); ++m)
             {
                 if (m == after)
                 {
@@ -826,14 +826,14 @@ namespace hlds
                         }
                     }
                 }
-                members.push_back(std::move(rest[m]));
+                if (m < rest.size())
+                    members.push_back(std::move(rest[m]));
             }
         }
-        // Every sound, in the order the console reads them: those kept, then
-        // the rest, the better copy where there is one -- those of the
-        // weapons it has not too, there being room (it cannot read them when
-        // first played, as a card can); and what the people say, on a map
-        // where they speak.
+        // The sounds kept, in the order the console reads them, the better
+        // copy where there is one; and what the people say, on a map where
+        // they speak. The rest, and those of the guns not everyone starts
+        // with, are asked for: in the bank by the plain name, whichever copy.
         bool match = false;
         for (std::uint32_t e = 0; e < view.entityCount; ++e)
             match = match || view.entities[e].classId == static_cast<std::uint16_t>(hldata::EntityClass::InfoPlayerDeathmatch);
@@ -842,8 +842,17 @@ namespace hlds
                            reinterpret_cast<bool *>(kept.data()), view.modelSounds, view.modelSoundCount, view.sounds);
         std::vector<char> talk;
         talkWords(view, talk);
+        std::vector<char> gunOnly(view.soundCount + 1, 0);
+        for (const hldata::GunSounds &gun : hldata::kGunSounds)
+        {
+            if (std::strcmp(gun.viewModel, "v_crowbar") == 0 || std::strcmp(gun.viewModel, "v_9mmhandgun") == 0)
+                continue;
+            for (int i = static_cast<int>(gun.first); i <= static_cast<int>(gun.last) && i < static_cast<int>(view.soundCount); ++i)
+                gunOnly[static_cast<std::size_t>(i)] = 1;
+        }
         Packing sounds;
         sounds.report = &report;
+        std::set<std::string> soundsAsked;
         for (int pass = 0; pass < 2; ++pass)
         {
             for (std::uint32_t i = 0; i < view.soundCount; ++i)
@@ -851,24 +860,44 @@ namespace hlds
                 const hldata::SoundRef &ref = view.sounds[i];
                 if (ref.name[0] == '\0' || (kept[i] != 0) != (pass == 0) || (match && talk[i] != 0))
                     continue;
+                const bool ask = pass == 1 || gunOnly[i] != 0 || hldata::soundLazy(ref);
+                const std::string plain = std::string("snd/") + ref.name + ".hsn";
                 char twin[sizeof(hldata::SoundRef)];
-                if (hldata::soundTwinName(ref, twin, sizeof(twin)) &&
-                    sounds.add(stage / "snd" / (std::string(twin) + ".hsn"), std::string("snd/") + twin + ".hsn", false, false))
+                const bool hasTwin = hldata::soundTwinName(ref, twin, sizeof(twin));
+                if (ask)
+                {
+                    if (!soundsAsked.insert(plain).second)
+                        continue;
+                    NpacMember member;
+                    std::string ignored;
+                    member.path = plain;
+                    if ((hasTwin && readFile(stage / "snd" / (std::string(twin) + ".hsn"), member.data, ignored)) ||
+                        readFile(stage / "snd" / (std::string(ref.name) + ".hsn"), member.data, ignored))
+                        asked.push_back(std::move(member));
                     continue;
-                sounds.add(stage / "snd" / (std::string(ref.name) + ".hsn"), std::string("snd/") + ref.name + ".hsn", false, false);
+                }
+                if (hasTwin && sounds.add(stage / "snd" / (std::string(twin) + ".hsn"), std::string("snd/") + twin + ".hsn", false, false))
+                    continue;
+                sounds.add(stage / "snd" / (std::string(ref.name) + ".hsn"), plain, false, false);
             }
         }
         for (NpacMember &member : sounds.members)
             members.push_back(std::move(member));
-        // ... and the weapons it has not, kept packed, last.
+        // The weapons it has not: asked for as they are taken up or seen, in
+        // the bank by the plain name, whichever cook. (What everyone starts
+        // with, and what it spits out, comes with the map.)
         Packing weapons;
         weapons.report = &report;
         for (std::uint32_t i = 0; i < view.modelRefCount; ++i)
         {
             const char *name = view.modelRefs[i].name;
-            if (!hldata::modelRefLazy(view.modelRefs[i]) ||
-                (!weapons.add(stage / "wpn" / (std::string(name) + ".dsi.hmd"), std::string("wpn/") + name + ".dsi.hmd", true, false) &&
-                 !weapons.add(stage / "wpn" / (std::string(name) + ".hmd"), std::string("wpn/") + name + ".hmd", true, false)))
+            if (!hldata::modelRefLazy(view.modelRefs[i]))
+                continue;
+            const std::size_t before = weapons.members.size();
+            if (!weapons.add(stage / "wpn" / (std::string(name) + ".dsi.hmd"), std::string("wpn/") + name + ".hmd", true, false) &&
+                !weapons.add(stage / "wpn" / (std::string(name) + ".hmd"), std::string("wpn/") + name + ".hmd", true, false))
+                continue;
+            if (weapons.members.size() == before)
                 continue;
             hldata::ModelHeader header;
             std::memcpy(&header, weapons.members.back().data.data(), sizeof(header));
@@ -878,8 +907,20 @@ namespace hlds
                 weapons.add(stage / "mdl" / skin, "wpn/" + skin, true, false);
             }
         }
+        const auto startsWith = [](const std::string &path)
+        {
+            for (const char *name : {"wpn/v_crowbar.", "wpn/v_9mmhandgun.", "wpn/p_crowbar.", "wpn/p_9mmhandgun.", "wpn/shell."})
+            {
+                if (path.rfind(name, 0) == 0)
+                    return true;
+            }
+            return false;
+        };
         for (NpacMember &member : weapons.members)
-            members.push_back(std::move(member));
+            (startsWith(member.path) ? members : asked).push_back(std::move(member));
+        fs::create_directories(card / "air");
+        if (!writeBank(asked, card / "air" / (map + ".dsi.bank"), error))
+            return false;
         std::size_t raw[static_cast<int>(hldata::GuestKind::Count) + 2] = {};
         fs::create_directories(card / "air");
         if (!writeGuest(members, card / "air" / (map + ".dsi.hgs"), raw, bytes, error))

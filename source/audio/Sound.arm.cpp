@@ -9,6 +9,7 @@
 
 #include "Global.hpp"
 #include "net/GuestLoad.hpp"
+#include "net/NetGame.hpp"
 #include "Settings.hpp"
 #include "HlRoomPresets.hpp"
 #include "HlStereoMusic.hpp"
@@ -165,6 +166,7 @@ namespace hlrt
             return;
         }
         count_ = count;
+        aheadNext_ = 0;
         played_ = static_cast<std::uint32_t *>(std::calloc(view.logicCount / 32 + 1, sizeof(std::uint32_t)));
         soundsKept(view.logic, view.logicCount, view.logicSounds, view.logicSoundCount,
                    view.soundCount, kept, view.modelSounds, view.modelSoundCount, view.sounds);
@@ -212,6 +214,9 @@ namespace hlrt
                     if (!clips_[i].shared)
                         guest::count(hldata::GuestKind::Sound, clips_[i].bytes);
                 }
+                // (In DSi mode what did not come with the map is asked for.)
+                else if (lazy_ != nullptr && global.twlChild)
+                    lazy_[i] = 1;
             }
         }
         std::free(kept);
@@ -552,6 +557,25 @@ namespace hlrt
 
     /// A weapon's sound the map has not, about to be played: read now if it
     /// is not in memory (a frame's wait, once), and said to be played.
+    bool Sound::fetchAhead()
+    {
+        for (; lazy_ != nullptr && aheadNext_ < count_; ++aheadNext_)
+        {
+            if (lazy_[aheadNext_] == 0)
+                continue;
+            const std::string path = std::string("snd/") + level.view.sounds[aheadNext_].name + ".hsn";
+            std::FILE *file = std::fopen(global.commonPath(path).c_str(), "rb");
+            if (file != nullptr)
+            {
+                std::fclose(file);
+                continue;
+            }
+            if (netGame.fetchFile(path.c_str()))
+                return true;
+        }
+        return false;
+    }
+
     void Sound::lazyTouch(int sound)
     {
         if (lazy_ == nullptr || sound < 0 || sound >= count_ || lazy_[sound] == 0)
@@ -596,7 +620,13 @@ namespace hlrt
             lazyClip_[place] = -1;
         }
         if (global.heapHeadroom() < 200 * 1024 || !readClip(level.view.sounds[sound].name, clips_[sound]))
+        {
+#ifdef HLDS_CHILD
+            // (Silent this once; there the next.)
+            netGame.fetchFile((std::string("snd/") + level.view.sounds[sound].name + ".hsn").c_str());
+#endif
             return;
+        }
         lazyClip_[place] = sound;
         lazyPlayed_[place] = now;
     }

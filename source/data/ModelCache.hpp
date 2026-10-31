@@ -52,6 +52,9 @@ namespace hlrt
         /// Who the players here chose to be, read (a console with the game;
         /// before the map's textures stream, for the room for their skins).
         void loadCharacters();
+        /// The video memory of the skins of those not here yet (they come
+        /// after the map's textures have taken theirs).
+        std::uint32_t charactersAwaited() const;
         /// The ModelRef-like index of character `id`, if it is in memory; -1
         /// (the suit, or not here): the map's own player.
         int characterSlot(int id) const;
@@ -82,6 +85,11 @@ namespace hlrt
         /// The weapon in hand read again if it could not be when it was
         /// taken up (a console sent the game: its weapons come at the end
         /// of the map's stream, after the player is in).
+        /// The model of the weapon wanted is here (it was not when wanted).
+        bool wantedHere() const { return wanted_ >= 0 && views_ != nullptr && views_[wanted_].header != nullptr; }
+        /// A console in DSi mode, nothing else to ask for: the next of these
+        /// it has not. False: it has all there is to ask for.
+        bool fetchAhead();
         void rewield()
         {
             if (wanted_ >= 0)
@@ -137,6 +145,8 @@ namespace hlrt
         /// (`evict`: by letting others go). False if it could not be.
         bool loadLazy(int index, bool evict);
         void dropLazy(int index);
+        /// Its skin: false if it is not here yet, or there is no room for it.
+        bool loadLazySkin(int index);
         /// The one of the lazy models in memory to go, the longest unused:
         /// never one of the weapon in hand's, nor one being drawn or
         /// written, nor what a shot or a casing in the air is. -1: none can.
@@ -153,6 +163,7 @@ namespace hlrt
             std::uint32_t usedAt = 0;  ///< the frame it was last wanted (TextureStream::blanks)
             std::uint32_t triedAt = 0; ///< ... and last failed to load, not to try every frame
             bool failed = false;
+            bool skinWait = false; ///< its skin is not read yet (on its way, or no room): tried again
             std::uint16_t bundles = 0; ///< hldata::bundlesOf
         };
         std::int16_t *heldRefs_ = nullptr;
@@ -160,6 +171,7 @@ namespace hlrt
         int characterIds_[hldata::kCharacterSlots] = {};
         int playerCharacter_[kPlayerColours] = {-1, -1, -1, -1, -1, -1, -1, -1};
         LazyState *lazy_ = nullptr;
+        int aheadNext_ = 0;
         std::uint16_t lazyMask_ = 0;     ///< the weapons (bits) picked up just now, to load ahead
         std::uint16_t haveSeen_ = 0;     ///< what the player had when last looked
         bool haveKnown_ = false;

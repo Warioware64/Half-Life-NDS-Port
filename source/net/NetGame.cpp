@@ -297,6 +297,13 @@ namespace hlrt
         fetchDrop();
         if (from == FetchFrom::Picture || from == FetchFrom::PictureFull)
             pictureNext_ = -1;
+        else if ((from == FetchFrom::Map || from == FetchFrom::MapFull) && filePath_[0] != '\0')
+        {
+            // (Nothing there is never asked for again; no answer: it may be.)
+            if (none && fileNoneCount_ < static_cast<int>(sizeof(fileNone_) / sizeof(fileNone_[0])))
+                fileNone_[fileNoneCount_++] = nameHash(filePath_);
+            filePath_[0] = '\0';
+        }
         else if (from == FetchFrom::Map || from == FetchFrom::MapFull)
             textureStream.fetchFailed(none); // (no answer: the host may be busy; asked again)
         else
@@ -305,7 +312,47 @@ namespace hlrt
 
     void NetGame::fetchMap(std::uint32_t name)
     {
+        filePath_[0] = '\0';
         fetchAsk(FetchFrom::MapFull, name);
+    }
+
+    bool NetGame::fetchFile(const char *path, bool first)
+    {
+        if (!global.twlChild || std::strlen(path) >= kFilePath)
+            return false;
+        const std::uint32_t name = nameHash(path);
+        for (int i = 0; i < fileNoneCount_; ++i)
+        {
+            if (fileNone_[i] == name)
+                return false;
+        }
+        if (std::strcmp(filePath_, path) == 0)
+            return true;
+        for (int i = 0; i < fileCount_; ++i)
+        {
+            if (std::strcmp(fileAsks_[i], path) != 0)
+                continue;
+            if (first && i > 0)
+            {
+                char was[kFilePath];
+                std::memcpy(was, fileAsks_[i], kFilePath);
+                std::memmove(fileAsks_[1], fileAsks_[0], static_cast<std::size_t>(i) * kFilePath);
+                std::memcpy(fileAsks_[0], was, kFilePath);
+            }
+            return true;
+        }
+        if (fileCount_ >= kFileAsks)
+        {
+            if (!first)
+                return false;
+            --fileCount_; // (the last goes: it will be asked for again)
+        }
+        const int at = first ? 0 : fileCount_;
+        if (first)
+            std::memmove(fileAsks_[1], fileAsks_[0], static_cast<std::size_t>(fileCount_) * kFilePath);
+        std::strcpy(fileAsks_[at], path);
+        ++fileCount_;
+        return true;
     }
 
     void NetGame::fetchFrame(const FetchHead &head)
@@ -389,7 +436,16 @@ namespace hlrt
         takingOn_ = false;
         if (from == FetchFrom::Map || from == FetchFrom::MapFull)
         {
-            textureStream.fetched(data, raw);
+            if (filePath_[0] != '\0')
+            {
+#ifdef HLDS_CHILD
+                if (!air::putMapFile(filePath_, data, raw))
+#endif
+                    std::free(data);
+                filePath_[0] = '\0';
+            }
+            else
+                textureStream.fetched(data, raw);
             return;
         }
         if (from == FetchFrom::Picture || from == FetchFrom::PictureFull)
@@ -454,14 +510,25 @@ namespace hlrt
         const bool ofMap = taking_.from == FetchFrom::Map || taking_.from == FetchFrom::MapFull;
         if ((!lobby && !map) || (takingOn_ && ofMap != map))
         {
-            if (takingOn_ && ofMap)
+            if (takingOn_ && ofMap && filePath_[0] == '\0')
                 textureStream.fetchFailed(false);
+            filePath_[0] = '\0';
             fetchDrop();
             if (!lobby && !map)
                 return;
         }
         if (map && !takingOn_)
-            return; // (TextureStream asks: fetchMap)
+        {
+            // (Files first, one at a time; else TextureStream asks: fetchMap.)
+            if (fileCount_ > 0)
+            {
+                std::memcpy(filePath_, fileAsks_[0], kFilePath);
+                --fileCount_;
+                std::memmove(fileAsks_[0], fileAsks_[1], static_cast<std::size_t>(fileCount_) * kFilePath);
+                fetchAsk(FetchFrom::MapFull, nameHash(filePath_));
+            }
+            return;
+        }
         const std::uint32_t now = Global::vblanks();
         if (takingOn_)
         {
@@ -544,6 +611,9 @@ namespace hlrt
     void NetGame::forMapLoad()
     {
         fetchDrop();
+        fileCount_ = 0;
+        fileNoneCount_ = 0;
+        filePath_[0] = '\0';
         dropPeople();
         personWanted_ = 0;
         mapCard.dropPicture();

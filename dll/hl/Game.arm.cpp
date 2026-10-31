@@ -1053,7 +1053,8 @@ namespace hlrt
             // as it is asked for -- Input -- and not when one is drawn: what
             // is drawn because the last grenade has gone is silent.)
             if (player.state.inv.current != inHand_ ||
-                (inHand_ == kWeaponSatchel && radio_ != satchelsOut()))
+                (inHand_ == kWeaponSatchel && radio_ != satchelsOut()) ||
+                (!held.active && modelCache.wantedHere()))
                 takeInHand();
             // The RPG is held as it is: with its rocket in, or without.
             if (inHand_ == kWeaponRpg && held.active)

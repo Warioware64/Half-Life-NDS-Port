@@ -212,6 +212,11 @@ namespace hlrt
         int lazyClip_[kLazyClips] = {-1, -1, -1, -1};
         std::uint32_t lazyPlayed_[kLazyClips] = {};
         void lazyTouch(int sound);
+        public:
+        /// A console in DSi mode, nothing else to ask for: the next it has not.
+        bool fetchAhead();
+        private:
+        int aheadNext_ = 0;
         int loaded_ = 0;
         int bytes_ = 0;
         Clip ui_[hldata::kUiSoundCount];
