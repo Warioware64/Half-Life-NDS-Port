@@ -168,6 +168,10 @@ namespace hlrt
         void wantPerson(int id);
         /// A map's load is about to begin: what the lobby asked for goes.
         void forMapLoad();
+        /// Something of the match's map, by the hash of its name; delivered
+        /// to TextureStream. fetchBusy: one at a time.
+        void fetchMap(std::uint32_t name);
+        bool fetchBusy() const { return takingOn_; }
         void kick(int p);
         /// The host, its map loaded and not begun: its lobby again.
         void toLobbyFromLoad();
@@ -250,7 +254,7 @@ namespace hlrt
         void fetchAsk(hldata::FetchFrom from, std::uint32_t what);
         void fetchSayHave();
         void fetchDrop();
-        void fetchGaveUp();
+        void fetchGaveUp(bool none = false);
         void fetchFrame(const hldata::FetchHead &head);
         void fetchDeliver();
         void fetchTick();

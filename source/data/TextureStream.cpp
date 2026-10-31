@@ -1,4 +1,5 @@
 #include "data/TextureStream.hpp"
+#include "net/NetGame.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -80,6 +81,11 @@ namespace hlrt
         /// the ones that are swapped most (cycles' pictures, tiled floors'
         /// variants): nothing is read off the card to bring them back.
         std::uint8_t *ram[kStreamMaxTextures];
+        /// (A console in DSi mode:) wanted now and not in `ram`; never to come;
+        /// and the one asked for.
+        std::uint8_t fetchWanted[kStreamMaxTextures];
+        std::uint8_t fetchNever[kStreamMaxTextures];
+        int fetchAsked = -1;
         int ramCount = 0;
         std::size_t ramBytes = 0;
 
@@ -278,6 +284,68 @@ namespace hlrt
         ++ramCount;
     }
 
+    void TextureStream::fetchTick()
+    {
+#ifdef HLDS_CHILD
+        if (!global.twlChild || !active_ || netGame.fetchBusy())
+            return;
+        int best = -1, bestScore = -1;
+        for (int id = 0; id < planner.count(); ++id)
+        {
+            if (!infos[id].streamed || ram[id] != nullptr || fetchNever[id] != 0)
+                continue;
+            const int score = (fetchWanted[id] != 0 ? 1000 : 0) + level.view.textures[id].share;
+            if (score > bestScore)
+            {
+                best = id;
+                bestScore = score;
+            }
+        }
+        if (best < 0)
+            return;
+        const TextureRef &ref = level.view.textures[best];
+        char name[48] = "tex/";
+        hldata::textureFileName(ref.name, ref.width, ref.height, false, name + 4);
+        fetchAsked = best;
+        netGame.fetchMap(hldata::nameHash(name));
+#endif
+    }
+
+    void TextureStream::fetched(std::uint8_t *data, std::uint32_t size)
+    {
+        if (fetchAsked < 0 || fetchAsked >= kStreamMaxTextures || ram[fetchAsked] != nullptr ||
+            size <= sizeof(TextureHeader))
+        {
+            std::free(data);
+            fetchAsked = -1;
+            return;
+        }
+        ram[fetchAsked] = data;
+        ramBytes += size;
+        ++ramCount;
+        fetchWanted[fetchAsked] = 0;
+        fetchAsked = -1;
+        fetchCame_ = true;
+        planner.retryFailed();
+    }
+
+    void TextureStream::fetchFailed(bool never)
+    {
+        if (never && fetchAsked >= 0 && fetchAsked < kStreamMaxTextures)
+            fetchNever[fetchAsked] = 1;
+        fetchAsked = -1;
+    }
+
+    bool TextureStream::prerolled() const
+    {
+        for (int id = 0; id < planner.count(); ++id)
+        {
+            if (infos[id].streamed && ram[id] == nullptr && fetchNever[id] == 0 && level.view.textures[id].share >= 20)
+                return false;
+        }
+        return true;
+    }
+
     void TextureStream::begin()
     {
         // (Slots set by before the map's textures: kept.)
@@ -446,7 +514,15 @@ namespace hlrt
         frameNo = 1;
         g_textureFrame = frameNo;
 
-        if (planner.allFit())
+        // (A console in DSi mode has nothing yet: all of it is asked for.)
+        std::memset(fetchWanted, 0, sizeof(fetchWanted));
+        std::memset(fetchNever, 0, sizeof(fetchNever));
+        fetchAsked = -1;
+        fetchCame_ = false;
+        if (global.twlChild)
+        {
+        }
+        else if (planner.allFit())
         {
             // Nothing to stream: every texture is there for good.
             bool leftOut = false;
@@ -691,6 +767,7 @@ namespace hlrt
             return;
         ++frameNo;
         g_textureFrame = frameNo;
+        fetchTick();
         if (stagedCount != 0)
             return;
         demand();
@@ -736,6 +813,7 @@ namespace hlrt
             if (!fileFor(s.id, s.header, stage + stageUsed, kStageBytes - stageUsed))
             {
                 planner.failed(s.id);
+                fetchWanted[s.id] = 1;
                 continue;
             }
             if (!fitsPlan(s.id, s.header))

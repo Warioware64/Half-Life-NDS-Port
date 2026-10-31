@@ -647,6 +647,21 @@ namespace
 #else
         hlrt::bottomScreen.showMessage("WAITING", "for the others to load the map");
 #endif
+#ifdef HLDS_CHILD
+        // In DSi mode: the textures most views want asked for, for a few
+        // seconds once the host answers (it may still be loading the map),
+        // before it says it is ready: not to begin flat.
+        for (int n = 0, heard = 0; global.twlChild && n < 15 * 60 && heard < 6 * 60 && !hlrt::textureStream.prerolled(); ++n)
+        {
+            heard += hlrt::textureStream.fetchHeard() ? 1 : 0;
+            swiWaitForVBlank();
+            hlrt::sound.frame();
+            hlrt::netGame.frame();
+            hlrt::textureStream.fetchTick();
+            if (!hlrt::netGame.on() || hlrt::netGame.cancelled())
+                return false;
+        }
+#endif
         hlrt::netGame.loadedMap();
         for (int n = 0; n < 3 * 60 * 60; ++n)
         {
@@ -656,6 +671,7 @@ namespace
             if (!hlrt::netGame.on() || hlrt::netGame.cancelled())
                 return false;
 #ifdef HLDS_CHILD
+            hlrt::textureStream.fetchTick();
             // Who another chose to be, on its way: taken, read, let go of.
             {
                 hldata::AirHead air;

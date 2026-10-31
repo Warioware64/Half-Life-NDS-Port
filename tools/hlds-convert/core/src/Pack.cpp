@@ -725,6 +725,8 @@ namespace hlds
         return finish(packing, card / "maps" / (map + ".npac"), compress, error);
     }
 
+    static bool writeBank(std::vector<NpacMember> &members, const fs::path &out, std::string &error);
+
     bool packAirFull(const fs::path &stage, const fs::path &card, const std::string &map, std::size_t &bytes,
                      std::size_t &memory, std::string &error)
     {
@@ -740,6 +742,27 @@ namespace hlds
         {
             error = "the staged level does not open: " + map;
             return false;
+        }
+        // The textures that stream are not in it: asked for as they come into
+        // view, and in the meantime their flat colour (HlAirBank.hpp).
+        {
+            std::set<std::string> streamed;
+            for (std::uint32_t i = 0; i < view.textureCount; ++i)
+            {
+                const hldata::TextureRef &ref = view.textures[i];
+                if ((ref.flags & hldata::kTextureStreamed) == 0)
+                    continue;
+                char name[40];
+                hldata::textureFileName(ref.name, ref.width, ref.height, false, name);
+                streamed.insert(std::string("tex/") + name);
+            }
+            std::vector<NpacMember> kept, asked;
+            for (NpacMember &member : packing.members)
+                (streamed.count(member.path) != 0 ? asked : kept).push_back(std::move(member));
+            packing.members = std::move(kept);
+            fs::create_directories(card / "air");
+            if (!writeBank(asked, card / "air" / (map + ".dsi.bank"), error))
+                return false;
         }
         // The finer model where there is one, in the plain one's place: the
         // console asks for that first, and for the plain only if it is not next.

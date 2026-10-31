@@ -3293,6 +3293,24 @@ namespace hlrt
                     profileView.close();
             }
             lobbyWas = lobby;
+#ifdef HLDS_CHILD
+            // PROFILE, with the host there to ask: who they choose, to see it
+            // (the suit until it comes).
+            if (page_ == Page::Profile && netGame.on())
+            {
+                int who = settings.playerModel;
+                if (who > 0 && !netGame.personHere(who))
+                {
+                    netGame.wantPerson(who);
+                    who = 0;
+                }
+                if (who != lobbyCharacter || !profileView.shown())
+                {
+                    lobbyCharacter = who;
+                    profileView.open(settings.topColour, settings.bottomColour, who);
+                }
+            }
+#endif
         }
 #ifndef HLDS_CHILD
         // SEND THE GAME: the sending goes on, and is shown as it does; once

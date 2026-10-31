@@ -76,6 +76,15 @@ namespace hlrt
         /// main memory, where begin() and the plan find it (there is no card
         /// to read it off later).
         void keepFromStream(int id);
+        /// A console in DSi mode: on with asking the host for the textures it
+        /// has not (those wanted first, then the widest, as long as the map
+        /// lasts); what it asked for came, or never will.
+        void fetchTick();
+        void fetched(std::uint8_t *data, std::uint32_t size);
+        void fetchFailed(bool never);
+        bool fetchHeard() const { return fetchCame_; }
+        /// Those most views want are here (or will not come).
+        bool prerolled() const;
         void end(bool keepRam = false);
         bool active() const { return active_; }
 
@@ -103,6 +112,7 @@ namespace hlrt
         void freeRetired(bool all);
 
         bool active_ = false;
+        bool fetchCame_ = false;
         std::uint32_t blank_ = 0;
     };
 

@@ -1,5 +1,6 @@
 #include "net/NetGame.hpp"
 #include "net/AirDevice.hpp"
+#include "data/TextureStream.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -290,14 +291,21 @@ namespace hlrt
     }
 
     /// Nothing of it to be had, or it would not come: on with the next.
-    void NetGame::fetchGaveUp()
+    void NetGame::fetchGaveUp(bool none)
     {
         const FetchFrom from = taking_.from;
         fetchDrop();
         if (from == FetchFrom::Picture || from == FetchFrom::PictureFull)
             pictureNext_ = -1;
+        else if (from == FetchFrom::Map || from == FetchFrom::MapFull)
+            textureStream.fetchFailed(none); // (no answer: the host may be busy; asked again)
         else
             personWanted_ = 0;
+    }
+
+    void NetGame::fetchMap(std::uint32_t name)
+    {
+        fetchAsk(FetchFrom::MapFull, name);
     }
 
     void NetGame::fetchFrame(const FetchHead &head)
@@ -379,6 +387,11 @@ namespace hlrt
         }
         const FetchFrom from = taking_.from;
         takingOn_ = false;
+        if (from == FetchFrom::Map || from == FetchFrom::MapFull)
+        {
+            textureStream.fetched(data, raw);
+            return;
+        }
         if (from == FetchFrom::Picture || from == FetchFrom::PictureFull)
         {
             ++pictureNext_;
@@ -434,11 +447,21 @@ namespace hlrt
 
     void NetGame::fetchTick()
     {
-        if (phase_ != Phase::Lobby || starting_)
+        // In its lobby, what it has asked for there; with a map (loaded, and
+        // waiting to begin, or in play), that map's.
+        const bool lobby = phase_ == Phase::Lobby && !starting_;
+        const bool map = phase_ == Phase::Playing || (phase_ == Phase::Lobby && starting_);
+        const bool ofMap = taking_.from == FetchFrom::Map || taking_.from == FetchFrom::MapFull;
+        if ((!lobby && !map) || (takingOn_ && ofMap != map))
         {
+            if (takingOn_ && ofMap)
+                textureStream.fetchFailed(false);
             fetchDrop();
-            return;
+            if (!lobby && !map)
+                return;
         }
+        if (map && !takingOn_)
+            return; // (TextureStream asks: fetchMap)
         const std::uint32_t now = Global::vblanks();
         if (takingOn_)
         {
@@ -591,8 +614,11 @@ namespace hlrt
             return false;
         }
         // A member of a bank.
-        const char *bank = asked.from == FetchFrom::People ? "air/chr.bank" : asked.from == FetchFrom::PeopleFull ? "air/chr.dsi.bank" : nullptr;
-        if (bank == nullptr)
+        const std::string bank = asked.from == FetchFrom::People       ? std::string("air/chr.bank")
+                                 : asked.from == FetchFrom::PeopleFull ? std::string("air/chr.dsi.bank")
+                                 : asked.from == FetchFrom::MapFull    ? "air/" + pendingMap_ + ".dsi.bank"
+                                                                       : std::string();
+        if (bank.empty())
             return false;
         std::FILE *file = std::fopen(global.dataPath(bank).c_str(), "rb");
         if (file == nullptr)
@@ -638,8 +664,8 @@ namespace hlrt
                 fetchData_[k] = nullptr;
             }
         }
-        // In the lobby only, for now, and not while a stream is sent.
-        if (phase_ != Phase::Hosting)
+        // Not while a stream is sent.
+        if (phase_ != Phase::Hosting && phase_ != Phase::Playing)
             return;
         int who = 0;
         FetchHost::Asked asked;
@@ -1629,7 +1655,7 @@ namespace hlrt
             {
                 if (takingOn_ && static_cast<FetchFrom>(event.a) == taking_.from &&
                     (static_cast<std::uint16_t>(event.v[0]) | static_cast<std::uint32_t>(static_cast<std::uint16_t>(event.v[1])) << 16) == taking_.what)
-                    fetchGaveUp();
+                    fetchGaveUp(true);
                 continue;
             }
             if (event.type == NetEventType::Go && !isHost())
@@ -1708,6 +1734,15 @@ namespace hlrt
             here += netHere(match_, p) ? 1 : 0;
         if (!isHost() || here <= 4 || (++ticks_ & 1) == 0)
             send();
+        // What is asked for goes on through a match, after the game's own.
+        if (isHost())
+        {
+#ifndef HLDS_CHILD
+            fetchHostFrame();
+#endif
+        }
+        else
+            fetchTick();
     }
 
     bool NetGame::lobbyAsked()
